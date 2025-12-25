@@ -6,7 +6,7 @@
 
 namespace Engine {
 
-    std::shared_ptr<spdlog::logger> Log::s_core_logger;
+    std::shared_ptr<spdlog::logger> Log::core_logger_;
 
     void Log::init() {
         // Allocate a console window for output
@@ -25,9 +25,9 @@ namespace Engine {
         log_sinks[0]->set_pattern("%^[%T] %n: %v%$");
         log_sinks[1]->set_pattern("[%T] [%l] %n: %v");
 
-        s_core_logger = std::make_shared<spdlog::logger>("ENGINE", begin(log_sinks), end(log_sinks));
-        spdlog::register_logger(s_core_logger);
-        s_core_logger->set_level(spdlog::level::trace);
-        s_core_logger->flush_on(spdlog::level::trace);
+        core_logger_ = std::make_shared<spdlog::logger>("ENGINE", begin(log_sinks), end(log_sinks));
+        spdlog::register_logger(core_logger_);
+        core_logger_->set_level(spdlog::level::trace);
+        core_logger_->flush_on(spdlog::level::trace);
     }
 }

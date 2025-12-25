@@ -9,10 +9,10 @@ namespace Engine {
     public:
         static void init();
         
-        static std::shared_ptr<spdlog::logger>& get_core_logger() { return s_core_logger; }
+        static std::shared_ptr<spdlog::logger>& get_core_logger() { return core_logger_; }
 
     private:
-        static std::shared_ptr<spdlog::logger> s_core_logger;
+        static std::shared_ptr<spdlog::logger> core_logger_;
     };
 }
 

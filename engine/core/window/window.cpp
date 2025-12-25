@@ -5,7 +5,7 @@
 namespace Engine {
 
     Window::Window(int width, int height, const std::wstring& title) 
-        : m_Width(width), m_Height(height), m_Title(title), m_hInstance(GetModuleHandle(nullptr)), m_ClassName(L"RendererWindowClass")
+        : width_(width), height_(height), title_(title), hinstance_(GetModuleHandle(nullptr)), class_name_(L"RendererWindowClass")
     {
         WNDCLASSEX wc = { 0 };
         wc.cbSize = sizeof(wc);
@@ -13,39 +13,39 @@ namespace Engine {
         wc.lpfnWndProc = window_proc;
         wc.cbClsExtra = 0;
         wc.cbWndExtra = 0;
-        wc.hInstance = m_hInstance;
+        wc.hInstance = hinstance_;
         wc.hIcon = LoadIcon(nullptr, IDI_APPLICATION);
         wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
         wc.hbrBackground = nullptr;
         wc.lpszMenuName = nullptr;
-        wc.lpszClassName = m_ClassName.c_str();
+        wc.lpszClassName = class_name_.c_str();
         wc.hIconSm = LoadIcon(nullptr, IDI_APPLICATION);
 
         RegisterClassEx(&wc);
 
-        m_hWnd = CreateWindowEx(
+        hwnd_ = CreateWindowEx(
             0,
-            m_ClassName.c_str(),
-            m_Title.c_str(),
+            class_name_.c_str(),
+            title_.c_str(),
             WS_OVERLAPPEDWINDOW,
             CW_USEDEFAULT, CW_USEDEFAULT,
-            m_Width, m_Height,
+            width_, height_,
             nullptr,
             nullptr,
-            m_hInstance,
+            hinstance_,
             this
         );
 
-        if (m_hWnd) {
-            ShowWindow(m_hWnd, SW_SHOW);
+        if (hwnd_) {
+            ShowWindow(hwnd_, SW_SHOW);
         }
     }
 
     Window::~Window() {
-        if (m_hWnd) {
-            DestroyWindow(m_hWnd);
+        if (hwnd_) {
+            DestroyWindow(hwnd_);
         }
-        UnregisterClass(m_ClassName.c_str(), m_hInstance);
+        UnregisterClass(class_name_.c_str(), hinstance_);
     }
 
     bool Window::process_messages() {

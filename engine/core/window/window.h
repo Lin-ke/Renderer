@@ -11,16 +11,16 @@ namespace Engine {
         // Returns false if the application should quit
         bool process_messages();
 
-        HWND get_hwnd() const { return m_hWnd; }
+        HWND get_hwnd() const { return hwnd_; }
 
     private:
         static LRESULT CALLBACK window_proc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
-        HWND m_hWnd;
-        HINSTANCE m_hInstance;
-        std::wstring m_Title;
-        std::wstring m_ClassName;
-        int m_Width;
-        int m_Height;
+        HWND hwnd_;
+        HINSTANCE hinstance_;
+        std::wstring title_;
+        std::wstring class_name_;
+        int width_;
+        int height_;
     };
 }

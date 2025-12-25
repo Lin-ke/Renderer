@@ -5,7 +5,7 @@ namespace Engine {
     bool Input::is_key_down(Key key) const {
         int key_code = static_cast<int>(key);
         if (key_code >= 0 && key_code < 256) {
-            return m_keys[key_code];
+            return keys_[key_code];
         }
         return false;
     }
@@ -13,46 +13,46 @@ namespace Engine {
     bool Input::is_mouse_button_down(MouseButton button) const {
         int button_code = static_cast<int>(button);
         if (button_code >= 0 && button_code < 5) {
-            return m_mouse_buttons[button_code];
+            return mouse_buttons_[button_code];
         }
         return false;
     }
 
     void Input::get_mouse_position(int& x, int& y) const {
-        x = m_mouse_x;
-        y = m_mouse_y;
+        x = mouse_x_;
+        y = mouse_y_;
     }
 
     void Input::on_key_down(Key key) {
         int key_code = static_cast<int>(key);
         if (key_code >= 0 && key_code < 256) {
-            m_keys[key_code] = true;
+            keys_[key_code] = true;
         }
     }
 
     void Input::on_key_up(Key key) {
         int key_code = static_cast<int>(key);
         if (key_code >= 0 && key_code < 256) {
-            m_keys[key_code] = false;
+            keys_[key_code] = false;
         }
     }
 
     void Input::on_mouse_move(int x, int y) {
-        m_mouse_x = x;
-        m_mouse_y = y;
+        mouse_x_ = x;
+        mouse_y_ = y;
     }
 
     void Input::on_mouse_button_down(MouseButton button) {
         int button_code = static_cast<int>(button);
         if (button_code >= 0 && button_code < 5) {
-            m_mouse_buttons[button_code] = true;
+            mouse_buttons_[button_code] = true;
         }
     }
 
     void Input::on_mouse_button_up(MouseButton button) {
         int button_code = static_cast<int>(button);
         if (button_code >= 0 && button_code < 5) {
-            m_mouse_buttons[button_code] = false;
+            mouse_buttons_[button_code] = false;
         }
     }
 }

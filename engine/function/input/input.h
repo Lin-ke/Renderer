@@ -27,9 +27,9 @@ namespace Engine {
         Input(const Input&) = delete;
         Input& operator=(const Input&) = delete;
 
-        std::array<bool, 256> m_keys = { false };
-        std::array<bool, 5> m_mouse_buttons = { false };
-        int m_mouse_x = 0;
-        int m_mouse_y = 0;
+        std::array<bool, 256> keys_ = { false };
+        std::array<bool, 5> mouse_buttons_ = { false };
+        int mouse_x_ = 0;
+        int mouse_y_ = 0;
     };
 }
