@@ -3,12 +3,12 @@
 #include "engine/function/render/render_system.h"
 
 int main() {
-    Engine::Log::init();
-    LOG("Logger initialized successfully!");
+    Log::init();
+    INFO("Logger initialized successfully!");
 
-    Engine::Window window(800, 600, L"Renderer Window");
+    Window window(800, 600, L"Renderer Window");
     
-    Engine::RenderSystem render_system;
+    RenderSystem render_system;
     render_system.initialize(window.get_hwnd());
 
     while (window.process_messages()) {

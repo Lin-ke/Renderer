@@ -1,33 +1,49 @@
 #include "Log.h"
-#include <spdlog/sinks/stdout_color_sinks.h>
-#include <spdlog/sinks/basic_file_sink.h>
-#include <Windows.h>
+#include <boost/log/core.hpp>
+#include <boost/log/trivial.hpp>
+#include <boost/log/expressions.hpp>
+#include <boost/log/sinks/text_file_backend.hpp>
+#include <boost/log/utility/setup/file.hpp>
+#include <boost/log/utility/setup/console.hpp>
+#include <boost/log/utility/setup/common_attributes.hpp>
+#include <boost/log/support/date_time.hpp>
+#include <boost/date_time/posix_time/posix_time_types.hpp>
 #include <iostream>
+#include <filesystem>
 
-namespace Engine {
+namespace logging = boost::log;
+namespace keywords = boost::log::keywords;
+namespace expr = boost::log::expressions;
 
-    std::shared_ptr<spdlog::logger> Log::core_logger_;
+void Log::init() {
+    std::cout << "Current working directory: " << std::filesystem::current_path() << std::endl;
 
-    void Log::init() {
-        // Allocate a console window for output
-        AllocConsole();
-        FILE* fp;
-        freopen_s(&fp, "CONOUT$", "w", stdout);
-        freopen_s(&fp, "CONOUT$", "w", stderr);
-        freopen_s(&fp, "CONIN$", "r", stdin);
+    logging::add_common_attributes();
 
-        // Create sinks: Console and File
-        std::vector<spdlog::sink_ptr> log_sinks;
-        log_sinks.emplace_back(std::make_shared<spdlog::sinks::stdout_color_sink_mt>());
-        log_sinks.emplace_back(std::make_shared<spdlog::sinks::basic_file_sink_mt>("renderer.log", true));
+    // Console sink
+    logging::add_console_log(
+        std::cout,
+        keywords::format = (
+            expr::stream
+            << "[" << expr::format_date_time< boost::posix_time::ptime >("TimeStamp", "%H:%M:%S")
+            << "] [" << logging::trivial::severity
+            << "] " << expr::smessage
+        )
+    );
 
-        // Format pattern: [Time] [Logger] [Level] Message
-        log_sinks[0]->set_pattern("%^[%T] %n: %v%$");
-        log_sinks[1]->set_pattern("[%T] [%l] %n: %v");
+    // File sink
+    logging::add_file_log(
+        keywords::file_name = "renderer.log",
+        keywords::auto_flush = true,
+        keywords::format = (
+            expr::stream
+            << "[" << expr::format_date_time< boost::posix_time::ptime >("TimeStamp", "%H:%M:%S")
+            << "] [" << logging::trivial::severity
+            << "] " << expr::smessage
+        )
+    );
 
-        core_logger_ = std::make_shared<spdlog::logger>("ENGINE", begin(log_sinks), end(log_sinks));
-        spdlog::register_logger(core_logger_);
-        core_logger_->set_level(spdlog::level::trace);
-        core_logger_->flush_on(spdlog::level::trace);
-    }
+    logging::core::get()->set_filter(
+        logging::trivial::severity >= logging::trivial::trace
+    );
 }
