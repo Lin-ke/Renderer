@@ -2,7 +2,7 @@
 #include "engine/platform/dx11/dx11_rhi.h"
 
 
-void RenderSystem::initialize(void* window_handle) {
+void RenderSystem::init(void* window_handle) {
     // Create DX11 RHI instance
     // 创建 DX11 RHI 实例
     rhi_ = std::make_shared<DX11RHI>();

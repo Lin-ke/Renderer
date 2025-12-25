@@ -3,7 +3,17 @@
 #include <d3d11.h>
 #include <dxgi.h>
 #include <wrl/client.h>
-#include <vector>
+#include <engine/function/render/rhi/rhi_device.h>
+class RHIDeviceDX11 : public RHIDevice {
+    bool enableDebug_;
+    bool enableRayTracing_;
+public:
+    RHIDeviceDX11(const RHIDeviceInfo& info) {
+        // Initialize DX11 specific settings based on info
+        enableDebug_ = info.enableDebug;
+        enableRayTracing_ = info.enableRayTracing;
+    }
+};
 
 class DX11RHI : public RHI {
 public:

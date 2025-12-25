@@ -7,11 +7,12 @@ class RenderSystem {
 public:
     RenderSystem() = default;
     ~RenderSystem() = default;
-    void initialize(void* window_handle);
+    void init(void* window_handle);
     void tick();
     
     // Test function to draw a triangle
     void draw_triangle_test();
+    RHI* get_rhi() const { return rhi_.get(); }
 
 private:
     std::shared_ptr<RHI> rhi_;
