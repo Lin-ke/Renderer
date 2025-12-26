@@ -5,6 +5,9 @@
 #include <boost/uuid/uuid.hpp>           
 #include <boost/uuid/uuid_generators.hpp> 
 #include <boost/uuid/uuid_io.hpp>        
+#include <cereal/types/memory.hpp>
+#include <cereal/types/base_class.hpp>
+#include <cereal/access.hpp>
 
 class UID {
 public:
@@ -25,6 +28,7 @@ private:
 private:
     boost::uuids::uuid id;
     std::string str;
+    friend class cereal::access;
     template<class Archive>
     void serialize(Archive& archive) {
         archive(str);
@@ -33,6 +37,14 @@ private:
             id = gen(str);
         }
     }
+    
 };
 
+// hash for unordered_map
+template<>
+struct std::hash<UID> {
+    std::size_t operator()(const UID& uid) const noexcept {
+        return boost::uuids::hash_value(uid.get_raw());
+    }
+};
 #endif

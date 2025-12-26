@@ -5,8 +5,9 @@ add_requires("boost", {configs = {header_only = false, log = true, system = true
 add_requires("glfw", "imgui", "stb", "assimp", "cereal", "eventpp", "eigen")
 
 set_encodings("utf-8")
-add_defines("UNICODE", "_UNICODE")
-
+add_defines("UNICODE", "_UNICODE", "NOMINMAX")
+local root_dir = os.projectdir():replace("\\", "/")
+add_defines("ENGINE_ROOT=\"" .. root_dir .. "\"")
 target("engine")
     set_kind("static")
     set_languages("c++20")

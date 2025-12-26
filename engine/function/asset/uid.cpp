@@ -24,5 +24,6 @@ UID::UID(NullTag)
 // 静态 Empty 方法
 UID UID::empty()
 {
-    return UID(NullTag{});
+    static UID instance(NullTag{});
+    return instance;
 }

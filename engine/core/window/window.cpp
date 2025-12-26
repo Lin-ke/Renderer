@@ -1,5 +1,8 @@
 #include "Window.h"
 #include "engine/function/input/input.h"
+#ifndef NOMINIMAX
+#define NOMINIMAX // Prevent Windows.h from defining min/max macros
+#endif
 #include <windowsx.h> // For GET_X_LPARAM, GET_Y_LPARAM
 
 
