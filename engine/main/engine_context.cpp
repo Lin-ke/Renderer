@@ -16,7 +16,6 @@ void EngineContext::init(){
     
     instance_->window_ = std::make_unique<Window>(800, 600, L"Renderer Window");
     instance_->render_system_ = std::make_unique<RenderSystem>();
-    
     instance_->render_system_->init(instance_->window_->get_hwnd());
 }
 

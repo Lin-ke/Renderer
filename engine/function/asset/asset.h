@@ -1,5 +1,4 @@
 #pragma once
-#include "uuid.h"
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -15,8 +14,8 @@
 #include <cereal/types/string.hpp>
 #include <cereal/types/vector.hpp>
 
-// 前置声明
-class AssetManager;
+#include "uid.h"
+#include "asset_manager.h"
 
 // 使用 enum class 增强类型安全
 enum class AssetType : uint8_t {
@@ -30,52 +29,50 @@ enum class AssetType : uint8_t {
 
 	max_enum
 };
-namespace creal {
 
-template <typename T>
-concept AssetType = requires(T a) {
-	{ a.on_load_asset() } -> std::same_as<void>;
-};
+// template <typename T>
+// concept AssetType = requires(T a) {
+// 	{ a.on_load_asset() } -> std::same_as<void>;
+// };
 
-template <typename T>
-concept EntryType = requires(T a) {
-	{ a.get_path() } -> std::same_as<void>;
-};
+// template <typename T>
+// concept EntryType = requires(T a) {
+// 	{ a.get_path() } -> std::same_as<void>;
+// };
 
-template <typename Archive, AssetType T>
-void SerializeAsset(Archive &ar, const char *name, std::shared_ptr<T> &asset) {
-	ar(cereal::make_nvp(name, asset));
+// template <typename Archive, AssetType T>
+// void SerializeAsset(Archive &ar, const char *name, std::shared_ptr<T> &asset) {
+// 	ar(cereal::make_nvp(name, asset));
 
-	if constexpr (Archive::is_loading::value) {
-		if (asset) {
-			asset->on_load_asset();
-		}
-	}
-}
+// 	if constexpr (Archive::is_loading::value) {
+// 		if (asset) {
+// 			asset->on_load_asset();
+// 		}
+// 	}
+// }
 
-template <typename Archive, AssetType T>
-void SerializeAssetArray(Archive &ar, const char *name, std::vector<std::shared_ptr<T>> &assets) {
-	ar(cereal::make_nvp(name, assets));
+// template <typename Archive, AssetType T>
+// void SerializeAssetArray(Archive &ar, const char *name, std::vector<std::shared_ptr<T>> &assets) {
+// 	ar(cereal::make_nvp(name, assets));
 
-	if constexpr (Archive::is_loading::value) {
-		for (auto &asset : assets) {
-			if (asset) {
-				asset->on_load_asset();
-			}
-		}
-	}
-}
+// 	if constexpr (Archive::is_loading::value) {
+// 		for (auto &asset : assets) {
+// 			if (asset) {
+// 				asset->on_load_asset();
+// 			}
+// 		}
+// 	}
+// }
 
-template <typename Archive, EntryType TEntry, typename TPath>
-void SerializeFilePath(Archive &ar, const char *name, TEntry &entry, TPath &path) {
-	if constexpr (Archive::is_saving::value) {
-		if (entry) {
-			path = entry->get_path();
-		}
-	}
-	ar(cereal::make_nvp(name, path));
-}
-} //namespace creal
+// template <typename Archive, EntryType TEntry, typename TPath>
+// void SerializeFilePath(Archive &ar, const char *name, TEntry &entry, TPath &path) {
+// 	if constexpr (Archive::is_saving::value) {
+// 		if (entry) {
+// 			path = entry->get_path();
+// 		}
+// 	}
+// 	ar(cereal::make_nvp(name, path));
+// }
 // ============================================================================
 // AssetBinder
 // 用于在 Load/Save 时处理 "资源引用 <-> UID" 的映射逻辑
@@ -87,7 +84,6 @@ public:
 
 	AssetBinder(Mode mode, AssetManager *manager = nullptr) : mode_(mode), manager_(manager) {}
 
-	// 通用绑定接口：自动推导是单个指针还是数组
 	template <typename T>
 	void bind(std::string_view name, T &field) {
 		if (mode_ == Mode::load) {
@@ -115,18 +111,46 @@ private:
 	std::unordered_map<std::string, UID> asset_map_;
 	std::unordered_map<std::string, std::vector<UID>> asset_array_map_;
 
-	// --- Internal Helpers (Implementation omitted for brevity, assumes Manager logic) ---
-	// 实际项目中，这里会调用 manager_->get_or_load_asset<T>(uid)
-
 	template <typename T>
-	void load_internal(std::string_view name, std::shared_ptr<T> &ptr);
+	void load_internal(std::string_view name, std::shared_ptr<T> &ptr){
+       auto it = asset_map_.find(std::string(name));
+        
+        if (it != asset_map_.end()) {
+            const UID& uid = it->second;
+            if (!uid.is_empty() && manager_) {
+                ptr = manager_->get_or_load_asset<T>(uid);
+            } else {
+                ptr = nullptr;
+            }
+        } else {
+            ptr = nullptr;
+        } 
+    }
 
-	template <typename T>
-	void load_internal(std::string_view name, std::vector<std::shared_ptr<T>> &vec);
+	template<typename T>
+    void load_internal(std::string_view name, std::vector<std::shared_ptr<T>>& vec) {
+        auto it = asset_array_map_.find(std::string(name));
+        
+        if (it != asset_array_map_.end()) {
+            const std::vector<UID>& uids = it->second;
+            vec.resize(uids.size());
+            for (size_t i = 0; i < uids.size(); ++i) {
+                const UID& uid = uids[i];
+                
+                if (!uid.is_empty() && manager_) {
+                    vec[i] = manager_->get_or_load_asset<T>(uid);
+                } else {
+                    vec[i] = nullptr;
+                }
+            }
+        } else {
+            vec.clear();
+        }
+    }
 
 	template <typename T>
 	void save_internal(std::string_view name, const std::shared_ptr<T> &ptr) {
-		asset_map_.emplace(name, ptr ? ptr->get_uid() : UID::Empty());
+		asset_map_.emplace(name, ptr ? ptr->get_uid() : UID::empty());
 	}
 
 	template <typename T>
@@ -134,7 +158,7 @@ private:
 		std::vector<UID> uids;
 		uids.reserve(vec.size());
 		for (const auto &p : vec) {
-			uids.push_back(p ? p->get_uid() : UID::Empty());
+			uids.push_back(p ? p->get_uid() : UID::empty());
 		}
 		asset_array_map_.emplace(name, std::move(uids));
 	}
@@ -145,10 +169,7 @@ private:
 // ============================================================================
 class Asset : public std::enable_shared_from_this<Asset> {
 public:
-	Asset() = default;
 	virtual ~Asset() = default;
-
-	// --- Public Interfaces (snake_case) ---
 
 	virtual std::string get_asset_type_name() const { return "Unknown"; }
 	virtual AssetType get_asset_type() const { return AssetType::unknown; }
@@ -171,7 +192,7 @@ public:
 	void set_uid(const UID &id) { uid_ = id; }
 
 protected:
-	UID uid_ = {};
+	UID uid_ = {}; // random uid
 
 	friend class AssetManager;
 	friend class cereal::access;
@@ -180,9 +201,7 @@ protected:
 	template <class Archive>
 	void serialize(Archive &ar) {
 		ar(cereal::make_nvp("uid", uid_));
-
-		// 注意：Asset 自身的成员变量(如 float intensity) 在这里序列化
-		// 而引用的其他 Asset (如 Texture*) 通过 bind_refs 在 Manager 层处理
+        // ... subclass will extend this ...
 	}
 };
 
