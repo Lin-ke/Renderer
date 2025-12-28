@@ -1,12 +1,7 @@
 #pragma once
 
 #include <format>
-#include <boost/log/trivial.hpp>
-#include <boost/log/sources/severity_logger.hpp>
-#include <boost/log/sources/record_ostream.hpp>
-#include <boost/log/utility/setup/common_attributes.hpp>
-#include <boost/log/utility/setup/console.hpp>
-#include <boost/log/utility/setup/file.hpp>
+#include <glog/logging.h>
 
 class Log {
 public:
@@ -14,22 +9,22 @@ public:
 
     template<typename... Args>
     static void info(std::format_string<Args...> fmt, Args&&... args) {
-        BOOST_LOG_TRIVIAL(info) << std::format(fmt, std::forward<Args>(args)...);
+        LOG(INFO) << std::format(fmt, std::forward<Args>(args)...);
     }
 
     template<typename... Args>
     static void warn(std::format_string<Args...> fmt, Args&&... args) {
-        BOOST_LOG_TRIVIAL(warning) << std::format(fmt, std::forward<Args>(args)...);
+        LOG(WARNING) << std::format(fmt, std::forward<Args>(args)...);
     }
 
     template<typename... Args>
     static void error(std::format_string<Args...> fmt, Args&&... args) {
-        BOOST_LOG_TRIVIAL(error) << std::format(fmt, std::forward<Args>(args)...);
+        LOG(ERROR) << std::format(fmt, std::forward<Args>(args)...);
     }
 
     template<typename... Args>
     static void critical(std::format_string<Args...> fmt, Args&&... args) {
-        BOOST_LOG_TRIVIAL(fatal) << std::format(fmt, std::forward<Args>(args)...);
+        LOG(FATAL) << std::format(fmt, std::forward<Args>(args)...);
     }
 };
 

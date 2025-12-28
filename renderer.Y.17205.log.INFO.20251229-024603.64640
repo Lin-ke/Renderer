@@ -1,0 +1,5 @@
+Log file created at: 2025/12/29 02:46:03
+Running on machine: Y
+Running duration (h:mm:ss): 0:00:00
+Log line format: [IWEF]yyyymmdd hh:mm:ss.uuuuuu threadid file:line] msg
+I20251229 02:46:03.685312 72204 Log.h:12] Initializing DX11 RHI with width: 784, height: 561
