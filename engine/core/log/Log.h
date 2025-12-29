@@ -1,4 +1,5 @@
-#pragma once
+#ifndef LOG_H
+#define LOG_H
 
 #include <format>
 #include <glog/logging.h>
@@ -33,3 +34,4 @@ public:
 #define WARN(...)   ::Log::warn(__VA_ARGS__)
 #define ERR(...)    ::Log::error(__VA_ARGS__)
 #define FATAL(...)  ::Log::critical(__VA_ARGS__)
+#endif

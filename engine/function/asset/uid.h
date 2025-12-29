@@ -23,6 +23,7 @@ private:
 private:
     uuids::uuid id;
     std::string str;
+public:
     template<class Archive>
     void serialize(Archive& archive) {
         archive(str);

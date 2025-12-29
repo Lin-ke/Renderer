@@ -3,6 +3,7 @@
 #include "engine/core/log/Log.h"
 #include "engine/function/render/render_system.h"
 #include "engine/function/input/input.h"
+#include "engine/function/asset/asset_manager.h"
 
 std::unique_ptr<EngineContext> EngineContext::instance_;
 
@@ -17,6 +18,7 @@ void EngineContext::init(){
     instance_->window_ = std::make_unique<Window>(800, 600, L"Renderer Window");
     instance_->render_system_ = std::make_unique<RenderSystem>();
     instance_->render_system_->init(instance_->window_->get_hwnd());
+    instance_->asset_manager_ = std::make_unique<AssetManager>();
 }
 
 void EngineContext::exit() {
@@ -47,5 +49,10 @@ RHI* EngineContext::get_rhi() {
     if (instance_ && instance_->render_system_) {
         return instance_->render_system_->get_rhi();
     }
+    return nullptr;
+}
+
+AssetManager* EngineContext::asset() {
+    if (instance_) return instance_->asset_manager_.get();
     return nullptr;
 }

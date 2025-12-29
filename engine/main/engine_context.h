@@ -6,6 +6,7 @@
 class Window;
 class RenderSystem;
 class RHI;
+class AssetManager;
 
 class EngineContext {
 public:
@@ -15,6 +16,7 @@ public:
 	static void main_loop();
     
     static RHI* get_rhi();
+    static AssetManager* asset();
 
 private:
 	EngineContext();
@@ -22,7 +24,7 @@ private:
     
     std::unique_ptr<Window> window_;
     std::unique_ptr<RenderSystem> render_system_;
-
+    std::unique_ptr<AssetManager> asset_manager_;
 	void main_loop_internal();
 };
 
