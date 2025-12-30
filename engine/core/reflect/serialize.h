@@ -14,7 +14,6 @@
 #include <cereal/types/utility.hpp>
 #include <cereal/types/vector.hpp>
 
-#include <concepts>
 
 namespace cereal {
 template <class Archive>

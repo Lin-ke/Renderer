@@ -9,29 +9,40 @@ public:
     static void init();
 
     template<typename... Args>
-    static void info(std::format_string<Args...> fmt, Args&&... args) {
-        LOG(INFO) << std::format(fmt, std::forward<Args>(args)...);
+    static void info(const char* file, int line, std::format_string<Args...> fmt, Args&&... args) {
+        google::LogMessage(file, line, google::GLOG_INFO).stream() 
+            << std::format(fmt, std::forward<Args>(args)...);
     }
 
     template<typename... Args>
-    static void warn(std::format_string<Args...> fmt, Args&&... args) {
-        LOG(WARNING) << std::format(fmt, std::forward<Args>(args)...);
+    static void warn(const char* file, int line, std::format_string<Args...> fmt, Args&&... args) {
+        google::LogMessage(file, line, google::GLOG_WARNING).stream() 
+            << std::format(fmt, std::forward<Args>(args)...);
     }
 
     template<typename... Args>
-    static void error(std::format_string<Args...> fmt, Args&&... args) {
-        LOG(ERROR) << std::format(fmt, std::forward<Args>(args)...);
+    static void error(const char* file, int line, std::format_string<Args...> fmt, Args&&... args) {
+        google::LogMessage(file, line, google::GLOG_ERROR).stream() 
+            << std::format(fmt, std::forward<Args>(args)...);
     }
 
     template<typename... Args>
-    static void critical(std::format_string<Args...> fmt, Args&&... args) {
-        LOG(FATAL) << std::format(fmt, std::forward<Args>(args)...);
+    static void critical(const char* file, int line, std::format_string<Args...> fmt, Args&&... args) {
+        google::LogMessage(file, line, google::GLOG_FATAL).stream() 
+            << std::format(fmt, std::forward<Args>(args)...);
     }
 };
 
-// Log macros adapted for the new Log class
-#define INFO(...)    ::Log::info(__VA_ARGS__)
-#define WARN(...)   ::Log::warn(__VA_ARGS__)
-#define ERR(...)    ::Log::error(__VA_ARGS__)
-#define FATAL(...)  ::Log::critical(__VA_ARGS__)
+#ifdef INFO
+#undef INFO
 #endif
+#ifdef WARN
+#undef WARN
+#endif
+
+#define INFO(...)   ::Log::info(__FILE__, __LINE__, __VA_ARGS__)
+#define WARN(...)   ::Log::warn(__FILE__, __LINE__, __VA_ARGS__)
+#define ERR(...)    ::Log::error(__FILE__, __LINE__, __VA_ARGS__)
+#define FATAL(...)  ::Log::critical(__FILE__, __LINE__, __VA_ARGS__)
+
+#endif // LOG_H

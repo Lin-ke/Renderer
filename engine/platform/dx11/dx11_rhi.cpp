@@ -1,8 +1,6 @@
 #include "dx11_rhi.h"
 #include "engine/core/log/Log.h"
 #include <d3dcompiler.h>
-#include <iostream>
-
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "d3dcompiler.lib")

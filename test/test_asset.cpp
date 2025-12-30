@@ -5,16 +5,14 @@
 #include "engine/function/asset/basic/png.h"
 #include "engine/core/log/Log.h"
 
-// Register types
-CEREAL_REGISTER_TYPE(PNGAsset);
-CEREAL_REGISTER_POLYMORPHIC_RELATION(Asset, PNGAsset);
 
 TEST_CASE("Asset Manager Integration Test", "[asset]") {
     // Phase 1: Save Assets
+    EngineContext::init();
     {
-        EngineContext::init();
         // Use a temporary test directory for assets
-        EngineContext::asset()->init("test_game_assets");
+        EngineContext::asset()->init(std::string(ENGINE_PATH) 
+        + "/test/test_internal");
 
         INFO("--- Phase 1: Saving Assets ---");
 
@@ -27,7 +25,7 @@ TEST_CASE("Asset Manager Integration Test", "[asset]") {
         bin_asset->pixels.resize(1024 * 768 * 4, 255); // White texture
         
         // Save Binary Asset
-        std::string bin_path = "texture/data.binasset";
+        std::string bin_path = "/Game/data.binasset";
         EngineContext::asset()->save_asset(bin_asset, bin_path);
         
         // Create JSON Asset (Meta) with dependency
@@ -40,7 +38,7 @@ TEST_CASE("Asset Manager Integration Test", "[asset]") {
         json_asset->dep2 = AssetHandle<PNGAsset>(bin_asset);
         
         // Save JSON Asset
-        std::string json_path = "texture/meta.asset";
+        std::string json_path = "/Game/meta.asset";
         EngineContext::asset()->save_asset(json_asset, json_path);
 
         EngineContext::exit();
@@ -48,12 +46,13 @@ TEST_CASE("Asset Manager Integration Test", "[asset]") {
 
     // Phase 2: Load Assets (New Context)
     {
-        EngineContext::init();
-        EngineContext::asset()->init("test_game_assets");
+        EngineContext::asset()->init(std::string(ENGINE_PATH) 
+        + "/test/test_internal");
+
 
         INFO("--- Phase 2: Loading Assets ---");
 
-        std::string json_path = "texture/meta.asset";
+        std::string json_path = "/Game/meta.asset";
         auto loaded_asset = EngineContext::asset()->get_or_load_asset<PNGAsset>(json_path);
 
         REQUIRE(loaded_asset != nullptr);

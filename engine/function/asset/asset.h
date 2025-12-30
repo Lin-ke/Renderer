@@ -29,16 +29,12 @@ class AssetManager;
 class Asset : public std::enable_shared_from_this<Asset> {
 public:
     virtual ~Asset() = default;
-
-    // 纯虚函数接口
     virtual std::string_view get_asset_type_name() const { return "Unknown"; }
     virtual AssetType get_asset_type() const { return AssetType::Unknown; }
-
-    // 生命周期回调
     virtual void on_load_asset() {} // 反序列化后，实际加载显存等重资源
     virtual void on_save_asset() {} // 序列化前调用
 
-    [[nodiscard]] const UID& get_uid() const { return uid_; }
+    const UID& get_uid() const { return uid_; }
     void set_uid(const UID& id) { uid_ = id; } // 允许管理器设置 UID
 
 protected:
@@ -51,6 +47,7 @@ protected:
     void serialize(Archive& ar) {
         ar(cereal::make_nvp("uid", uid_));
     }
+
 };
 
 using AssetRef = std::shared_ptr<Asset>;

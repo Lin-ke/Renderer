@@ -1,48 +1,77 @@
 #ifndef UUID_H
 #define UUID_H
 
-#include <string>
 #include <uuid.h>
+#include <string>
 
 class UID {
 public:
-    UID();
-    explicit UID(const std::string& str);
-    static UID empty();
-    const std::string& to_string() const { return str; }
-    const uuids::uuid& get_raw() const { return id; }
-    bool operator==(const UID& other) const { return id == other.id; }
-    bool operator!=(const UID& other) const { return id != other.id; }
-    bool is_empty() const { return id.is_nil(); }
+	UID();
+	explicit UID(const std::string &str);
+	static UID empty();
+	const std::string &to_string() const { return str; }
+	const uuids::uuid &get_raw() const { return id; }
+	bool operator==(const UID &other) const { return id == other.id; }
+	bool operator!=(const UID &other) const { return id != other.id; }
+	bool is_empty() const { return id.is_nil(); }
 
 private:
-    // 私有构造：用于 Empty()，避免不必要的随机生成
-    struct NullTag {};
-    explicit UID(NullTag);
+	// 私有构造：用于 Empty()，避免不必要的随机生成
+	struct NullTag {};
+	explicit UID(NullTag);
 
 private:
-    uuids::uuid id;
-    std::string str;
+	uuids::uuid id;
+	std::string str;
+
 public:
-    template<class Archive>
-    void serialize(Archive& archive) {
-        archive(str);
-        if constexpr (Archive::is_loading::value) {
-            auto parsed = uuids::uuid::from_string(str);
-            if (parsed) {
-                id = *parsed;
-            }
-        }
+    template <class Archive>
+    std::string save_minimal(const Archive&) const {
+        return str;
     }
+
+    template <class Archive>
+    void load_minimal(const Archive&, const std::string& value) {
+        auto parsed = uuids::uuid::from_string(value);
+        if (parsed) {
+            id = *parsed;
+        } else {
+            id = uuids::uuid(); // nil
+        }
+        str = value;
+    }	
+
+	template <bool isbinary>
+	void write(std::ostream &os) const {
+		if constexpr (isbinary) {
+			os.write(reinterpret_cast<const char *>(&id), sizeof(uuids::uuid));
+		} else {
+			os.write(str.c_str(), str.size());
+		}
+	}
+	template <bool isbinary>
+	void read(std::istream &is) {
+		if (isbinary) {
+			is.read(reinterpret_cast<char *>(&id), sizeof(uuids::uuid));
+			str = uuids::to_string(id);
+		} else {
+			char buffer[37] = { 0 };
+			is.read(buffer, 36);
+			auto parsed_id = uuids::uuid::from_string(str);
+			if (parsed_id.has_value()) {
+				id = parsed_id.value();
+			}
+		}
+	}
 };
 
 namespace std {
-    template <>
-    struct hash<UID> {
-        size_t operator()(const UID& uid) const {
-            return std::hash<uuids::uuid>{}(uid.get_raw());
-        }
-    };
-}
+template <>
+struct hash<UID> {
+	size_t operator()(const UID &uid) const {
+		return std::hash<uuids::uuid>{}(uid.get_raw());
+	}
+};
+} //namespace std
 
 #endif
