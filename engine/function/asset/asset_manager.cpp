@@ -70,12 +70,15 @@ UID AssetManager::peek_uid_from_file(const fs::path &path) {
 	switch (get_format(path)) {
 		case AssetFormat::Binary: {
 			uid.read<true>(ifs);
+			break;
 		}
 		case AssetFormat::Json: {
 			uid.read<false>(ifs);
+			break;
 		}
 		default:
 			uid = UID::empty();
+			break;
 	}
     return uid;
 }

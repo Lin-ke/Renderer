@@ -57,7 +57,8 @@ public:
 		} else {
 			char buffer[37] = { 0 };
 			is.read(buffer, 36);
-			auto parsed_id = uuids::uuid::from_string(str);
+			str = buffer;
+			auto parsed_id = uuids::uuid::from_string(buffer);
 			if (parsed_id.has_value()) {
 				id = parsed_id.value();
 			}

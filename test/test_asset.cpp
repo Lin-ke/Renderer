@@ -8,13 +8,15 @@
 
 TEST_CASE("Asset Manager Integration Test", "[asset]") {
     // Phase 1: Save Assets
-    EngineContext::init();
+    Log::init();
+    UID rec1, rec2;
     {
+        INFO("--- Phase 1: Saving Assets ---");
+        EngineContext::init(1 << EngineContext::StartMode::Asset_);
         // Use a temporary test directory for assets
         EngineContext::asset()->init(std::string(ENGINE_PATH) 
         + "/test/test_internal");
 
-        INFO("--- Phase 1: Saving Assets ---");
 
         // Create Binary Asset (Data)
         auto bin_asset = std::make_shared<PNGAsset>();
@@ -36,7 +38,8 @@ TEST_CASE("Asset Manager Integration Test", "[asset]") {
         
         // Set dependency
         json_asset->dep2 = AssetHandle<PNGAsset>(bin_asset);
-        
+        rec1 = bin_asset->get_uid();
+        rec2 = json_asset->get_uid();
         // Save JSON Asset
         std::string json_path = "/Game/meta.asset";
         EngineContext::asset()->save_asset(json_asset, json_path);
@@ -46,11 +49,12 @@ TEST_CASE("Asset Manager Integration Test", "[asset]") {
 
     // Phase 2: Load Assets (New Context)
     {
+        INFO("--- Phase 2: Loading Assets ---");
+        EngineContext::init(1 << EngineContext::StartMode::Asset_);
         EngineContext::asset()->init(std::string(ENGINE_PATH) 
         + "/test/test_internal");
 
-
-        INFO("--- Phase 2: Loading Assets ---");
+        
 
         std::string json_path = "/Game/meta.asset";
         auto loaded_asset = EngineContext::asset()->get_or_load_asset<PNGAsset>(json_path);
@@ -63,10 +67,14 @@ TEST_CASE("Asset Manager Integration Test", "[asset]") {
         
         REQUIRE(loaded_asset->dep2.is_loaded());
         
+        CHECK(loaded_asset->dep2->get_uid() == rec1);
+        CHECK(loaded_asset->get_uid() == rec2);
+        
         auto dep = loaded_asset->dep2.get();
         REQUIRE(dep != nullptr);
         CHECK(dep->width == 1024);
 
         EngineContext::exit();
     }
+    Log::shutdown();
 }

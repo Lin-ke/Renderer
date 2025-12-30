@@ -7,6 +7,9 @@
 class Log {
 public:
     static void init();
+    static void shutdown() {
+        google::ShutdownGoogleLogging();
+    }
 
     template<typename... Args>
     static void info(const char* file, int line, std::format_string<Args...> fmt, Args&&... args) {

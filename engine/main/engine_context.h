@@ -2,16 +2,24 @@
 #define ENGINE_CONTEXT_H
 
 #include <memory>
-
+#include <bitset>
 class Window;
 class RenderSystem;
 class RHI;
 class AssetManager;
 
+
 class EngineContext {
 public:
+    enum StartMode{
+        Asset_ = 0,
+        Render_ = 1,
+        Window_ = 2,
+        Log_ = 3,
+    };
+    std::bitset<8> mode_;
     ~EngineContext();
-	static void init();
+	static void init(std::bitset<8> mode );
     static void exit();
 	static void main_loop();
     
