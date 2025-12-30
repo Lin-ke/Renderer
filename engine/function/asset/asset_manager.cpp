@@ -28,7 +28,6 @@ static AssetFormat get_format(const fs::path &path) {
 	return AssetFormat::Invalid;
 }
 
-
 void AssetManager::init(const fs::path &game_path) {
 	std::filesystem::path engine_base_path_ = fs::absolute(ENGINE_PATH);
 	engine_path_ = engine_base_path_ / "assets";
@@ -38,7 +37,7 @@ void AssetManager::init(const fs::path &game_path) {
 	} else {
 		game_path_ = fs::absolute(game_path) / "assets";
 	}
-	INFO("AM at: epath, {}, gpath, {}", engine_path_.string(), game_path_.string());
+	// INFO("AM at: epath, {}, gpath, {}", engine_path_.string(), game_path_.string());
 	for (auto &asset_path : { engine_path_, game_path_ }) {
 		if (fs::exists(asset_path)) {
 			scan_directory(asset_path);
@@ -66,7 +65,7 @@ UID AssetManager::peek_uid_from_file(const fs::path &path) {
 	if (!ifs.is_open()) {
 		return UID::empty(); // Return empty UID
 	}
-    UID uid;
+	UID uid;
 	switch (get_format(path)) {
 		case AssetFormat::Binary: {
 			uid.read<true>(ifs);
@@ -80,7 +79,7 @@ UID AssetManager::peek_uid_from_file(const fs::path &path) {
 			uid = UID::empty();
 			break;
 	}
-    return uid;
+	return uid;
 }
 
 void AssetManager::tick() {
@@ -150,13 +149,13 @@ AssetRef AssetManager::load_asset_from_disk(const fs::path &physical_path, bool 
 	}
 
 	try {
-        UID uid;
+		UID uid;
 		if (format == AssetFormat::Binary) {
-            uid.read<true>(ifs);
+			uid.read<true>(ifs);
 			cereal::BinaryInputArchive archive(ifs);
 			archive(asset);
 		} else if (format == AssetFormat::Json) {
-            uid.read<false>(ifs);
+			uid.read<false>(ifs);
 			cereal::JSONInputArchive archive(ifs);
 			archive(asset);
 		}
@@ -178,7 +177,7 @@ AssetRef AssetManager::load_asset_from_disk(const fs::path &physical_path, bool 
 	}
 
 	// 更新索引
-	register_asset(asset,physical_path.generic_string());
+	register_asset(asset, physical_path.generic_string());
 
 	if (init_now) {
 		asset->on_load_asset();
@@ -253,13 +252,13 @@ void AssetManager::save_asset(AssetRef asset, const std::string &path) {
 	std::ofstream os(physical_path.value(), std::ios::binary);
 
 	try {
-        UID uid = asset->get_uid();
+		UID uid = asset->get_uid();
 		if (format == AssetFormat::Binary) {
-            uid.write<true>(os); 
+			uid.write<true>(os);
 			cereal::BinaryOutputArchive archive(os);
 			archive(asset);
 		} else {
-            uid.write<false>(os);
+			uid.write<false>(os);
 			cereal::JSONOutputArchive archive(os);
 			archive(asset);
 		}

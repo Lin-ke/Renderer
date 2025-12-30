@@ -15,11 +15,7 @@ public:
     T* get() const { 
         return asset_ptr_.get(); 
     }
-    void resolve() {
-        if (!asset_ptr_ && !uid_.is_empty()) {
-            asset_ptr_ = EngineContext::asset()->template get_or_load_asset<T>(uid_);
-        }
-    }
+    
     bool is_loaded() const { return asset_ptr_ != nullptr; }
 
     T* operator->() const { return get(); }
@@ -39,7 +35,7 @@ public:
     template <class Archive>
     void load_minimal(const Archive&, const std::string& value) {
         uid_ = UID(value); 
-        asset_ptr_ = nullptr; 
+        asset_ptr_ = EngineContext::asset()->template get_or_load_asset<T>(uid_); 
     }
 };
 

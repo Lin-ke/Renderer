@@ -63,8 +63,6 @@ TEST_CASE("Asset Manager Integration Test", "[asset]") {
         CHECK(loaded_asset->width == 100);
 
         // Resolve dependency
-        loaded_asset->dep2.resolve();
-        
         REQUIRE(loaded_asset->dep2.is_loaded());
         
         CHECK(loaded_asset->dep2->get_uid() == rec1);
