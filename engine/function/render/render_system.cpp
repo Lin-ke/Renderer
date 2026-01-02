@@ -9,7 +9,7 @@ void RenderSystem::init(void* window_handle) {
     rhi_->init(window_handle);
 }
 
-void RenderSystem::tick() {
+void RenderSystem::tick(const RenderPacket& packet) {
     if (rhi_) {
         rhi_->draw_triangle_test();
         rhi_->present();

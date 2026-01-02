@@ -45,6 +45,8 @@ private:
 	// 这里存物理的path
 	std::unordered_map<std::string, UID> path_to_uid_;
 	std::unordered_map<UID, std::string> uid_to_path_;
+	// 多线程
+	
 
 public:
 	std::filesystem::path engine_path_;

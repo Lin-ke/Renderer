@@ -7,5 +7,6 @@
 
 
 
-TODOS
-1. 
+TODO:
+1. 取消掉现在没有用到的unintialized逻辑，改为避免加载重复，考虑循环依赖是否能解决。
+（uninitialized相当于promise）

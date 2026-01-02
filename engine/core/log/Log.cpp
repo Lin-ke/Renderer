@@ -32,7 +32,6 @@ static void clean_old_logs(const std::string& log_dir, size_t keep_count, const 
         std::cout << "[LogCleaner] Found " << log_files.size() << " logs. Cleaning up old files..." << std::endl;
         for (size_t i = keep_count; i < log_files.size(); ++i) {
             fs::remove(log_files[i]);
-            std::cout << "  Deleted: " << log_files[i].filename() << std::endl;
         }
 
     } catch (const std::exception& e) {
