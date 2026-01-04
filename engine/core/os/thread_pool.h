@@ -7,6 +7,8 @@
 #include <future>
 #include <concepts>
 #include <memory>
+#include <optional>
+#include "engine/core/log/Log.h"
 
 
 using thread_id = int;
@@ -33,18 +35,21 @@ class ThreadPool {
     // 提交任务 (使用 Concept 约束)
     template<class F, class... Args>
     requires std::invocable<F, Args...>
-    auto enqueue(F&& f, Args&&... args) -> std::future<std::invoke_result_t<F, Args...>> {
+    [[nodiscard]] auto enqueue(F&& f, Args&&... args) -> std::optional<std::future<std::invoke_result_t<F, Args...>>> {
         using return_type = std::invoke_result_t<F, Args...>;
         
         // 将任务包装为 packaged_task 以获取 future
-        auto task = std::make_shared<std::packaged_task<return_type()>>(
-            std::bind(std::forward<F>(f), std::forward<Args>(args)...)
-        );
-        
+       auto task = std::make_shared<std::packaged_task<return_type()>>(
+        [func = std::forward<F>(f), ...args = std::forward<Args>(args)]() mutable {
+            return func(std::forward<decltype(args)>(args)...);
+        });
+
         std::future<return_type> res = task->get_future();
         {
             std::unique_lock lock(queue_mutex);
-            if (stop_flag) throw std::runtime_error("enqueue on stopped ThreadPool");
+            if (stop_flag) {
+                return std::nullopt;
+            }
             
             // 将任务封装进 lambda 以存入 void() 类型的队列中
             tasks.emplace([task]() { (*task)(); });

@@ -59,7 +59,20 @@ void EngineContext::init(std::bitset<8> mode) {
 }
 
 void EngineContext::exit() {
-	if (instance_ && instance_->mode_.test(StartMode::Log_)) {
+	if (!instance_) {
+		return;
+	}
+
+	if (instance_->render_thread_) {
+		instance_->render_thread_->request_stop();
+		{
+			std::unique_lock lock(instance_->render_mutex_);
+			instance_->render_cv_.notify_all();
+		}
+		instance_->render_thread_.reset();
+	}
+
+	if (instance_->mode_.test(StartMode::Log_)) {
 		Log::shutdown();
 	}
 	instance_.reset();
