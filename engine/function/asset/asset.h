@@ -75,14 +75,8 @@ private:
 
 };
 
-struct AssetDeps{
-    std::vector<UID> deps_uid;
-    friend class cereal::access;
-    template <class Archive>
-    void serialize(Archive& ar) {
-        ar(cereal::make_nvp("deps_uid", deps_uid));
-    }
-};
+using AssetDeps = std::vector<UID>;
+
 
 struct AssetDepsHelper {
     template <typename T>

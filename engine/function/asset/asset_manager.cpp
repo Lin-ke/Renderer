@@ -100,10 +100,10 @@ static void with_asset_write(const fs::path &path, Func &&func) {
             auto ext = path.extension();
             if (ext == ".binasset") {
                 cereal::BinaryOutputArchive ar(ofs);
-                ar(cereal::make_nvp("file", file_data));
+                ar(file_data);
             } else if (ext == ".asset") {
                 cereal::JSONOutputArchive ar(ofs);
-                ar(cereal::make_nvp("file", file_data));
+                ar(file_data);
             } else {
                 ERR("Unsupported save format: {}", path.string());
             }
@@ -171,9 +171,10 @@ void AssetManager::perform_save_to_disk(AssetRef asset, const fs::path &phys_pat
 
     with_asset_write(phys_path, [&](AssetFile &file_data) {
         file_data.uid = asset->get_uid();
-		file_data.deps.deps_uid = asset->get_deps() 
-            | views::transform([](const auto& dep) { return dep->get_uid(); })
-            | ranges::to<std::vector>();
+        // better syntax in cpp23.
+		for (const auto& dep : asset->get_deps()) {
+            file_data.deps.push_back(dep->get_uid());
+        }
         file_data.asset = asset;
 
         INFO("Saved asset {} to {}", file_data.uid.to_string(), phys_path.string());
@@ -196,7 +197,7 @@ void AssetManager::collect_dependencies_recursive(UID uid, std::vector<UID> &sor
     }
 
     visited.insert(uid);
-    for (const auto &dep_uid : peek_asset_deps(it->second).deps_uid) {
+    for (const auto &dep_uid : peek_asset_deps(it->second)) {
         collect_dependencies_recursive(dep_uid, sorted_uids, visited);
     }
     sorted_uids.push_back(uid);
@@ -390,7 +391,7 @@ void AssetManager::save_asset(AssetRef asset, const std::string &virtual_path) {
 
     // 1. Resolve Target Path
     fs::path v_path(virtual_path);
-    auto physical_path_opt = get_physical_path(v_path);
+    auto physical_path_opt = get_physical_path(v_path.generic_string());
     if (!physical_path_opt) {
         ERR("Invalid virtual path for saving: {}", virtual_path);
         return;
@@ -462,27 +463,31 @@ void AssetManager::save_asset(AssetRef asset, const std::string &virtual_path) {
 
 // --- Path Utilities ---
 
-std::optional<fs::path> AssetManager::get_physical_path(const fs::path &virtual_path) {
-    if (is_virtual_path(virtual_path.string())) {
-        if (virtual_path.string().find(virtual_game_path_.string()) == 0) {
-            return game_path_ / fs::relative(virtual_path, virtual_game_path_);
+std::optional<fs::path> AssetManager::get_physical_path(std::string_view virtual_path) {
+    // This function now assumes virtual_path is a generic string
+    if (is_virtual_path(virtual_path)) {
+        if (virtual_path.starts_with(virtual_game_path_.generic_string())) {
+            fs::path p(virtual_path);
+            return game_path_ / fs::relative(p, virtual_game_path_);
         }
-        if (virtual_path.string().find(virtual_engine_path_.string()) == 0) {
-            return engine_path_ / fs::relative(virtual_path, virtual_engine_path_);
+        if (virtual_path.starts_with(virtual_engine_path_.generic_string())) {
+            fs::path p(virtual_path);
+            return engine_path_ / fs::relative(p, virtual_engine_path_);
         }
     }
     return std::nullopt;
 }
 
 UID AssetManager::get_uid_by_path(const std::string &path_str) {
+    auto generic_path = fs::path(path_str).generic_string();
     {
         std::scoped_lock lock(asset_mutex_);
-        if (auto it = path_to_uid_.find(path_str); it != path_to_uid_.end()) {
+        if (auto it = path_to_uid_.find(generic_path); it != path_to_uid_.end()) {
             return it->second;
         }
     }
     // Try resolve physical
-    if (auto phys = get_physical_path(path_str)) {
+    if (auto phys = get_physical_path(generic_path)) {
         std::string phys_str = phys->generic_string();
         std::scoped_lock lock(asset_mutex_);
         if (auto it = path_to_uid_.find(phys_str); it != path_to_uid_.end()) {
@@ -493,13 +498,13 @@ UID AssetManager::get_uid_by_path(const std::string &path_str) {
 }
 
 bool AssetManager::is_virtual_path(std::string_view path) const {
-    return path.starts_with(virtual_engine_path_.string()) || path.starts_with(virtual_game_path_.string());
+    return path.starts_with(virtual_engine_path_.generic_string()) || path.starts_with(virtual_game_path_.generic_string());
 }
 
 std::optional<fs::path> AssetManager::get_virtual_path(const fs::path &real_path) {
     auto try_map = [&](const fs::path &base, const fs::path &v_base) -> std::optional<fs::path> {
         auto rel = fs::relative(real_path, base);
-        if (!rel.empty() && rel.string().find("..") == std::string::npos) {
+        if (!rel.empty() && rel.generic_string().find("..") == std::string::npos) {
             return v_base / rel;
         }
         return std::nullopt;

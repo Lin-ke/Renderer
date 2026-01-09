@@ -1,4 +1,2 @@
 CompileFlags:
-  Add:
-    - /std:c++latest
-    - -D_MSVC_LANG=202302L
+  Add: ['-std:c++20']

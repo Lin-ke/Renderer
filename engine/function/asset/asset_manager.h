@@ -21,7 +21,7 @@ public:
 
     // --- Path Utilities ---
     std::optional<std::filesystem::path> get_virtual_path(const std::filesystem::path &real_path);
-    std::optional<std::filesystem::path> get_physical_path(const std::filesystem::path &virtual_path);
+    std::optional<std::filesystem::path> get_physical_path(std::string_view virtual_path);
     bool is_virtual_path(std::string_view path) const;
     [[nodiscard]]
     std::vector<std::shared_future<AssetRef>> enqueue_load_task(UID uid);
