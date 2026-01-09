@@ -3,6 +3,7 @@
 
 #include "engine/function/asset/asset.h"
 #include "engine/function/asset/uid.h"
+#include "engine/core/log/Log.h" // Include for DECLARE_LOG_TAG
 #include <filesystem>
 #include <memory>
 #include <string_view>
@@ -10,6 +11,8 @@
 #include <future>
 #include <unordered_map>
 #include <optional>
+
+DECLARE_LOG_TAG(LogAsset);
 
 class AssetManager {
 public:

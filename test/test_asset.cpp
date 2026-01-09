@@ -5,13 +5,12 @@
 #include "engine/function/asset/basic/png.h"
 #include "engine/core/log/Log.h"
 
-
 TEST_CASE("Asset Manager Integration Test", "[asset]") {
     // Phase 1: Save Assets
     Log::init();
     UID rec1, rec2;
     {
-        INFO("--- Phase 1: Saving Assets ---");
+        INFO(LogAsset, "--- Phase 1: Saving Assets ---");
         EngineContext::init(1 << EngineContext::StartMode::Asset_);
         // Use a temporary test directory for assets
         EngineContext::asset()->init(std::string(ENGINE_PATH) 
@@ -25,7 +24,7 @@ TEST_CASE("Asset Manager Integration Test", "[asset]") {
         bin_asset->channels = 4;
         bin_asset->pixels.resize(1024 * 768 * 4, 255); // White texture
         
-        INFO("Binary Asset UID: {}", bin_asset->get_uid().to_string());
+        INFO(LogAsset, "Binary Asset UID: {}", bin_asset->get_uid().to_string());
         std::string bin_path = "/Game/data.binasset";
         EngineContext::asset()->save_asset(bin_asset, bin_path);
         
@@ -36,7 +35,7 @@ TEST_CASE("Asset Manager Integration Test", "[asset]") {
         
         // Set dependency
         json_asset->dep2 = bin_asset;
-        INFO("JSON Asset UID: {}", json_asset->get_uid().to_string());
+        INFO(LogAsset, "JSON Asset UID: {}", json_asset->get_uid().to_string());
 
         rec1 = bin_asset->get_uid();
         rec2 = json_asset->get_uid();
@@ -49,7 +48,7 @@ TEST_CASE("Asset Manager Integration Test", "[asset]") {
 
     // Phase 2: Load Assets (New Context)
     {
-        INFO("--- Phase 2: Loading Assets ---");
+        INFO(LogAsset, "--- Phase 2: Loading Assets ---");
         EngineContext::init(1 << EngineContext::StartMode::Asset_);
         EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
 
@@ -76,7 +75,7 @@ TEST_CASE("Asset Manager Integration Test", "[asset]") {
     
     // Phase 3: Recursive Save Test
     {
-        INFO("--- Phase 3: Recursive Save Test ---");
+        INFO(LogAsset, "--- Phase 3: Recursive Save Test ---");
         EngineContext::init(1 << EngineContext::StartMode::Asset_);
         EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
 
@@ -101,7 +100,7 @@ TEST_CASE("Asset Manager Integration Test", "[asset]") {
 
     // Phase 4: Verify Recursive Save
     {
-        INFO("--- Phase 4: Verify Recursive Save ---");
+        INFO(LogAsset, "--- Phase 4: Verify Recursive Save ---");
         EngineContext::init(1 << EngineContext::StartMode::Asset_);
         EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
 

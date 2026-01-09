@@ -4,6 +4,10 @@
 #include <dxgi.h>
 #include <wrl/client.h>
 #include <engine/function/render/rhi/rhi_device.h>
+#include "engine/core/log/Log.h" // Include for DECLARE_LOG_TAG
+
+DECLARE_LOG_TAG(LogRHI);
+
 class RHIDeviceDX11 : public RHIDevice {
     bool enableDebug_;
     bool enableRayTracing_;

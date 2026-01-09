@@ -6,6 +6,8 @@
 #include "engine/function/input/input.h"
 #include "engine/function/render/render_system.h"
 
+DEFINE_LOG_TAG(LogEngine, "Engine");
+
 std::unique_ptr<EngineContext> EngineContext::instance_;
 EngineContext::ThreadRole EngineContext::thread_role_ = EngineContext::ThreadRole::Unknown;
 EngineContext::EngineContext() {}
@@ -35,7 +37,7 @@ void EngineContext::init(std::bitset<8> mode) {
 	if (!mode.test(StartMode::Single_Thread_)) {
 		instance_->render_thread_ = std::make_unique<std::jthread>([](std::stop_token stoken) {
 			instance_->set_thread_role(ThreadRole::Render);
-			INFO("Render thread started.");
+			INFO(LogEngine, "Render thread started.");
 			while (!stoken.stop_requested()) {
 				RenderPacket packet;
 				{

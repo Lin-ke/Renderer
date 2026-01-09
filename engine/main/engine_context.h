@@ -9,6 +9,9 @@
 #include <condition_variable>
 
 #include "engine/function/render/render_system.h"
+#include "engine/core/log/Log.h" // Include for DECLARE_LOG_TAG
+
+DECLARE_LOG_TAG(LogEngine);
 
 class Window;
 class RHI;

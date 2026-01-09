@@ -18,9 +18,14 @@
 #include <optional>
 
 namespace fs = std::filesystem;
-namespace views = std::views;
-namespace ranges = std::ranges;
 
+
+
+DEFINE_LOG_TAG(LogAsset, "Asset"); // Define the tag here
+
+
+
+constexpr bool use_thread_pool = false;
 struct AssetUID {
     UID uid;
 	
@@ -57,7 +62,7 @@ static auto with_asset_read(const fs::path &path, Func &&func)
     using ResultT = std::invoke_result_t<Func, T&&>;
 
     if (std::ifstream ifs(path, std::ios::binary); !ifs.is_open()) {
-        ERR("Failed to open file: {}", path.string());
+        ERR(LogAsset, "Failed to open file: {}", path.string());
         return ResultT{};
     } else {
         try {
@@ -65,17 +70,17 @@ static auto with_asset_read(const fs::path &path, Func &&func)
             auto ext = path.extension();
             if (ext == ".binasset") {
                 cereal::BinaryInputArchive ar(ifs);
-                ar(data_container);
+                data_container.serialize(ar);
             } else if (ext == ".asset") {
                 cereal::JSONInputArchive ar(ifs);
-                ar(data_container);
+                data_container.serialize(ar); // 为了去掉最外层的一个“value0”
             } else {
-                ERR("Unknown asset format: {}", path.string());
+                ERR(LogAsset, "Unknown asset format: {}", path.string());
                 return ResultT{};
             }
             return func(std::move(data_container));
         } catch (const std::exception &e) {
-            ERR("Asset read error {}: {}", path.string(), e.what());
+            ERR(LogAsset, "Asset read error {}: {}", path.string(), e.what());
         }
     }
     return ResultT{};
@@ -90,7 +95,7 @@ static void with_asset_write(const fs::path &path, Func &&func) {
     }
 
     if (std::ofstream ofs(path, std::ios::binary); !ofs.is_open()) {
-        ERR("Failed to open file for writing: {}", path.string());
+        ERR(LogAsset, "Failed to open file for writing: {}", path.string());
         return;
     } else {
         AssetFile file_data;
@@ -100,15 +105,15 @@ static void with_asset_write(const fs::path &path, Func &&func) {
             auto ext = path.extension();
             if (ext == ".binasset") {
                 cereal::BinaryOutputArchive ar(ofs);
-                ar(file_data);
+                file_data.serialize(ar);
             } else if (ext == ".asset") {
                 cereal::JSONOutputArchive ar(ofs);
-                ar(file_data);
+                file_data.serialize(ar);
             } else {
-                ERR("Unsupported save format: {}", path.string());
+                ERR(LogAsset, "Unsupported save format: {}", path.string());
             }
         } catch (const std::exception &e) {
-            ERR("Asset write error {}: {}", path.string(), e.what());
+            ERR(LogAsset, "Asset write error {}: {}", path.string(), e.what());
         }
     }
 }
@@ -128,12 +133,13 @@ void AssetManager::init(const fs::path &game_path) {
     engine_path_ = fs::absolute(ENGINE_PATH) / "assets";
     game_path_ = game_path.empty() ? engine_path_ : fs::absolute(game_path) / "assets";
 
-    for (const auto &p : { engine_path_, game_path_ }) {
+    for (const auto &p : game_path == fs::path{} ? std::vector<fs::path>{ engine_path_ } : 
+        std::vector<fs::path>{ engine_path_, game_path_ }) {
         if (fs::exists(p)) {
             scan_directory(p);
         } else {
             fs::create_directories(p);
-            INFO("Created asset directory: {}", p.string());
+            INFO(LogAsset, "Created asset directory: {}", p.string());
         }
     }
     /// DEBUG
@@ -177,7 +183,7 @@ void AssetManager::perform_save_to_disk(AssetRef asset, const fs::path &phys_pat
         }
         file_data.asset = asset;
 
-        INFO("Saved asset {} to {}", file_data.uid.to_string(), phys_path.string());
+        INFO(LogAsset, "Saved asset {} to {}", file_data.uid.to_string(), phys_path.string());
     });
 
     register_asset(asset, phys_path.generic_string());
@@ -236,7 +242,7 @@ std::vector<std::shared_future<AssetRef>> AssetManager::enqueue_load_task(UID ui
             continue;
         }
         if (!uid_to_path_.contains(dep_uid)) {
-            ERR("Asset UID {} has no registered path.", dep_uid.to_string());
+            ERR(LogAsset, "Asset UID {} has no registered path.", dep_uid.to_string());
             futures.push_back(make_ready_future<AssetRef>(nullptr));
             continue;
         }
@@ -263,7 +269,7 @@ std::vector<std::shared_future<AssetRef>> AssetManager::enqueue_load_task(UID ui
         };
         
         lock.unlock();
-        if (pool) {
+        if (pool && use_thread_pool) {
             pool->enqueue(std::move(task_lambda));
         } else {
             // Sync fallback: unlock for IO, then relock
@@ -297,7 +303,7 @@ AssetRef AssetManager::load_asset_blocking(UID uid) {
         }
     }
     if (result == nullptr){
-        ERR("Failed to load asset UID: {}, See logs above.", uid.to_string());
+        ERR(LogAsset, "Failed to load asset UID: {}, See logs above.", uid.to_string());
     }
     return result;
 }
@@ -331,7 +337,7 @@ void AssetManager::scan_directory(const fs::path &dir_path) {
         auto task = [this, &results, i, p = paths[i]]() {
             results[i] = { peek_uid_from_file(p), p.generic_string() };
         };
-        if (pool) {
+        if (pool && use_thread_pool) {
             futures.push_back(pool->enqueue(std::move(task)));
         } else {
             task();
@@ -393,7 +399,7 @@ void AssetManager::save_asset(AssetRef asset, const std::string &virtual_path) {
     fs::path v_path(virtual_path);
     auto physical_path_opt = get_physical_path(v_path.generic_string());
     if (!physical_path_opt) {
-        ERR("Invalid virtual path for saving: {}", virtual_path);
+        ERR(LogAsset, "Invalid virtual path for saving: {}", virtual_path);
         return;
     }
     fs::path root_phys_path = *physical_path_opt;
@@ -409,7 +415,7 @@ void AssetManager::save_asset(AssetRef asset, const std::string &virtual_path) {
         asset->on_save_asset();
     }
 
-    INFO("Saving asset {} and {} dependencies.", asset->get_uid().to_string(), sorted_assets.size() - 1);
+    INFO(LogAsset, "Saving asset {} and {} dependencies.", asset->get_uid().to_string(), sorted_assets.size() - 1);
 
     // 3. Parallel Save
     auto *pool = EngineContext::thread_pool();
@@ -435,7 +441,7 @@ void AssetManager::save_asset(AssetRef asset, const std::string &virtual_path) {
                 std::string ext = (asset_to_save->get_asset_type() == AssetType::Texture || 
                                    asset_to_save->get_asset_type() == AssetType::Model) ? ".binasset" : ".asset";
                 save_path = parent_dir / (asset_to_save->get_uid().to_string() + ext);
-                INFO("Auto-generating path for new dependency {}: {}", asset_to_save->get_uid().to_string(), save_path.string());
+                INFO(LogAsset, "Auto-generating path for new dependency {}: {}", asset_to_save->get_uid().to_string(), save_path.string());
             }
         }
 
@@ -449,7 +455,7 @@ void AssetManager::save_asset(AssetRef asset, const std::string &virtual_path) {
             asset_to_save->clear_dirty();
         };
 
-        if (pool) {
+        if (pool && use_thread_pool) {
             futures.emplace_back(pool->enqueue(std::move(task)));
         } else {
             task();

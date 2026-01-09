@@ -12,7 +12,13 @@ on_load(function (target)
         engine_path = engine_path:gsub("\\", "/")
         target:add("defines", 'ENGINE_PATH="' .. engine_path .. '"')
     end)
-
+-- clangd目前不支持cpp23：(看.clangd可以调整)
+if is_mode("debug") then
+    add_defines("_DEBUG_")
+end
+if is_mode("release") then
+    set_options("optimize", "O3")
+end
 target("engine")
     set_kind("static")
     set_languages("c++20")

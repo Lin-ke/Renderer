@@ -5,6 +5,7 @@
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "d3dcompiler.lib")
 
+DEFINE_LOG_TAG(LogRHI, "RHI");
 
 // Simple vertex structure for the triangle
 // 简单的三角形顶点结构
@@ -30,7 +31,7 @@ void DX11RHI::init(void* window_handle) {
     width_ = rc.right - rc.left;
     height_ = rc.bottom - rc.top;
 
-    INFO("Initializing DX11 RHI with width: {}, height: {}", width_, height_);
+    INFO(LogRHI, "Initializing DX11 RHI with width: {}, height: {}", width_, height_);
 
     create_device_and_swap_chain(hwnd);
     create_render_target_view();
@@ -79,9 +80,9 @@ void DX11RHI::create_device_and_swap_chain(HWND hwnd) {
     );
 
     if (FAILED(hr)) {
-        FATAL("Failed to create D3D11 device and swap chain!");
+        FATAL(LogRHI, "Failed to create D3D11 device and swap chain!");
     } else {
-        INFO("D3D11 Device and Swap Chain created successfully.");
+        INFO(LogRHI, "D3D11 Device and Swap Chain created successfully.");
     }
 }
 
@@ -91,7 +92,7 @@ void DX11RHI::create_render_target_view() {
     Microsoft::WRL::ComPtr<ID3D11Texture2D> back_buffer;
     HRESULT hr = swap_chain_->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)back_buffer.GetAddressOf());
     if (FAILED(hr)) {
-        FATAL("Failed to get back buffer!");
+        FATAL(LogRHI, "Failed to get back buffer!");
         return;
     }
 
@@ -99,7 +100,7 @@ void DX11RHI::create_render_target_view() {
     // 创建渲染目标视图
     hr = device_->CreateRenderTargetView(back_buffer.Get(), nullptr, render_target_view_.GetAddressOf());
     if (FAILED(hr)) {
-        FATAL("Failed to create Render Target View!");
+        FATAL(LogRHI, "Failed to create Render Target View!");
     }
 }
 
@@ -152,27 +153,27 @@ void DX11RHI::compile_shaders() {
     // 编译顶点着色器
     HRESULT hr = D3DCompile(vs_src, strlen(vs_src), nullptr, nullptr, nullptr, "main", "vs_5_0", 0, 0, vs_blob.GetAddressOf(), error_blob.GetAddressOf());
     if (FAILED(hr)) {
-        if (error_blob) FATAL("VS Compile Error: {}", (char*)error_blob->GetBufferPointer());
+        if (error_blob) FATAL(LogRHI, "VS Compile Error: {}", (char*)error_blob->GetBufferPointer());
         return;
     }
 
     // Create Vertex Shader
     // 创建顶点着色器
     hr = device_->CreateVertexShader(vs_blob->GetBufferPointer(), vs_blob->GetBufferSize(), nullptr, vertex_shader_.GetAddressOf());
-    if (FAILED(hr)) FATAL("Failed to create Vertex Shader!");
+    if (FAILED(hr)) FATAL(LogRHI, "Failed to create Vertex Shader!");
 
     // Compile Pixel Shader
     // 编译像素着色器
     hr = D3DCompile(ps_src, strlen(ps_src), nullptr, nullptr, nullptr, "main", "ps_5_0", 0, 0, ps_blob.GetAddressOf(), error_blob.GetAddressOf());
     if (FAILED(hr)) {
-        if (error_blob) FATAL("PS Compile Error: {}", (char*)error_blob->GetBufferPointer());
+        if (error_blob) FATAL(LogRHI, "PS Compile Error: {}", (char*)error_blob->GetBufferPointer());
         return;
     }
 
     // Create Pixel Shader
     // 创建像素着色器
     hr = device_->CreatePixelShader(ps_blob->GetBufferPointer(), ps_blob->GetBufferSize(), nullptr, pixel_shader_.GetAddressOf());
-    if (FAILED(hr)) FATAL("Failed to create Pixel Shader!");
+    if (FAILED(hr)) FATAL(LogRHI, "Failed to create Pixel Shader!");
 
     // Create Input Layout
     // 创建输入布局
@@ -182,7 +183,7 @@ void DX11RHI::compile_shaders() {
     };
 
     hr = device_->CreateInputLayout(ied, 2, vs_blob->GetBufferPointer(), vs_blob->GetBufferSize(), input_layout_.GetAddressOf());
-    if (FAILED(hr)) FATAL("Failed to create Input Layout!");
+    if (FAILED(hr)) FATAL(LogRHI, "Failed to create Input Layout!");
 }
 
 void DX11RHI::create_buffers() {
@@ -204,7 +205,7 @@ void DX11RHI::create_buffers() {
     init_data.pSysMem = vertices;
 
     HRESULT hr = device_->CreateBuffer(&bd, &init_data, vertex_buffer_.GetAddressOf());
-    if (FAILED(hr)) FATAL("Failed to create Vertex Buffer!");
+    if (FAILED(hr)) FATAL(LogRHI, "Failed to create Vertex Buffer!");
 }
 
 void DX11RHI::draw_triangle_test() {
