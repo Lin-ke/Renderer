@@ -28,10 +28,11 @@ void EngineContext::init(std::bitset<8> mode) {
 		instance_->render_system_ = std::make_unique<RenderSystem>();
 		instance_->render_system_->init(instance_->window_->get_hwnd()); // todo: add headless
 	}
+	// workers
+	instance_->thread_pool_ = std::make_unique<ThreadPool>(std::thread::hardware_concurrency());
+	
 	// main thread
 	if (!mode.test(StartMode::Single_Thread_)) {
-		// workers
-		instance_->thread_pool_ = std::make_unique<ThreadPool>(std::thread::hardware_concurrency());
 		instance_->render_thread_ = std::make_unique<std::jthread>([](std::stop_token stoken) {
 			instance_->set_thread_role(ThreadRole::Render);
 			INFO("Render thread started.");
@@ -51,7 +52,6 @@ void EngineContext::init(std::bitset<8> mode) {
 					instance_->render_queue_.pop();
 				}
 				instance_->render_cv_.notify_one();
-
 				instance_->render_system_->tick(packet);
 			}
 		});

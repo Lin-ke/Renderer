@@ -25,13 +25,9 @@ TEST_CASE("Thread Pool Integration Test", "[thread_pool]") {
         std::vector<std::future<void>> results;
 
         for (int i = 0; i < num_tasks; ++i) {
-            auto p = pool->enqueue([&counter]() {
+            results.emplace_back(pool->enqueue([&counter]() {
                 counter++;
-            });
-            if (!p){
-                // thread pool stop.
-            }
-            results.emplace_back(std::move(*p));
+            }));
         }
 
         for (auto& res : results) {
@@ -42,7 +38,7 @@ TEST_CASE("Thread Pool Integration Test", "[thread_pool]") {
     }
     //SECTION("Enqueue Task with Return Value")
     {
-        auto future_res = *pool->enqueue([](int a, int b) {
+        auto future_res = pool->enqueue([](int a, int b) {
             return a * b;
         }, 6, 7);
 
@@ -60,12 +56,10 @@ TEST_CASE("Thread Pool Integration Test", "[thread_pool]") {
         std::vector<std::future<void>> results;
         
         for(int i=0; i<num_tasks; ++i) {
-            auto p = pool->enqueue([&completed]() {
+            results.emplace_back(pool->enqueue([&completed]() {
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
                 completed++;
-            });
-            if (!p) {}
-            results.emplace_back(std::move(*p));
+            }));
         }
         
         for (auto& res : results) {

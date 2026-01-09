@@ -1,270 +1,515 @@
 #include "asset_manager.h"
 #include "engine/core/log/Log.h"
-#include "engine/function/asset/asset.h"
+#include "engine/core/os/thread_pool.h"
+#include "engine/function/asset/asset_manager.h"
+#include "engine/main/engine_context.h"
 
 #include <cereal/archives/binary.hpp>
 #include <cereal/archives/json.hpp>
+#include <cereal/types/vector.hpp>
+#include <cereal/types/memory.hpp>
+#include <cstddef>
 #include <filesystem>
-#include <format> // C++20
 #include <fstream>
+#include <future>
+#include <vector>
+#include <ranges>    
+#include <algorithm>  
 #include <optional>
-#include <string>
-#include <string_view>
 
 namespace fs = std::filesystem;
-enum class AssetFormat {
-	Invalid = 0,
-	Json,
-	Binary
+namespace views = std::views;
+namespace ranges = std::ranges;
+
+struct AssetUID {
+    UID uid;
+	
+    template <class Archive>
+    void serialize(Archive& ar) {
+		ar(cereal::make_nvp("uid", uid));
+	}
 };
-static AssetFormat get_format(const fs::path &path) {
-	auto ext = path.extension().string();
-	if (ext == ".asset") {
-		return AssetFormat::Json;
+
+struct AssetHeader : public AssetUID {
+	AssetDeps deps;
+	
+	template <class Archive>
+	void serialize(Archive& ar) {
+		AssetUID::serialize(ar);
+		ar(cereal::make_nvp("deps", deps));
 	}
-	if (ext == ".binasset") {
-		return AssetFormat::Binary;
-	}
-	return AssetFormat::Invalid;
+};
+
+// 完整的资产文件结构
+struct AssetFile : public AssetHeader {
+    AssetRef asset;
+
+    template <class Archive>
+    void serialize(Archive& ar) {
+        AssetHeader::serialize(ar);
+        ar(cereal::make_nvp("asset", asset));
+    }
+};
+
+template <typename T, typename Func>
+static auto with_asset_read(const fs::path &path, Func &&func) 
+        -> std::invoke_result_t<Func, T&&> {
+    using ResultT = std::invoke_result_t<Func, T&&>;
+
+    if (std::ifstream ifs(path, std::ios::binary); !ifs.is_open()) {
+        ERR("Failed to open file: {}", path.string());
+        return ResultT{};
+    } else {
+        try {
+            T data_container;
+            auto ext = path.extension();
+            if (ext == ".binasset") {
+                cereal::BinaryInputArchive ar(ifs);
+                ar(data_container);
+            } else if (ext == ".asset") {
+                cereal::JSONInputArchive ar(ifs);
+                ar(data_container);
+            } else {
+                ERR("Unknown asset format: {}", path.string());
+                return ResultT{};
+            }
+            return func(std::move(data_container));
+        } catch (const std::exception &e) {
+            ERR("Asset read error {}: {}", path.string(), e.what());
+        }
+    }
+    return ResultT{};
 }
+
+// 写入口，总是写入完整文件
+template <typename Func>
+static void with_asset_write(const fs::path &path, Func &&func) {
+    if (path.has_parent_path()) {
+        std::error_code ec;
+        fs::create_directories(path.parent_path(), ec);
+    }
+
+    if (std::ofstream ofs(path, std::ios::binary); !ofs.is_open()) {
+        ERR("Failed to open file for writing: {}", path.string());
+        return;
+    } else {
+        AssetFile file_data;
+        func(file_data); // 填充数据
+
+        try {
+            auto ext = path.extension();
+            if (ext == ".binasset") {
+                cereal::BinaryOutputArchive ar(ofs);
+                ar(cereal::make_nvp("file", file_data));
+            } else if (ext == ".asset") {
+                cereal::JSONOutputArchive ar(ofs);
+                ar(cereal::make_nvp("file", file_data));
+            } else {
+                ERR("Unsupported save format: {}", path.string());
+            }
+        } catch (const std::exception &e) {
+            ERR("Asset write error {}: {}", path.string(), e.what());
+        }
+    }
+}
+
+template <typename T>
+static std::shared_future<T> make_ready_future(const T &value) {
+    std::promise<T> promise;
+    promise.set_value(value);
+    return promise.get_future().share();
+}
+
+// --- 2. AssetManager Core ---
+
+AssetManager::~AssetManager() = default;
 
 void AssetManager::init(const fs::path &game_path) {
-	std::filesystem::path engine_base_path_ = fs::absolute(ENGINE_PATH);
-	engine_path_ = engine_base_path_ / "assets";
+    engine_path_ = fs::absolute(ENGINE_PATH) / "assets";
+    game_path_ = game_path.empty() ? engine_path_ : fs::absolute(game_path) / "assets";
 
-	if (game_path.empty()) {
-		game_path_ = engine_path_;
-	} else {
-		game_path_ = fs::absolute(game_path) / "assets";
-	}
-	// INFO("AM at: epath, {}, gpath, {}", engine_path_.string(), game_path_.string());
-	for (auto &asset_path : { engine_path_, game_path_ }) {
-		if (fs::exists(asset_path)) {
-			scan_directory(asset_path);
-		} else {
-			fs::create_directories(asset_path);
-			INFO("Created asset directory at {}", asset_path.string());
-		}
-	}
+    for (const auto &p : { engine_path_, game_path_ }) {
+        if (fs::exists(p)) {
+            scan_directory(p);
+        } else {
+            fs::create_directories(p);
+            INFO("Created asset directory: {}", p.string());
+        }
+    }
+    /// DEBUG
+    // for (auto&[uid, path_str] : uid_to_path_) {
+    //     INFO("Registered Asset UID: {} -> {}", uid.to_string(), path_str);
+    // }
 }
 
-void AssetManager::scan_directory(const fs::path &dir_path) {
-	for (const auto &entry : fs::recursive_directory_iterator(dir_path)) {
-		if (!entry.is_regular_file() || get_format(entry.path()) == AssetFormat::Invalid) {
-			continue;
-		}
-		UID uid = peek_uid_from_file(entry.path());
-		if (!uid.is_empty()) {
-			register_path(uid, entry.path().generic_string());
-		}
-	}
+void AssetManager::tick() {}
+
+// --- Load / Save Implementation ---
+
+AssetDeps AssetManager::peek_asset_deps(const fs::path &path) {
+    return with_asset_read<AssetHeader>(path, [](AssetHeader &&header) {
+        return header.deps;
+    });
 }
 
 UID AssetManager::peek_uid_from_file(const fs::path &path) {
-	std::ifstream ifs(path, std::ios::binary);
-	if (!ifs.is_open()) {
-		return UID::empty(); // Return empty UID
-	}
-	UID uid;
-	switch (get_format(path)) {
-		case AssetFormat::Binary: {
-			uid.read<true>(ifs);
-			break;
-		}
-		case AssetFormat::Json: {
-			uid.read<false>(ifs);
-			break;
-		}
-		default:
-			uid = UID::empty();
-			break;
-	}
-	return uid;
+    return with_asset_read<AssetUID>(path, [](AssetUID &&uid) {
+        return uid.uid;
+    });
 }
 
-void AssetManager::tick() {
+AssetRef AssetManager::perform_load_from_disk(UID uid, const fs::path &path) {
+    return with_asset_read<AssetFile>(path, [&](AssetFile &&file) -> AssetRef {
+        return file.asset;
+    });
 }
 
-bool AssetManager::is_virtual_path(std::string_view path) const {
-	if (path.starts_with(engine_path_.string())) {
-		return true;
-	}
-	if (!game_path_.empty() && path.starts_with(game_path_.string())) {
-		return true;
-	}
-	return false;
+void AssetManager::perform_save_to_disk(AssetRef asset, const fs::path &phys_path) {
+    if (!asset) {
+        return;
+    }
+
+    with_asset_write(phys_path, [&](AssetFile &file_data) {
+        file_data.uid = asset->get_uid();
+		file_data.deps.deps_uid = asset->get_deps() 
+            | views::transform([](const auto& dep) { return dep->get_uid(); })
+            | ranges::to<std::vector>();
+        file_data.asset = asset;
+
+        INFO("Saved asset {} to {}", file_data.uid.to_string(), phys_path.string());
+    });
+
+    register_asset(asset, phys_path.generic_string());
 }
 
-AssetRef AssetManager::get_or_load_asset_internal(const UID &uid) {
-	if (uid.is_empty()) {
-		return nullptr;
-	}
-	if (auto it = assets_.find(uid); it != assets_.end()) {
-		return it->second;
-	}
-	if (auto it = uninitialized_assets_.find(uid); it != uninitialized_assets_.end()) {
-		AssetRef asset = std::move(it->second); // 移动语义
-		uninitialized_assets_.erase(it);
+// --- Task & Queue Logic ---
 
-		asset->on_load_asset();
-		assets_.emplace(uid, asset); // emplace 稍微高效一点
-		return asset;
-	}
-	if (auto it = uid_to_path_.find(uid); it != uid_to_path_.end()) {
-		const auto &path = it->second;
-		if (fs::exists(path)) {
-			return load_asset_from_disk(path, true);
-		}
-	}
+void AssetManager::collect_dependencies_recursive(UID uid, std::vector<UID> &sorted_uids, std::unordered_set<UID> &visited) {
+    if (uid.is_empty() || visited.contains(uid)) {
+        return;
+    }
 
-	return nullptr;
+    auto it = uid_to_path_.find(uid);
+    if (it == uid_to_path_.end()) {
+        visited.insert(uid);
+        return;
+    }
+
+    visited.insert(uid);
+    for (const auto &dep_uid : peek_asset_deps(it->second).deps_uid) {
+        collect_dependencies_recursive(dep_uid, sorted_uids, visited);
+    }
+    sorted_uids.push_back(uid);
 }
 
-AssetRef AssetManager::get_or_load_asset_internal(const std::string &path_str) {
-	fs::path path(path_str);
-	auto physical_path = get_physical_path(path);
-
-	if (!physical_path.has_value() || !fs::exists(physical_path.value())) {
-		return nullptr;
-	}
-
-	// 规范化路径字符串用于查找 (generic_string 处理 / 和 \ 的统一)
-	std::string lookup_path = physical_path->generic_string();
-
-	if (auto it = path_to_uid_.find(lookup_path); it != path_to_uid_.end()) {
-		return get_or_load_asset_internal(it->second);
-	}
-
-	// unknown asset
-	return nullptr;
+std::optional<std::shared_future<AssetRef>> AssetManager::check_pending_cache(UID uid) {
+    std::scoped_lock lock(asset_mutex_);
+    if (assets_.contains(uid)) {
+        return make_ready_future(assets_[uid]);
+    }
+    if (pending_assets_.contains(uid)) {
+        return pending_assets_[uid];
+    }
+    return std::nullopt;
 }
 
-AssetRef AssetManager::load_asset_from_disk(const fs::path &physical_path, bool init_now) {
-	AssetRef asset = nullptr;
-	auto format = get_format(physical_path);
+std::vector<std::shared_future<AssetRef>> AssetManager::enqueue_load_task(UID uid) {
+    // Resolve Dependencies
+    std::vector<UID> load_order;
+    std::unordered_set<UID> visited;
+    collect_dependencies_recursive(uid, load_order, visited); // include self
+    
+    auto *pool = EngineContext::thread_pool();
+    std::vector<std::shared_future<AssetRef>> futures;
+    futures.reserve(load_order.size()); // 预分配内存
+    std::unique_lock<std::mutex> lock(asset_mutex_);
+    
+    for (const auto &dep_uid : load_order) {
+        // Skip if already ready or processing
+        if (assets_.count(dep_uid)) {
+            futures.push_back(make_ready_future(assets_[dep_uid]));
+            continue;
+        }
+        if (pending_assets_.count(dep_uid)) {
+            futures.push_back(pending_assets_[dep_uid]);
+            continue;
+        }
+        if (!uid_to_path_.contains(dep_uid)) {
+            ERR("Asset UID {} has no registered path.", dep_uid.to_string());
+            futures.push_back(make_ready_future<AssetRef>(nullptr));
+            continue;
+        }
+        
+        auto promise = std::make_shared<std::promise<AssetRef>>();
+        std::shared_future<AssetRef> future = promise->get_future().share();
+        pending_assets_[dep_uid] = future;
+        futures.push_back(future);
 
-	std::ifstream ifs(physical_path, std::ios::binary);
-	if (!ifs.is_open()) {
-		return nullptr;
-	}
+        fs::path disk_path = uid_to_path_[dep_uid];
+        
+        // Copy capture necessary data
+        auto task_lambda = [this, dep_uid, disk_path, promise]() {
+            AssetRef loaded = this->perform_load_from_disk(dep_uid, disk_path);
+            {
+                std::scoped_lock inner_lock(this->asset_mutex_);
+                if (loaded) {
+                    this->assets_[dep_uid] = loaded;
+                }
+                this->pending_assets_.erase(dep_uid);
+            }
+            promise->set_value(loaded);
+            return loaded;
+        };
+        
+        lock.unlock();
+        if (pool) {
+            pool->enqueue(std::move(task_lambda));
+        } else {
+            // Sync fallback: unlock for IO, then relock
+            task_lambda();
+        }
+        lock.lock();
+    }
 
-	try {
-		UID uid;
-		if (format == AssetFormat::Binary) {
-			uid.read<true>(ifs);
-			cereal::BinaryInputArchive archive(ifs);
-			archive(asset);
-		} else if (format == AssetFormat::Json) {
-			uid.read<false>(ifs);
-			cereal::JSONInputArchive archive(ifs);
-			archive(asset);
-		}
-	} catch (const std::exception &e) {
-		ERR("Deserialization error for {}: {}", physical_path.string(), e.what());
-		return nullptr;
-	}
+    return futures;
+}
 
-	if (!asset) {
-		ERR("Failed to load asset from path {}", physical_path.string());
-		return nullptr;
-	}
+AssetRef AssetManager::load_asset_blocking(UID uid) {
+    if (uid.is_empty()) {
+        return nullptr;
+    }
+    if (auto cached = check_pending_cache(uid); cached.has_value()) {
+        return cached->get();
+    }
 
-	if (asset->get_uid().is_empty()) {
-		// 警告：这里通常不应该随意生成 UID，除非是新资源导入流程
-		// 如果是读取现有资源但 UID 为空，通常意味着数据损坏
-		asset->set_uid(UID());
-		return nullptr;
-	}
+    auto futures = enqueue_load_task(uid);
+    for (auto &fut : futures) fut.wait();
+    AssetRef result = nullptr;
+    for (auto &fut : futures) {
+        if (auto asset = fut.get(); asset && !asset->is_initialized()) {
+            if (asset->get_uid() == uid) {
+                result = asset;
+            }
+            std::unique_lock<std::mutex> init_lock(asset->init_mutex_);
+            asset->on_load_asset();
+            asset->mark_initialized();
+        }
+    }
+    if (result == nullptr){
+        ERR("Failed to load asset UID: {}, See logs above.", uid.to_string());
+    }
+    return result;
+}
 
-	// 更新索引
-	register_asset(asset, physical_path.generic_string());
+AssetRef AssetManager::get_asset_immediate(UID uid) {
+    std::scoped_lock lock(asset_mutex_);
+    if (auto it = assets_.find(uid); it != assets_.end()) {
+        return it->second;
+    }
+    return nullptr;
+}
 
-	if (init_now) {
-		asset->on_load_asset();
-		assets_[asset->get_uid()] = asset;
-	} else {
-		uninitialized_assets_[asset->get_uid()] = asset;
-	}
+// --- Scanning ---
 
-	return asset;
+void AssetManager::scan_directory(const fs::path &dir_path) {
+    std::vector<fs::path> paths;
+    for (auto &entry : fs::recursive_directory_iterator(dir_path)) {
+        if (entry.is_regular_file()) {
+            auto ext = entry.path().extension();
+            if (ext == ".asset" || ext == ".binasset") {
+                paths.push_back(entry.path());
+            }
+        }
+    }
+
+    auto *pool = EngineContext::thread_pool();
+    std::vector<std::pair<UID, std::string>> results(paths.size());
+    std::vector<std::future<void>> futures;
+
+    for (size_t i = 0; i < paths.size(); ++i) {
+        auto task = [this, &results, i, p = paths[i]]() {
+            results[i] = { peek_uid_from_file(p), p.generic_string() };
+        };
+        if (pool) {
+            futures.push_back(pool->enqueue(std::move(task)));
+        } else {
+            task();
+        }
+    }
+    for (auto &f : futures) {
+        f.wait();
+    }
+
+    for (const auto &[uid, path_str] : results) {
+        if (!uid.is_empty()) {
+            register_path(uid, path_str);
+        }
+    }
 }
 
 void AssetManager::register_path(UID uid, const std::string &path) {
-	if (auto it = uid_to_path_.find(uid); it != uid_to_path_.end()) {
-		const std::string &old_path = it->second;
-		if (old_path != path) {
-			path_to_uid_.erase(old_path);
-		}
-	}
-
-	if (auto it = path_to_uid_.find(path); it != path_to_uid_.end()) {
-		UID old_uid = it->second;
-		if (old_uid != uid) {
-			uid_to_path_.erase(old_uid);
-		}
-	}
-
-	uid_to_path_[uid] = path;
-	path_to_uid_[path] = uid;
+    if (auto it = uid_to_path_.find(uid); it != uid_to_path_.end()) {
+        path_to_uid_.erase(it->second);
+    }
+    uid_to_path_[uid] = path;
+    path_to_uid_[path] = uid;
 }
 
 void AssetManager::register_asset(AssetRef asset, const std::string &path) {
-	UID uid = asset->get_uid();
-	register_path(uid, path);
+    if (!asset) {
+        return;
+    }
+    std::scoped_lock lock(asset_mutex_);
+    register_path(asset->get_uid(), path);
+    assets_[asset->get_uid()] = asset;
 }
 
+void AssetManager::collect_save_dependencies_recursive(AssetRef asset, std::vector<AssetRef> &sorted_assets, std::unordered_set<UID> &visited) {
+    if (!asset) {
+        return;
+    }
+    UID uid = asset->get_uid();
+    if (uid.is_empty() || visited.count(uid)) {
+        return;
+    }
+
+    visited.insert(uid);
+    std::vector<AssetRef> deps = asset->get_deps();
+
+    for (const auto &dep_asset : deps) {
+		if (dep_asset)
+			collect_save_dependencies_recursive(dep_asset, sorted_assets, visited);
+    }
+    sorted_assets.push_back(asset);
+}
+
+void AssetManager::save_asset(AssetRef asset, const std::string &virtual_path) {
+    if (!asset) {
+        return;
+    }
+
+    // 1. Resolve Target Path
+    fs::path v_path(virtual_path);
+    auto physical_path_opt = get_physical_path(v_path);
+    if (!physical_path_opt) {
+        ERR("Invalid virtual path for saving: {}", virtual_path);
+        return;
+    }
+    fs::path root_phys_path = *physical_path_opt;
+    
+    // Register root asset immediately to ensure dependencies can resolve it if needed
+    register_asset(asset, root_phys_path.generic_string());
+
+    // 2. Collect Dependencies (Snapshot)
+    std::vector<AssetRef> sorted_assets;
+    std::unordered_set<UID> visited_uids;
+    collect_save_dependencies_recursive(asset, sorted_assets, visited_uids);
+    for (auto &asset : sorted_assets) {
+        asset->on_save_asset();
+    }
+
+    INFO("Saving asset {} and {} dependencies.", asset->get_uid().to_string(), sorted_assets.size() - 1);
+
+    // 3. Parallel Save
+    auto *pool = EngineContext::thread_pool();
+    std::vector<std::future<void>> futures;
+
+    for (auto &asset_to_save : sorted_assets) {
+        fs::path save_path;
+        bool is_new = false;
+
+        if (asset_to_save == asset) {
+            save_path = root_phys_path;
+        } else {
+            // Look up existing path for dependencies
+            std::scoped_lock lock(asset_mutex_);
+            auto it = uid_to_path_.find(asset_to_save->get_uid());
+            if (it != uid_to_path_.end()) {
+                save_path = it->second;
+            } else {
+                // New asset dependency
+                is_new = true;
+                // Generate path relative to root asset's directory
+                fs::path parent_dir = root_phys_path.parent_path();
+                std::string ext = (asset_to_save->get_asset_type() == AssetType::Texture || 
+                                   asset_to_save->get_asset_type() == AssetType::Model) ? ".binasset" : ".asset";
+                save_path = parent_dir / (asset_to_save->get_uid().to_string() + ext);
+                INFO("Auto-generating path for new dependency {}: {}", asset_to_save->get_uid().to_string(), save_path.string());
+            }
+        }
+
+        // Check if save is needed
+        if (!is_new && !asset_to_save->is_dirty()) {
+            continue;
+        }
+
+        auto task = [this, asset_to_save, save_path]() {
+            this->perform_save_to_disk(asset_to_save, save_path);
+            asset_to_save->clear_dirty();
+        };
+
+        if (pool) {
+            futures.emplace_back(pool->enqueue(std::move(task)));
+        } else {
+            task();
+        }
+    }
+
+    for (auto &f : futures) {
+        f.wait();
+    }
+}
+
+// --- Path Utilities ---
+
 std::optional<fs::path> AssetManager::get_physical_path(const fs::path &virtual_path) {
-	if (virtual_path.string().starts_with(virtual_game_path_.string())) {
-		fs::path relative_path = fs::relative(virtual_path, virtual_game_path_);
-		return game_path_ / relative_path;
-	} else if (virtual_path.string().starts_with(virtual_engine_path_.string())) {
-		fs::path relative_path = fs::relative(virtual_path, virtual_engine_path_);
-		return engine_path_ / relative_path;
-	}
-	return std::nullopt;
+    if (is_virtual_path(virtual_path.string())) {
+        if (virtual_path.string().find(virtual_game_path_.string()) == 0) {
+            return game_path_ / fs::relative(virtual_path, virtual_game_path_);
+        }
+        if (virtual_path.string().find(virtual_engine_path_.string()) == 0) {
+            return engine_path_ / fs::relative(virtual_path, virtual_engine_path_);
+        }
+    }
+    return std::nullopt;
+}
+
+UID AssetManager::get_uid_by_path(const std::string &path_str) {
+    {
+        std::scoped_lock lock(asset_mutex_);
+        if (auto it = path_to_uid_.find(path_str); it != path_to_uid_.end()) {
+            return it->second;
+        }
+    }
+    // Try resolve physical
+    if (auto phys = get_physical_path(path_str)) {
+        std::string phys_str = phys->generic_string();
+        std::scoped_lock lock(asset_mutex_);
+        if (auto it = path_to_uid_.find(phys_str); it != path_to_uid_.end()) {
+            return it->second;
+        }
+    }
+    return UID::empty();
+}
+
+bool AssetManager::is_virtual_path(std::string_view path) const {
+    return path.starts_with(virtual_engine_path_.string()) || path.starts_with(virtual_game_path_.string());
 }
 
 std::optional<fs::path> AssetManager::get_virtual_path(const fs::path &real_path) {
-	std::string real_path_str = real_path.generic_string();
-	if (real_path_str.starts_with(engine_path_.generic_string())) {
-		fs::path relative_path = fs::relative(real_path, engine_path_);
-		return virtual_engine_path_ / relative_path;
-	} else if (real_path_str.starts_with(game_path_.generic_string())) {
-		fs::path relative_path = fs::relative(real_path, game_path_);
-		return virtual_game_path_ / relative_path;
-	}
-	return std::nullopt;
-}
+    auto try_map = [&](const fs::path &base, const fs::path &v_base) -> std::optional<fs::path> {
+        auto rel = fs::relative(real_path, base);
+        if (!rel.empty() && rel.string().find("..") == std::string::npos) {
+            return v_base / rel;
+        }
+        return std::nullopt;
+    };
 
-void AssetManager::save_asset(AssetRef asset, const std::string &path) {
-	std::optional<fs::path> physical_path = get_physical_path(path);
-	if (!physical_path.has_value()) {
-		ERR("Invalid virtual path for saving asset: {}", path);
-		return;
-	}
-
-	if (physical_path->has_parent_path() && !fs::exists(physical_path->parent_path())) {
-		fs::create_directories(physical_path->parent_path());
-	}
-
-	asset->on_save_asset();
-	AssetFormat format = get_format(physical_path.value());
-	std::ofstream os(physical_path.value(), std::ios::binary);
-
-	try {
-		UID uid = asset->get_uid();
-		if (format == AssetFormat::Binary) {
-			uid.write<true>(os);
-			cereal::BinaryOutputArchive archive(os);
-			archive(asset);
-		} else {
-			uid.write<false>(os);
-			cereal::JSONOutputArchive archive(os);
-			archive(asset);
-		}
-	} catch (const std::exception &e) {
-		ERR("Serialization error: {}", e.what());
-	}
-
-	register_asset(asset, physical_path.value().generic_string());
+    if (auto p = try_map(engine_path_, virtual_engine_path_)) {
+        return p;
+    }
+    if (auto p = try_map(game_path_, virtual_game_path_)) {
+        return p;
+    }
+    return std::nullopt;
 }

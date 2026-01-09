@@ -41,17 +41,15 @@ public:
         str = value;
     }	
 
-	template <bool isbinary>
-	void write(std::ostream &os) const {
-		if constexpr (isbinary) {
+	void write(std::ostream &os, bool is_binary) const {
+		if (is_binary) {
 			os.write(reinterpret_cast<const char *>(&id), sizeof(uuids::uuid));
 		} else {
 			os.write(str.c_str(), str.size());
 		}
 	}
-	template <bool isbinary>
-	void read(std::istream &is) {
-		if (isbinary) {
+	void read(std::istream &is, bool is_binary) {
+		if (is_binary) {
 			is.read(reinterpret_cast<char *>(&id), sizeof(uuids::uuid));
 			str = uuids::to_string(id);
 		} else {

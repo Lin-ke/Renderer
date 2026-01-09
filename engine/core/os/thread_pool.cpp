@@ -1,12 +1,10 @@
 #include "thread_pool.h"
-#include "engine/core/log/Log.h"
 #include "engine/main/engine_context.h"
-
+std::atomic<int> ThreadPool::next_id{0};
 ThreadPool::ThreadPool(size_t thread_count) {
     for (size_t i = 0; i < thread_count; ++i) {
         workers.emplace_back([this]() {
             EngineContext::get().set_thread_role(EngineContext::ThreadRole::Worker);
-            INFO("Worker thread {} started.", get_thread_id());
             while (true) {
                 std::function<void()> task;
                 {

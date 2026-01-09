@@ -12,27 +12,29 @@ on_load(function (target)
         engine_path = engine_path:gsub("\\", "/")
         target:add("defines", 'ENGINE_PATH="' .. engine_path .. '"')
     end)
+
 target("engine")
     set_kind("static")
-    set_languages("c++20")
+    set_languages("c++23")
     add_includedirs(".", {public = true})
     add_files("engine/**.cpp")
     add_packages("glfw", "imgui", "stb", "assimp", "cereal", "boost", "eventpp",  "eigen", "glog", "stduuid", {public = true} )
     add_syslinks("d3d11", "dxgi", "dxguid", "D3DCompiler", "d2d1", "dwrite", "winmm", "user32", "gdi32", "ole32")
-    
+    add_cxflags("/Zc:__cplusplus") 
+
 target("game")
     set_kind("binary")
-    set_languages("c++20")
+    set_languages("c++23")
     set_rundir("$(projectdir)")
     add_files("game/**.cpp")
     add_deps("engine")
 
 target("utest")
     set_kind("binary")
-    set_languages("c++20")
+    set_languages("c++23")
     add_files("test/**.cpp")
     add_deps("engine")
     add_packages("catch2")
 
--- xmake f -c --vs=2022 --vs_toolset=14.3
+-- xmake f -c --vs=2022 --mode=debug
 -- xmake require --info gflags

@@ -20,24 +20,24 @@ TEST_CASE("Asset Manager Integration Test", "[asset]") {
 
         // Create Binary Asset (Data)
         auto bin_asset = std::make_shared<PNGAsset>();
-        bin_asset->set_uid(UID());
         bin_asset->width = 1024;
         bin_asset->height = 768;
         bin_asset->channels = 4;
         bin_asset->pixels.resize(1024 * 768 * 4, 255); // White texture
         
-        // Save Binary Asset
+        INFO("Binary Asset UID: {}", bin_asset->get_uid().to_string());
         std::string bin_path = "/Game/data.binasset";
         EngineContext::asset()->save_asset(bin_asset, bin_path);
         
         // Create JSON Asset (Meta) with dependency
         auto json_asset = std::make_shared<PNGAsset>();
-        json_asset->set_uid(UID());
         json_asset->width = 100;
         json_asset->height = 100;
         
         // Set dependency
-        json_asset->dep2 = AssetHandle<PNGAsset>(bin_asset);
+        json_asset->dep2 = bin_asset;
+        INFO("JSON Asset UID: {}", json_asset->get_uid().to_string());
+
         rec1 = bin_asset->get_uid();
         rec2 = json_asset->get_uid();
         // Save JSON Asset
@@ -51,28 +51,72 @@ TEST_CASE("Asset Manager Integration Test", "[asset]") {
     {
         INFO("--- Phase 2: Loading Assets ---");
         EngineContext::init(1 << EngineContext::StartMode::Asset_);
-        EngineContext::asset()->init(std::string(ENGINE_PATH) 
-        + "/test/test_internal");
+        EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
 
         
 
         std::string json_path = "/Game/meta.asset";
-        auto loaded_asset = EngineContext::asset()->get_or_load_asset<PNGAsset>(json_path);
+        auto loaded_asset = EngineContext::asset()->load_asset<PNGAsset>(json_path);
 
         REQUIRE(loaded_asset != nullptr);
         CHECK(loaded_asset->width == 100);
 
         // Resolve dependency
-        REQUIRE(loaded_asset->dep2.is_loaded());
+        REQUIRE(loaded_asset->dep2 != nullptr);
         
         CHECK(loaded_asset->dep2->get_uid() == rec1);
         CHECK(loaded_asset->get_uid() == rec2);
         
-        auto dep = loaded_asset->dep2.get();
+        auto dep = loaded_asset->dep2;
         REQUIRE(dep != nullptr);
         CHECK(dep->width == 1024);
 
         EngineContext::exit();
     }
+    
+    // Phase 3: Recursive Save Test
+    {
+        INFO("--- Phase 3: Recursive Save Test ---");
+        EngineContext::init(1 << EngineContext::StartMode::Asset_);
+        EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
+
+        // Create new Parent and Child
+        auto child = std::make_shared<PNGAsset>();
+        child->width = 512;
+        child->height = 512;
+        // child is dirty by default
+
+        auto parent = std::make_shared<PNGAsset>();
+        parent->width = 10;
+        parent->height = 10;
+        parent->dep2 = child; // Set dependency
+
+        std::string parent_path = "/Game/parent_recursive.asset";
+        
+        // Save parent ONLY. Child should be auto-saved.
+        EngineContext::asset()->save_asset(parent, parent_path);
+
+        EngineContext::exit();
+    }
+
+    // Phase 4: Verify Recursive Save
+    {
+        INFO("--- Phase 4: Verify Recursive Save ---");
+        EngineContext::init(1 << EngineContext::StartMode::Asset_);
+        EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
+
+        std::string parent_path = "/Game/parent_recursive.asset";
+        auto loaded_parent = EngineContext::asset()->load_asset<PNGAsset>(parent_path);
+
+        REQUIRE(loaded_parent != nullptr);
+        CHECK(loaded_parent->width == 10);
+        
+        auto loaded_child = loaded_parent->dep2;
+        REQUIRE(loaded_child != nullptr);
+        CHECK(loaded_child->width == 512);
+
+        EngineContext::exit();
+    }
+
     Log::shutdown();
 }

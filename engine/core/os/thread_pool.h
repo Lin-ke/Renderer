@@ -1,3 +1,5 @@
+#ifndef THREAD_POOL_H
+#define THREAD_POOL_H
 #include <vector>
 #include <queue>
 #include <thread>
@@ -8,14 +10,12 @@
 #include <concepts>
 #include <memory>
 #include <optional>
-#include "engine/core/log/Log.h"
 
 
-using thread_id = int;
 class ThreadPool {
     public:
-    thread_id get_thread_id() {
-        static thread_local thread_id id = next_id++;
+    static int get_thread_id() {
+        static thread_local int id = next_id++; // 注意这里懒汉式可能导致的行为（直到调用才确定id）
         return id;
     }
     // 构造函数：启动指定数量的线程
@@ -35,7 +35,7 @@ class ThreadPool {
     // 提交任务 (使用 Concept 约束)
     template<class F, class... Args>
     requires std::invocable<F, Args...>
-    [[nodiscard]] auto enqueue(F&& f, Args&&... args) -> std::optional<std::future<std::invoke_result_t<F, Args...>>> {
+    auto enqueue(F&& f, Args&&... args) -> std::future<std::invoke_result_t<F, Args...>> {
         using return_type = std::invoke_result_t<F, Args...>;
         
         // 将任务包装为 packaged_task 以获取 future
@@ -48,10 +48,11 @@ class ThreadPool {
         {
             std::unique_lock lock(queue_mutex);
             if (stop_flag) {
-                return std::nullopt;
+                lock.unlock();
+                (*task)(); 
+                return res;
             }
             
-            // 将任务封装进 lambda 以存入 void() 类型的队列中
             tasks.emplace([task]() { (*task)(); });
         }
         condition.notify_one();
@@ -64,5 +65,7 @@ class ThreadPool {
     std::mutex queue_mutex;                     // 互斥锁
     std::condition_variable condition;          // 条件变量
     bool stop_flag = false;                     // 停止标志
-    std::atomic<thread_id> next_id = 0;
+    static std::atomic<int> next_id; // 线程 ID 生成器
 };
+
+#endif // THREAD_POOL_H
