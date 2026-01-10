@@ -62,7 +62,8 @@ private:
     AssetDeps peek_asset_deps(const std::filesystem::path& path);
 
     void collect_dependencies_recursive(UID uid, std::vector<UID>& sorted_uids, std::unordered_set<UID>& visited_uids);
-    void collect_save_dependencies_recursive(AssetRef asset, std::vector<AssetRef>& sorted_assets, std::unordered_set<UID>& visited_uids);
+    void collect_save_dependencies_recursive(AssetRef asset, std::vector<AssetRef>& sorted_assets, 
+        std::unordered_set<UID>& visited_uids, std::unordered_set<UID>& visiting);
 
     // load helper
     std::optional<std::shared_future<AssetRef>> check_pending_cache(UID uid);

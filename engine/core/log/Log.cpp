@@ -6,12 +6,17 @@
 #include <string_view>
 #include <mutex>
 #include <ctime>
+#include <atomic>
+#include "engine/core/utils/file_cleaner.h"
 
-namespace fs = std::filesystem;
+// --- 全局静态变量 ---
+static std::string g_session_log_filename;        // 用于在测试时记住文件名，避免产生碎片文件
+static std::ofstream g_log_file_stream;           // 自定义文件流
+static std::mutex g_log_mutex;                    // 写锁
+static bool g_is_glog_lib_initialized = false;    // 【关键修改】控制 Glog 库的初始化状态
+static CustomLogSink g_custom_log_sink;           // 自定义 Sink
 
-static std::ofstream g_log_file_stream;
-static std::mutex g_log_mutex;
-
+// --- Sink 实现 (保持不变) ---
 void CustomLogSink::send(google::LogSeverity severity, const char* full_filename,
                          const char* base_filename, int line,
                          const struct tm* tm_time,
@@ -26,8 +31,7 @@ void CustomLogSink::send(google::LogSeverity severity, const char* full_filename
     std::tm local_tm;
     localtime_s(&local_tm, &t);
 
-    // Format: [h-m-s-ms] as requested (e.g. 19-04-05-123)
-    // Using local_tm avoids UTC issues and duplicate fractional seconds.
+    // Format: [h-m-s-ms] 
     std::string time_str = std::format("[{:02}-{:02}-{:02}-{:03}]", 
         local_tm.tm_hour, local_tm.tm_min, local_tm.tm_sec, ms.count());
 
@@ -37,7 +41,6 @@ void CustomLogSink::send(google::LogSeverity severity, const char* full_filename
         filename_view = filename_view.substr(last_slash + 1);
     }
     
-    // Reconstruct the full message with the desired format.
     std::string formatted_message = std::format("{} [{}:{}] {}",
         time_str,
         filename_view,
@@ -45,94 +48,93 @@ void CustomLogSink::send(google::LogSeverity severity, const char* full_filename
         std::string_view(message, message_len)
     );
 
-    // Output to both console and our custom file
     std::cout << formatted_message << std::endl;
     if (g_log_file_stream.is_open()) {
         g_log_file_stream << formatted_message << std::endl;
     }
 }
 
-static void clean_old_logs(const std::string& log_dir, size_t keep_count, const std::string& log_prefix = "") {
-    if (!fs::exists(log_dir)) return;
+// --- Log 类静态成员 ---
+std::atomic<bool> Log::initialized_{false};
+std::mutex Log::init_mutex_;
 
-    std::vector<fs::path> log_files;
-
-    try {
-        for (const auto& entry : fs::directory_iterator(log_dir)) {
-            if (entry.is_regular_file()) {
-                std::string filename = entry.path().filename().string();
-                
-                bool matches_prefix = log_prefix.empty() || filename.find(log_prefix) != std::string::npos;
-                // Match our new log file name as well
-                bool is_log_file = filename.find(".log") != std::string::npos || 
-                                   filename.find(".INFO") != std::string::npos ||
-                                   filename.find("INFO.") != std::string::npos; 
-
-                if (matches_prefix && is_log_file) {
-                    log_files.push_back(entry.path());
-                }
-            }
-        }
-
-        if (log_files.size() <= keep_count) return;
-
-        std::sort(log_files.begin(), log_files.end(), [](const fs::path& a, const fs::path& b) {
-            return fs::last_write_time(a) > fs::last_write_time(b);
-        });
-
-        std::cout << "[LogCleaner] Found " << log_files.size() << " logs. Cleaning up old files..." << std::endl;
-        for (size_t i = keep_count; i < log_files.size(); ++i) {
-            fs::remove(log_files[i]);
-        }
-
-    } catch (const std::exception& e) {
-        std::cerr << "[LogCleaner] Error: " << e.what() << std::endl;
-    }
-}
-
-static CustomLogSink g_custom_log_sink;
-
+// --- Log::init 实现 ---
 void Log::init() {
-    // Check and create logs directory
+    // Double-checked locking 防止重复调用 Log::init
+    if (initialized_.load()) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(init_mutex_);
+    if (initialized_.load()) { 
+        return;
+    }
+
+    // 1. 准备日志目录
     std::filesystem::path log_dir = std::filesystem::absolute(ENGINE_PATH) / ("logs");
     if (!std::filesystem::exists(log_dir)) {
         std::filesystem::create_directories(log_dir);
     }
     
-    // Clean old logs, now targeting renderer*.log
-    clean_old_logs(log_dir.generic_string(), 10, "renderer");
+    // 2. 决定文件名 & 清理旧文件
+    // 如果 g_session_log_filename 为空，说明是本次进程第一次 init
+    if (g_session_log_filename.empty()) {
+        // 仅在第一次运行时清理，避免测试过程中误删
+        utils::clean_old_files(log_dir.string(), 5); 
 
-    // Open our custom log file
-    auto now = std::chrono::system_clock::now();
-    std::time_t t = std::chrono::system_clock::to_time_t(now);
-    std::tm local_tm;
-    localtime_s(&local_tm, &t);
+        auto now = std::chrono::system_clock::now();
+        std::time_t t = std::chrono::system_clock::to_time_t(now);
+        std::tm local_tm;
+        localtime_s(&local_tm, &t);
 
-    // Ensure filename has clear date-time: renderer_YYYY-MM-DD-HH-MM-SS.log
-    std::string time_str = std::format("{:04}-{:02}-{:02}-{:02}-{:02}-{:02}", 
-        local_tm.tm_year + 1900, local_tm.tm_mon + 1, local_tm.tm_mday, 
-        local_tm.tm_hour, local_tm.tm_min, local_tm.tm_sec);
-    fs::path log_file_path = log_dir / std::format("renderer_{}.log", time_str);
-    g_log_file_stream.open(log_file_path, std::ios::app);
+        std::string time_str = std::format("{:04}-{:02}-{:02}-{:02}-{:02}-{:02}", 
+            local_tm.tm_year + 1900, local_tm.tm_mon + 1, local_tm.tm_mday, 
+            local_tm.tm_hour, local_tm.tm_min, local_tm.tm_sec);
+        
+        g_session_log_filename = (log_dir / std::format("renderer_{}.log", time_str)).string();
+    }
 
-    // Disable glog's default file and console logging mechanisms that use prefixes.
-    // We are taking over with our sink.
-    FLAGS_logtostderr = 0;
-    FLAGS_alsologtostderr = 0;
-    FLAGS_log_prefix = false; // This is critical
+    g_log_file_stream.open(g_session_log_filename, std::ios::app);
+    if (!g_is_glog_lib_initialized) {
+        FLAGS_logtostderr = 0;
+        FLAGS_alsologtostderr = 0;
+        FLAGS_log_prefix = false;
 
-    google::InitGoogleLogging("renderer");
+        // 【关键】清空默认日志路径，禁止 Glog 创建默认的 .INFO/.ERROR 文件
+        // 这解决了 "File exists" 和文件碎片问题
+        google::SetLogDestination(google::GLOG_INFO, "");
+        google::SetLogDestination(google::GLOG_WARNING, "");
+        google::SetLogDestination(google::GLOG_ERROR, "");
+        google::SetLogDestination(google::GLOG_FATAL, "");
+
+        google::InitGoogleLogging("renderer");
+        g_is_glog_lib_initialized = true;
+    }
     
-    // We don't set FLAGS_log_dir because our sink handles file logging.
-    // This prevents glog from creating its own empty INFO/WARNING/ERROR files.
-
+    // 5. 挂载自定义 Sink
     google::AddLogSink(&g_custom_log_sink);
+    
+    initialized_.store(true);
 }
 
+// --- Log::shutdown 实现 ---
 void Log::shutdown() {
+    if (!initialized_.load()) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(init_mutex_);
+    
+    // 1. 移除 Sink，停止接收新日志
     google::RemoveLogSink(&g_custom_log_sink);
+    
+    // 2. 关闭文件流
     if (g_log_file_stream.is_open()) {
         g_log_file_stream.close();
     }
-    google::ShutdownGoogleLogging();
+    
+    // 【关键】不要调用 google::ShutdownGoogleLogging()
+    // 让 Glog 库保持存活直到进程结束。
+    // 这避免了在单元测试快速重启时，Glog 内部资源释放不及时导致的问题。
+    // google::ShutdownGoogleLogging(); 
+    
+    initialized_.store(false);
 }

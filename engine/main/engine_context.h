@@ -25,7 +25,6 @@ public:
         Asset_ = 0,
         Render_ = 1,
         Window_ = 2,
-        Log_ = 3,
         Single_Thread_ = 4
     };
 

@@ -56,8 +56,10 @@ protected:
     void serialize(Archive& ar) {
         ar(cereal::make_nvp("uid", uid_));  
     }
-
+    // load_asset_deps用于在加载完成后自动通过UID加载依赖
     virtual void load_asset_deps() {}
+    
+    // save_asset_deps用于把依赖的UID保存到内部的deps_uid变量中
     virtual void save_asset_deps() {}
 
 private:
@@ -76,20 +78,6 @@ private:
 };
 
 using AssetDeps = std::vector<UID>;
-
-
-struct AssetDepsHelper {
-    template <typename T>
-    static void collect(std::vector<UID>& uids, const std::shared_ptr<T>& ptr) {
-        if (ptr) uids.push_back(ptr->get_uid());
-    }
-    template <typename T>
-    static void collect(std::vector<UID>& uids, const std::vector<std::shared_ptr<T>>& vec) {
-        for (const auto& ptr : vec) {
-            if (ptr) uids.push_back(ptr->get_uid());
-        }
-    }
-};
 using AssetRef = std::shared_ptr<Asset>;
 
 #endif

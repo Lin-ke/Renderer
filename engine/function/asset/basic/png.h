@@ -8,9 +8,6 @@
 
 class PNGAsset : public Asset {
 public:
-	ASSET_DEPS(
-			(std::vector<std::shared_ptr<Asset>>, dep1),
-			(std::shared_ptr<PNGAsset>, dep2))
 
 	int width = 0;
 	int height = 0;
@@ -28,7 +25,6 @@ public:
 	void serialize(Archive &ar) {
 		ar(cereal::base_class<Asset>(this));
 		ar(CEREAL_NVP(width), CEREAL_NVP(height), CEREAL_NVP(channels), CEREAL_NVP(pixels));
-		serialize_deps(ar);
 	}
 };
 CEREAL_REGISTER_TYPE(PNGAsset);

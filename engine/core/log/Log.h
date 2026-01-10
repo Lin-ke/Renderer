@@ -28,6 +28,9 @@ public:
 // ==========================================
 class Log {
 public:
+    static std::atomic<bool> initialized_;
+    static std::mutex init_mutex_;
+
     static void init(); // 实现请放在 .cpp
     static void shutdown();
 

@@ -9,6 +9,8 @@
 
 TODO:
 1. 取消掉现在没有用到的unintialized逻辑，改为避免加载重复，考虑循环依赖是否能解决。
-（uninitialized相当于promise）
+（uninitialized相当于promise）(DONE)
 
 2. 还需要考虑Frames In Flight的问题，应该是有个结构持有每个frame的fence 。GPU同步
+
+3. Prefab系统设计

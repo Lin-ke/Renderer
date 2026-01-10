@@ -11,9 +11,6 @@ TEST_CASE("Thread Pool Integration Test", "[thread_pool]") {
     // Initialize EngineContext in multi-threaded mode (StartMode::Single_Thread_ bit is 0)
     // We only need basic systems, maybe Log
     std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Log_);
-    
-    // EngineContext::init will create ThreadPool because Single_Thread_ is not set
     EngineContext::init(mode);
 
     auto* pool = EngineContext::thread_pool();

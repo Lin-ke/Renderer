@@ -14,12 +14,10 @@ EngineContext::EngineContext() {}
 EngineContext::~EngineContext() {}
 
 void EngineContext::init(std::bitset<8> mode) {
+	Log::init();
 	instance_.reset(new EngineContext());
 	instance_->mode_ = mode;
 	instance_->set_thread_role(ThreadRole::MainGame);
-	if (mode.test(StartMode::Log_)) {
-		Log::init();
-	}
 	if (mode.test(StartMode::Asset_)) { // Asset
 		instance_->asset_manager_ = std::make_unique<AssetManager>();
 	}
@@ -73,11 +71,9 @@ void EngineContext::exit() {
 		}
 		instance_->render_thread_.reset();
 	}
-
-	if (instance_->mode_.test(StartMode::Log_)) {
-		Log::shutdown();
-	}
+	
 	instance_.reset();
+	Log::shutdown();
 }
 
 void EngineContext::main_loop() {
