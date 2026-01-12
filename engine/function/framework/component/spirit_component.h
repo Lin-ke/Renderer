@@ -5,6 +5,7 @@
 #include "engine/function/asset/asset_macros.h"
 
 class SpiritComponent : public Component {
+    CLASS_DEF(SpiritComponent, Component)
     public:
     ASSET_DEPS(
         (std::shared_ptr<PNGAsset>, texture)

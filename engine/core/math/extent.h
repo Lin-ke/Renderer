@@ -2,8 +2,8 @@
 #include <algorithm>
 typedef struct Extent2D 
 {
-    uint32_t    width;
-    uint32_t    height;
+    uint32_t    width = 0;
+    uint32_t    height = 0;
 
 	friend bool operator==(const Extent2D& a, const Extent2D& b)
 	{
@@ -20,9 +20,9 @@ typedef struct Extent2D
 
 typedef struct Extent3D 
 {
-    uint32_t    width;
-    uint32_t    height;
-    uint32_t    depth;
+    uint32_t    width = 0;
+    uint32_t    height = 0;
+    uint32_t    depth = 0;
 
 	friend bool operator==(const Extent3D& a, const Extent3D& b)
 	{
@@ -40,8 +40,8 @@ typedef struct Extent3D
 
 typedef struct Offset2D 
 {
-    uint32_t    x;
-    uint32_t    y;
+    uint32_t    x = 0;
+    uint32_t    y = 0;
 
 	friend Offset2D operator+(const Offset2D& a, const Offset2D& b)
 	{
@@ -61,9 +61,9 @@ typedef struct Offset2D
 
 typedef struct Offset3D 
 {
-    uint32_t    x;
-    uint32_t    y;
-    uint32_t    z;
+    uint32_t    x = 0;
+    uint32_t    y = 0;
+    uint32_t    z = 0;
 
 	friend Offset3D operator+(const Offset3D& a, const Offset3D& b)
 	{

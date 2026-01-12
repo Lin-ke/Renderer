@@ -18,10 +18,13 @@ enum class AssetType : uint8_t {
     Material,
     Animation,
     Scene,
+    Prefab,
     MaxEnum
 };
 
 class AssetManager;
+
+#include <functional>
 
 // template<typename T>
 // concept AssetDerived = std::is_base_of_v<class Asset, T>;
@@ -33,7 +36,7 @@ public:
     virtual AssetType get_asset_type() const { return AssetType::Unknown; }
     virtual void on_load() {} 
     virtual void on_save() {} 
-    virtual std::vector<std::shared_ptr<Asset>> get_deps() const { return {}; }
+    virtual void traverse_deps(std::function<void(std::shared_ptr<Asset>)> callback) const {}
     
     const UID& get_uid() const { return uid_; }
     void set_uid(const UID& id) { uid_ = id; } // 允许管理器设置 UID

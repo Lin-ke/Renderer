@@ -12,6 +12,7 @@ public:
     T* add_component(Args&&... args) {
         auto component = std::make_unique<T>(std::forward<Args>(args)...);
         T* ptr = component.get();
+        ptr->set_owner(this);
         components_.push_back(std::move(component));
         return ptr;
     }
@@ -26,18 +27,17 @@ public:
         return nullptr;
     }
 
+    const std::vector<ComponentPtr>& get_components() const { return components_; }
+
     template<class Archive>
     void serialize(Archive &ar) {
         ar(cereal::make_nvp("components", components_));
     }
 
-    std::vector<std::shared_ptr<Asset>> get_deps() const {
-        std::vector<std::shared_ptr<Asset>> deps;
+    void traverse_deps(std::function<void(std::shared_ptr<Asset>)> callback) const {
         for (const auto& comp : components_) {
-            auto comp_deps = comp->get_deps();
-            deps.insert(deps.end(), comp_deps.begin(), comp_deps.end());
+            comp->traverse_deps(callback);
         }
-        return deps;
     }
 
     void load_asset_deps() {

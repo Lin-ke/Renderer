@@ -1,3 +1,6 @@
+#ifndef FILE_CLEANER_H
+#define FILE_CLEANER_H
+
 #include <filesystem>
 #include <vector>
 #include <algorithm>
@@ -56,3 +59,5 @@ static void clean_old_files(const std::filesystem::path& directory_path, size_t 
 }
 
 }
+
+#endif

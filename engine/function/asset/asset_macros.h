@@ -61,6 +61,19 @@ struct AssetLogic {
     static void collect(std::vector<std::shared_ptr<Asset>>& out, const std::shared_ptr<T>& ptr) {
         if (ptr) out.push_back(ptr);
     }
+
+    // --- Visit (Callback) ---
+    template <typename T>
+    static void visit(std::function<void(std::shared_ptr<Asset>)>& callback, const std::vector<std::shared_ptr<T>>& ptrs) {
+        for (const auto& p : ptrs) {
+            if (p) callback(p);
+        }
+    }
+
+    template <typename T>
+    static void visit(std::function<void(std::shared_ptr<Asset>)>& callback, const std::shared_ptr<T>& ptr) {
+        if (ptr) callback(ptr);
+    }
 };
 
 // ==========================================
@@ -80,9 +93,9 @@ struct AssetLogic {
 // 4. Serialize
 #define SERIALIZE_ENTRY(Type, Name) \
     ar(cereal::make_nvp(#Name, Name##_uid)); 
-// 5. Easy Get Deps
-#define COLLECT_ENTRY(Type, Name) \
-    AssetLogic::collect(__deps, Name);
+// 5. Visit Deps
+#define VISIT_ENTRY(Type, Name) \
+    AssetLogic::visit(callback, Name);
 
 // --- FOR_EACH 基础设施 (保持不变) ---
 #define EXPAND(x) x
@@ -115,8 +128,6 @@ struct AssetLogic {
         FOR_EACH(SERIALIZE_ENTRY, __VA_ARGS__) \
     } \
     \
-    std::vector<std::shared_ptr<Asset>> get_deps() const override { \
-        std::vector<std::shared_ptr<Asset>> __deps; \
-        FOR_EACH(COLLECT_ENTRY, __VA_ARGS__) \
-        return __deps; \
+    void traverse_deps(std::function<void(std::shared_ptr<Asset>)> callback) const override { \
+        FOR_EACH(VISIT_ENTRY, __VA_ARGS__) \
     }

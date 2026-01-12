@@ -4,14 +4,18 @@
 #include "engine/core/math/transform.h"
 #include "engine/core/reflect/serialize.h"
 #include "engine/core/reflect/math_reflect.h"
+#include "engine/core/reflect/class_db.h"
+
 class TransformComponent : public Component {
+    CLASS_DEF(TransformComponent, Component)
 public:
+    virtual ~TransformComponent(); // Defined in .cpp to force linkage
+
     Transform transform;
 
-    friend class cereal::access;
-    template<class Archive>
-    void serialize(Archive &ar) {
-        ar(cereal::make_nvp("transform", transform));
+    static void register_class(){
+        Registry::add<TransformComponent>("TransformComponent")
+            .member("transform", &TransformComponent::transform);
     }
 };
 

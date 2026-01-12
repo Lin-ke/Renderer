@@ -174,9 +174,16 @@ void AssetManager::perform_save_to_disk(AssetRef asset, const fs::path &phys_pat
 	with_asset_write(phys_path, [&](AssetFile &file_data) {
 		file_data.uid = asset->get_uid();
 		// better syntax in cpp23.
-		for (const auto &dep : asset->get_deps()) {
-			file_data.deps.push_back(dep->get_uid());
-		}
+        std::unordered_set<UID> dep_uids;
+		asset->traverse_deps([&](AssetRef dep) {
+			if (dep) {
+                UID uid = dep->get_uid();
+                if (!dep_uids.contains(uid)) {
+                    dep_uids.insert(uid);
+                    file_data.deps.push_back(uid);
+                }
+            }
+		});
 		file_data.asset = asset;
 
 		INFO(LogAsset, "Saved asset {} to {}", file_data.uid.to_string(), phys_path.string());
@@ -384,17 +391,25 @@ void AssetManager::collect_save_dependencies_recursive(AssetRef asset, std::vect
         return; 
     }
 
-	visiting.insert(uid);
-	std::vector<AssetRef> deps = asset->get_deps();
-
-	for (const auto &dep_asset : deps) {
-		if (dep_asset) {
+    visiting.insert(uid);
+	
+	asset->traverse_deps([&](AssetRef dep_asset) {
 			collect_save_dependencies_recursive(dep_asset, sorted_assets, visited, visiting);
-		}
-	}
+	});
+
     visiting.erase(uid);
     visited.insert(uid);
 	sorted_assets.push_back(asset);
+}
+
+static std::string type_to_ext(AssetType type) {
+    switch (type) {
+        case AssetType::Texture:
+        case AssetType::Model:
+            return ".binasset";
+        default:
+            return ".asset";
+    }
 }
 
 void AssetManager::save_asset(AssetRef asset, const std::string &virtual_path) {
@@ -417,7 +432,8 @@ void AssetManager::save_asset(AssetRef asset, const std::string &virtual_path) {
 	// 2. Collect Dependencies (Snapshot)
 	std::vector<AssetRef> sorted_assets;
 	std::unordered_set<UID> visited_uids;
-	collect_save_dependencies_recursive(asset, sorted_assets, visited_uids);
+    std::unordered_set<UID> visiting_uids;
+	collect_save_dependencies_recursive(asset, sorted_assets, visited_uids, visiting_uids);
 	for (auto &asset : sorted_assets) {
 		asset->on_save_asset();
 	}
@@ -445,10 +461,7 @@ void AssetManager::save_asset(AssetRef asset, const std::string &virtual_path) {
 				is_new = true;
 				// Generate path relative to root asset's directory
 				fs::path parent_dir = root_phys_path.parent_path();
-				std::string ext = (asset_to_save->get_asset_type() == AssetType::Texture ||
-										  asset_to_save->get_asset_type() == AssetType::Model)
-						? ".binasset"
-						: ".asset";
+				std::string ext = type_to_ext(asset_to_save->get_asset_type());
 				save_path = parent_dir / (asset_to_save->get_uid().to_string() + ext);
 				INFO(LogAsset, "Auto-generating path for new dependency {}: {}", asset_to_save->get_uid().to_string(), save_path.string());
 			}
