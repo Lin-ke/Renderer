@@ -36,47 +36,36 @@ namespace cereal {
     // Extent (2D/3D) - 紧凑化为 "width height [depth]"
     // =============================================================
     template <class Archive>
-    void save(Archive& ar, const Extent2D& e) {
+    std::string save_minimal(const Archive&, const Extent2D& e) {
         std::stringstream ss;
         ss << e.width << " " << e.height;
-        ar(cereal::make_nvp("v", ss.str())); // Key "v" 只是占位，实际JSON中通常显示为值
+        return ss.str();
     }
     template <class Archive>
-    void load(Archive& ar, Extent2D& e) {
-        std::string s;
-        ar(cereal::make_nvp("v", s));
+    void load_minimal(const Archive&, Extent2D& e, const std::string& s) {
         std::stringstream ss(s);
         ss >> e.width >> e.height;
     }
 
     template <class Archive>
-    void save(Archive& ar, const Extent3D& e) {
+    std::string save_minimal(const Archive&, const Extent3D& e) {
         std::stringstream ss;
         ss << e.width << " " << e.height << " " << e.depth;
-        ar(cereal::make_nvp("v", ss.str()));
+        return ss.str();
     }
     template <class Archive>
-    void load(Archive& ar, Extent3D& e) {
-        std::string s;
-        ar(cereal::make_nvp("v", s));
+    void load_minimal(const Archive&, Extent3D& e, const std::string& s) {
         std::stringstream ss(s);
         ss >> e.width >> e.height >> e.depth;
     }
 
-    // =============================================================
-    // Vectors & Quaternion - 紧凑化为 "x y z w" 字符串
-    // =============================================================
-    
-    // 宏定义减少重复代码
     #define IMPLEMENT_COMPACT_SERIALIZE(TYPE, COMPONENT_COUNT) \
     template <class Archive> \
-    void save(Archive &ar, const TYPE &v) { \
-        ar(cereal::make_nvp("v", Utils::to_compact_string(v, COMPONENT_COUNT))); \
+    std::string save_minimal(const Archive&, const TYPE& v) { \
+        return Utils::to_compact_string(v, COMPONENT_COUNT); \
     } \
     template <class Archive> \
-    void load(Archive &ar, TYPE &v) { \
-        std::string s; \
-        ar(cereal::make_nvp("v", s)); \
+    void load_minimal(const Archive&, TYPE& v, const std::string& s) { \
         Utils::from_compact_string(s, v, COMPONENT_COUNT); \
     }
 
@@ -94,16 +83,14 @@ namespace cereal {
 
     // Quaternion 包含 x,y,z,w (Eigen内部存储顺序可能不同，这里统一用 x y z w 接口)
     template <class Archive>
-    void save(Archive& ar, const Quaternion& q) {
+    std::string save_minimal(const Archive&, const Quaternion& q) {
         std::stringstream ss;
         ss << std::fixed << std::setprecision(6);
         ss << q.x() << " " << q.y() << " " << q.z() << " " << q.w();
-        ar(cereal::make_nvp("v", ss.str()));
+        return ss.str();
     }
     template <class Archive>
-    void load(Archive& ar, Quaternion& q) {
-        std::string s;
-        ar(cereal::make_nvp("v", s));
+    void load_minimal(const Archive&, Quaternion& q, const std::string& s) {
         std::stringstream ss(s);
         float x, y, z, w;
         ss >> x >> y >> z >> w;
