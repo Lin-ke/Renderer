@@ -2,6 +2,7 @@
 #include "engine/function/framework/component.h"
 #include "engine/function/framework/prefab.h"
 #include "engine/function/asset/asset_macros.h"
+#include "engine/core/reflect/class_db.h"
 
 class PrefabComponent : public Component {
     CLASS_DEF(PrefabComponent, Component)
@@ -36,6 +37,12 @@ public:
 
     void apply_modifications(class Entity* root_entity);
     void generate_modifications();
+
+    static void register_class() {
+        Registry::add<PrefabComponent>("PrefabComponent")
+            .member("modifications", &PrefabComponent::modifications)
+            .member("prefab", &PrefabComponent::prefab);
+    }
 };
 
 CEREAL_REGISTER_TYPE(PrefabComponent);

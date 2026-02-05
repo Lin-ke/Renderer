@@ -10,13 +10,27 @@ ClassDB& ClassDB::get() {
 }
 
 // 实现类注册
-void ClassDB::register_class(std::string_view class_name, std::string_view parent_class_name) {
+void ClassDB::register_class(std::string_view class_name, std::string_view parent_class_name, std::function<std::unique_ptr<Component>()> creator) {
     std::string cn(class_name);
     auto& info = classes_[cn];
     info.class_name = cn;
     if (!parent_class_name.empty()) {
         info.parent_class_name = std::string(parent_class_name);
-    } 
+    }
+    if (creator) {
+        info.creator = creator;
+    }
+}
+
+// 实现组件创建
+std::unique_ptr<Component> ClassDB::create_component(std::string_view class_name) const {
+    std::string cn(class_name);
+    auto it = classes_.find(cn);
+    if (it != classes_.end() && it->second.creator) {
+        return it->second.creator();
+    }
+    LOG(ERROR) << "Failed to create component: " << class_name << " (Not registered or no creator)";
+    return nullptr;
 }
 
 // 实现获取类信息

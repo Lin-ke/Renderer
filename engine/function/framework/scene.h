@@ -25,36 +25,8 @@ public:
     Entity* instantiate(std::shared_ptr<Prefab> prefab) {
         if (!prefab || !prefab->get_root_entity()) return nullptr;
 
-        // 1. Serialize Prefab Entity to memory
-        std::stringstream ss;
-        {
-            cereal::BinaryOutputArchive oarchive(ss);
-            // We need to access the unique_ptr strictly for serialization if we want to serialize the pointer wrapper?
-            // Wait, the previous code serialized the unique_ptr itself: oarchive(prefab->root_entity_);
-            // The getter returns raw pointer. Cereal needs the unique_ptr to serialize it properly?
-            // Actually, we are deserializing into a new unique_ptr.
-            // If we serialize the raw pointer `*entity`, we need to deserialize into `*new_entity`.
-            // Let's check how Cereal handles unique_ptr.
-            // It serializes the pointee.
-            // So if we serialize *prefab->get_root_entity(), we can deserialize into *new_entity (the object itself).
-            
-            // However, the previous code was `oarchive(prefab->root_entity_);`
-            // This serializes the smart pointer wrapper (handles null state etc).
-            // If I change to `oarchive(*prefab->get_root_entity())`, I skip the smart pointer wrapper.
-            // But `instantiate` checks for null.
-            
-            // To maintain exact behavior, I might need friend access or a helper in Prefab.
-            // Or just serialize the object content.
-            
-            oarchive(*prefab->get_root_entity());
-        }
-
-        // 2. Deserialize to new Entity
-        auto new_entity = std::make_unique<Entity>();
-        {
-            cereal::BinaryInputArchive iarchive(ss);
-            iarchive(*new_entity); // Deserialize into the object
-        }
+        // Use efficient clone via reflection
+        auto new_entity = prefab->get_root_entity()->clone();
 
         // 3. Attach PrefabComponent
         auto* prefab_comp = new_entity->get_component<PrefabComponent>();

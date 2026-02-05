@@ -124,6 +124,7 @@ struct ClassInfo {
     std::string parent_class_name;
     std::vector<PropertyInfo> properties;
     std::unordered_map<std::string, size_t> property_map; 
+    std::function<std::unique_ptr<Component>()> creator;
 };
 
 // --- ClassDB 声明 ---
@@ -133,7 +134,10 @@ public:
     static ClassDB& get();
 
     // 注册类 
-    void register_class(std::string_view class_name, std::string_view parent_class_name);
+    void register_class(std::string_view class_name, std::string_view parent_class_name, std::function<std::unique_ptr<Component>()> creator = nullptr);
+
+    // 创建组件实例
+    std::unique_ptr<Component> create_component(std::string_view class_name) const;
 
     // 获取类信息 
     const ClassInfo* get_class_info(std::string_view class_name) const;
@@ -252,12 +256,17 @@ template <typename T>
 class ClassDefinitionHelper {
 public:
     ClassDefinitionHelper(const std::string& name) : class_name_(name) {
-        ClassDB::get().register_class(class_name_, "Component");
+        ClassDB::get().register_class(class_name_, "Component", []() -> std::unique_ptr<Component> {
+            return std::make_unique<T>();
+        });
     }
 
     template <typename Base>
     ClassDefinitionHelper& base(const std::string& parent_name) {
-        ClassDB::get().register_class(class_name_, parent_name);
+        // Re-register with parent name, keeping the creator
+        ClassDB::get().register_class(class_name_, parent_name, []() -> std::unique_ptr<Component> {
+            return std::make_unique<T>();
+        });
         return *this;
     }
 

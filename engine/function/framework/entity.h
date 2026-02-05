@@ -51,6 +51,9 @@ public:
             comp->save_asset_deps();
         }
     }
+
+    // Deep clone using reflection
+    std::unique_ptr<Entity> clone();
 };
 
 #endif

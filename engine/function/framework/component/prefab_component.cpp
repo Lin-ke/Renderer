@@ -3,6 +3,8 @@
 #include "engine/core/log/Log.h"
 #include "engine/core/reflect/class_db.h"
 
+REGISTER_CLASS_IMPL(PrefabComponent)
+
 void PrefabComponent::generate_modifications() {
     if (!owner_ || !prefab || !prefab->get_root_entity()) return;
 

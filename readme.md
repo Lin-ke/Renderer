@@ -13,4 +13,6 @@ TODO:
 
 2. 还需要考虑Frames In Flight的问题，应该是有个结构持有每个frame的fence 。GPU同步
 
-3. Prefab系统设计 （DONE?）
+3. Prefab系统设计 （DONE）
+
+4. Renderer 设计。
