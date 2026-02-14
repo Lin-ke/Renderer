@@ -5,6 +5,7 @@
 #include "engine/function/asset/asset_manager.h"
 #include "engine/function/input/input.h"
 #include "engine/function/render/render_system.h"
+#include "engine/function/framework/world.h"
 
 DEFINE_LOG_TAG(LogEngine, "Engine");
 
@@ -21,12 +22,17 @@ void EngineContext::init(std::bitset<8> mode) {
 	if (mode.test(StartMode::Asset_)) { // Asset
 		instance_->asset_manager_ = std::make_unique<AssetManager>();
 	}
+	// World is always created for scene management
+	instance_->world_ = std::make_unique<World>();
+	instance_->world_->init();
 	if (mode.test(StartMode::Window_)) { // Window
 		instance_->window_ = std::make_unique<Window>(800, 600, L"Renderer Window");
 	}
-	if (mode.test(StartMode::Render_) && mode.test(StartMode::Window_)) {
+	if (mode.test(StartMode::Render_)) {
 		instance_->render_system_ = std::make_unique<RenderSystem>();
-		instance_->render_system_->init(instance_->window_->get_hwnd()); // todo: add headless
+		instance_->render_system_->init(instance_->window_ ? instance_->window_->get_hwnd() : nullptr); 
+		instance_->render_resource_manager_ = std::make_unique<RenderResourceManager>();
+		instance_->render_resource_manager_->init();
 	}
 	// workers
 	instance_->thread_pool_ = std::make_unique<ThreadPool>(std::thread::hardware_concurrency());
@@ -71,8 +77,32 @@ void EngineContext::exit() {
 		}
 		instance_->render_thread_.reset();
 	}
+
+	// Important: Destroy asset_manager BEFORE render_system to ensure all assets
+	// (which may hold RHI resources) are destroyed while RHI is still valid
+	if (instance_->render_resource_manager_) {
+		instance_->render_resource_manager_->destroy();
+		instance_->render_resource_manager_.reset();
+	}
+
+	if (instance_->world_) {
+		instance_->world_->destroy();
+		instance_->world_.reset();
+	}
+
+	if (instance_->asset_manager_) {
+		instance_->asset_manager_.reset();
+	}
+
+	// Cleanup render system (includes RHI resources and GLFW)
+	if (instance_->render_system_) {
+		instance_->render_system_->destroy();
+		instance_->render_system_->destroy_glfw();
+		instance_->render_system_.reset();
+	}
 	
 	instance_.reset();
+	thread_role_ = ThreadRole::Unknown;
 	Log::shutdown();
 }
 
@@ -84,7 +114,7 @@ void EngineContext::main_loop() {
 
 void EngineContext::main_loop_internal() {
 	while (true) {
-		if (window_ && !window_->process_messages()) {
+		if (instance_->window_ && !instance_->window_->process_messages()) {
 			break;
 		}
 
@@ -94,32 +124,52 @@ void EngineContext::main_loop_internal() {
 		RenderPacket packet;
 		// Fill packet with data here...
 
-		if (mode_.test(StartMode::Single_Thread_) && render_system_) {
-			render_system_->tick(packet);
-		} else if (render_system_) {
+		if (instance_->mode_.test(StartMode::Single_Thread_) && instance_->render_system_) {
+			instance_->render_system_->tick(packet);
+            instance_->current_frame_index_ = (instance_->current_frame_index_ + 1) % instance_->MAX_FRAMES_IN_FLIGHT;
+		} else if (instance_->render_system_) {
 			// Multi-threaded submission
-			std::unique_lock lock(render_mutex_);
-			render_cv_.wait(lock, [this]() {
-				return render_queue_.size() < MAX_FRAMES_IN_FLIGHT;
+			std::unique_lock lock(instance_->render_mutex_);
+			instance_->render_cv_.wait(lock, [this]() {
+				return instance_->render_queue_.size() < instance_->MAX_FRAMES_IN_FLIGHT;
 			});
 
-			render_queue_.push(packet);
+			instance_->render_queue_.push(packet);
+            instance_->current_frame_index_ = (instance_->current_frame_index_ + 1) % instance_->MAX_FRAMES_IN_FLIGHT;
 			lock.unlock();
-			render_cv_.notify_one();
+			instance_->render_cv_.notify_one();
 		}
 	}
 }
 
-RHI *EngineContext::get_rhi() {
+RHIBackendRef EngineContext::rhi() {
 	if (instance_ && instance_->render_system_) {
 		return instance_->render_system_->get_rhi();
 	}
 	return nullptr;
 }
 
+uint32_t EngineContext::current_frame_index() {
+    return instance_ ? instance_->current_frame_index_ : 0;
+}
+
 AssetManager *EngineContext::asset() {
 	if (instance_) {
 		return instance_->asset_manager_.get();
+	}
+	return nullptr;
+}
+
+World* EngineContext::world() {
+	if (instance_) {
+		return instance_->world_.get();
+	}
+	return nullptr;
+}
+
+RenderResourceManager* EngineContext::render_resource() {
+	if (instance_) {
+		return instance_->render_resource_manager_.get();
 	}
 	return nullptr;
 }

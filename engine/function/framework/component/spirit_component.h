@@ -3,6 +3,7 @@
 #include "engine/function/asset/basic/png.h"
 #include "engine/function/framework/component.h"
 #include "engine/function/asset/asset_macros.h"
+#include "engine/core/reflect/class_db.h"
 
 class SpiritComponent : public Component {
     CLASS_DEF(SpiritComponent, Component)
@@ -11,9 +12,14 @@ class SpiritComponent : public Component {
         (std::shared_ptr<PNGAsset>, texture)
     )
 
-    	template <class Archive>
-	void serialize(Archive &ar) {
+    template <class Archive>
+    void serialize(Archive &ar) {
         serialize_deps(ar);   
+    }
+
+    static void register_class() {
+        Registry::add<SpiritComponent>("SpiritComponent")
+            .member("texture", &SpiritComponent::texture_uid);
     }
 };
 CEREAL_REGISTER_TYPE(SpiritComponent);

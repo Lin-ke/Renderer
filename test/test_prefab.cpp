@@ -1,4 +1,3 @@
-#define CATCH_CONFIG_MAIN
 #include <catch2/catch_test_macros.hpp>
 #include "engine/main/engine_context.h"
 #include "engine/function/asset/asset_manager.h"

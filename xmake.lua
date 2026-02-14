@@ -24,6 +24,8 @@ target("engine")
     set_languages("c++20")
     add_includedirs(".", {public = true})
     add_files("engine/**.cpp")
+    remove_files("RD/**.cpp")
+
     add_packages("glfw", "imgui", "stb", "assimp", "cereal", "boost", "eventpp",  "eigen", "glog", "stduuid", {public = true} )
     add_syslinks("d3d11", "dxgi", "dxguid", "D3DCompiler", "d2d1", "dwrite", "winmm", "user32", "gdi32", "ole32")
 
@@ -39,7 +41,7 @@ target("utest")
     set_languages("c++20")
     add_files("test/**.cpp")
     add_deps("engine")
-    add_packages("catch2")
+    add_packages("catch2", "stb")
 
 -- xmake f -c --vs=2022 --mode=debug
 -- xmake require --info gflags

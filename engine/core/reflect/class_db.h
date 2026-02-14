@@ -14,8 +14,17 @@
 #include <cereal/archives/json.hpp>
 #include <cereal/cereal.hpp>
 
-
+/**
+ * @brief Helper struct for generic serialization using Cereal.
+ */
 struct Serializer {
+    /**
+     * @brief Serializes a value to a string using the specified OutputArchive.
+     * @tparam T The type of the value to serialize.
+     * @tparam OutputArchive The Cereal output archive type (e.g., JSONOutputArchive).
+     * @param value The value to serialize.
+     * @return The serialized string.
+     */
     template<typename T, typename OutputArchive>
     static std::string serialize(const T& value) {
         std::stringstream ss;
@@ -36,6 +45,13 @@ struct Serializer {
         return s;
     }
 
+    /**
+     * @brief Deserializes a string to a value using the specified InputArchive.
+     * @tparam T The type of the value to deserialize.
+     * @tparam InputArchive The Cereal input archive type.
+     * @param str The string to deserialize.
+     * @param value [out] The value to populate.
+     */
     template<typename T, typename InputArchive>
     static void deserialize(const std::string& str, T& value) {
         std::stringstream ss(str);
@@ -44,6 +60,10 @@ struct Serializer {
         ar(value);
     }
     
+    /**
+     * @brief Deserializes a string wrapping the value in a named NVP.
+     * Useful for legacy formats or specific Cereal archive requirements.
+     */
     template<typename T, typename InputArchive>
     static void deserialize_wrapped(const std::string& str, T& value, const char* name) {
         std::stringstream ss(str);
@@ -52,6 +72,9 @@ struct Serializer {
     }
 };
 
+/**
+ * @brief Specific serializer implementation for JSON format.
+ */
 struct JsonSerializer {
     using OutputArchive = cereal::JSONOutputArchive;
     using InputArchive = cereal::JSONInputArchive;
@@ -70,7 +93,7 @@ struct JsonSerializer {
         
         if (!looks_like_json) {
              // Case 1: Raw primitive "500"
-             // Wrap it and read as NVP "v" so Cereal has a valid root object context // 为了简化，加个"v"方便parse
+             // Wrap it and read as NVP "v" so Cereal has a valid root object context
              std::string wrapped = "{\"v\": " + str + "}";
              try {
                 Serializer::deserialize_wrapped<T, InputArchive>(wrapped, value, "v");
@@ -103,50 +126,81 @@ struct JsonSerializer {
 using ReflectScheme = JsonSerializer;
 class Component;
 
-// --- 元数据结构 ---
+/**
+ * @brief Metadata describing a property of a reflected class.
+ */
 struct PropertyInfo {
-    std::string name;
-    std::string type_name;
-    std::type_index type_index; // Identifies the C++ type
-    std::string default_value_str;
+    std::string name;               ///< Name of the property.
+    std::string type_name;          ///< Type name string (implementation defined).
+    std::type_index type_index;     ///< Unique type identifier.
+    std::string default_value_str;  ///< serialized default value.
     
+    // Serialization accessors (String-based)
     std::function<std::string(const Component*)> getter;
-    std::function<bool(Component*, std::string_view)> setter; // 在保存中使用（通过json）
+    std::function<bool(Component*, std::string_view)> setter; 
 
-    std::function<std::any(const Component*)> getter_any; // 其他情况
+    // Runtime accessors (Any-based)
+    std::function<std::any(const Component*)> getter_any; 
     std::function<void(Component*, const std::any&)> setter_any;
     
     PropertyInfo() : type_index(typeid(void)) {}
 };
 
+/**
+ * @brief Metadata describing a reflected class.
+ */
 struct ClassInfo {
     std::string class_name;
     std::string parent_class_name;
     std::vector<PropertyInfo> properties;
     std::unordered_map<std::string, size_t> property_map; 
-    std::function<std::unique_ptr<Component>()> creator;
+    std::function<std::unique_ptr<Component>()> creator; ///< Factory function to create instances.
 };
 
-// --- ClassDB 声明 ---
+/**
+ * @brief The central database for the Reflection System.
+ * 
+ * Manages class registration, property introspection, and object creation.
+ * It allows querying class metadata by name at runtime.
+ */
 class ClassDB {
 public:
-    // 单例获取 
+    /**
+     * @brief Gets the singleton instance of ClassDB.
+     */
     static ClassDB& get();
 
-    // 注册类 
+    /**
+     * @brief Registers a new class with the reflection system.
+     * @param class_name The name of the class.
+     * @param parent_class_name The name of the parent class.
+     * @param creator A factory function to create instances of this class.
+     */
     void register_class(std::string_view class_name, std::string_view parent_class_name, std::function<std::unique_ptr<Component>()> creator = nullptr);
 
-    // 创建组件实例
+    /**
+     * @brief Creates an instance of a registered component class by name.
+     * @param class_name The name of the class to instantiate.
+     * @return A unique_ptr to the new component, or nullptr if not found.
+     */
     std::unique_ptr<Component> create_component(std::string_view class_name) const;
 
-    // 获取类信息 
+    /**
+     * @brief Retrieves metadata for a specific class.
+     */
     const ClassInfo* get_class_info(std::string_view class_name) const;
 
-    // 获取所有属性 
+    /**
+     * @brief Retrieves all properties for a class, including inherited ones.
+     */
     std::vector<const PropertyInfo*> get_all_properties(std::string_view class_name) const;
 
-    // 通用继承链遍历器 (Child -> Parent)
-    // Visitor: function<bool(const ClassInfo*)> 返回 true 则停止遍历
+    /**
+     * @brief Traverses the inheritance chain from child to parent.
+     * @tparam Visitor A callable object with signature `bool(const ClassInfo*)`.
+     * @param start_class_name The class to start traversing from.
+     * @param visitor The callback to invoke for each class in the chain. Return true to stop traversal.
+     */
     template <typename Visitor>
     void visit_class_chain(std::string_view start_class_name, Visitor visitor) const {
         std::string current_name(start_class_name);
@@ -155,23 +209,32 @@ public:
             const auto* info = get_class_info(current_name);
             if (!info) break;
 
-            // 执行访问器，如果返回 true 则终止遍历
+            // Execute visitor, stop if it returns true
             if (visitor(info)) return;
 
-            // 继承链跳转逻辑
+            // Inheritance chain traversal logic
             if (info->parent_class_name.empty() || info->parent_class_name == "Component") {
-                 // 如果父类是 Component，且当前还不是 Component，则跳转到 Component
+                 // Special handling to ensure "Component" is visited last if it's the base
                  if (info->parent_class_name == "Component" && current_name != "Component") {
                      current_name = "Component";
                      continue;
                  }
-                 break; // 链条结束
+                 break; // End of chain
             }
             current_name = info->parent_class_name;
         }
     }
 
-    // 注册属性
+    /**
+     * @brief Registers a member property for a class.
+     * 
+     * @tparam ClassType The class type.
+     * @tparam PropertyType The type of the property.
+     * @param class_name The name of the class.
+     * @param property_name The name of the property.
+     * @param default_value The default value for this property.
+     * @param member_ptr Pointer to the member variable.
+     */
     template <typename ClassType, typename PropertyType>
     void register_property(std::string_view class_name, std::string_view property_name, 
                            const PropertyType& default_value, 
@@ -232,26 +295,39 @@ public:
 private:
     std::unordered_map<std::string, ClassInfo> classes_;
 
-    // 递归查找的具体实现 (移至 cpp)
+    // Recursive helper to collect properties from the hierarchy
     void collect_properties_recursive(std::string_view class_name, std::vector<const PropertyInfo*>& out) const;
 
 public:
+    /**
+     * @brief Generic property getter using std::any.
+     */
     static std::any get(Component* obj, std::string_view property_name);
 };
 
-// --- 辅助 Traits (模板，保留在头文件) ---
+// --- Helper Traits (Templates, must remain in header) ---
+
+/**
+ * @brief Trait to handle default value normalization (e.g., NaNs in vectors).
+ */
 template <typename T>
 struct DefaultValueTrait {
     static T get(const T& val) { return val; }
 };
 
-// 特化版本 (需要保留在头文件以被看见)
+// Specializations
 template <> struct DefaultValueTrait<Vec2> { static Vec2 get(const Vec2& v) { return v.allFinite() ? v : Vec2::Zero(); } };
 template <> struct DefaultValueTrait<Vec3> { static Vec3 get(const Vec3& v) { return v.allFinite() ? v : Vec3::Zero(); } };
 template <> struct DefaultValueTrait<Vec4> { static Vec4 get(const Vec4& v) { return v.allFinite() ? v : Vec4::Zero(); } };
 template <> struct DefaultValueTrait<Quaternion> { static Quaternion get(const Quaternion& q) { return std::abs(q.norm() - 1.0f) < 0.001f ? q : Quaternion::Identity(); } };
 
-// --- 注册辅助类 (模板，保留在头文件) ---
+// --- Registration Helper (Template, must remain in header) ---
+
+/**
+ * @brief Fluent helper class for registering classes and their members.
+ * 
+ * @tparam T The class type being registered.
+ */
 template <typename T>
 class ClassDefinitionHelper {
 public:
@@ -293,5 +369,9 @@ public:
     }
 };
 
+/**
+ * @brief Macro to register a class. Should be called inside the cpp file of the class.
+ * Uses a static boolean to ensure registration happens at program startup (dynamic initialization).
+ */
 #define REGISTER_CLASS_IMPL(Class) \
     static bool Class##_registered = [](){ Class::register_class(); return true; }();

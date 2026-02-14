@@ -38,10 +38,11 @@ struct AssetLogic {
     template <typename T>
     static void load(std::vector<std::shared_ptr<T>>& ptrs, const std::vector<UID>& uids) {
         ptrs.clear();
+        ptrs.reserve(uids.size());
         auto* mgr = EngineContext::asset();
         for (const auto& uid : uids) {
-            auto asset = mgr->load_asset<T>(uid);
-            if (asset) ptrs.push_back(asset);
+            auto asset = !uid.is_empty() ? mgr->load_asset<T>(uid) : nullptr;
+            ptrs.push_back(asset);
         }
     }
     template <typename T>

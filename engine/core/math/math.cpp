@@ -108,37 +108,48 @@ namespace Math
 
     Mat4 look_at(Vec3 eye, Vec3 center, Vec3 up)
     {
-        Vec3 f = (center - eye).normalized();
-        Vec3 s = f.cross(up).normalized();
-        Vec3 u = s.cross(f);
+        // DX11 Left-handed coordinate system
+        // In LH system: +X right, +Y up, +Z forward (into the screen, away from camera)
+        // But we want view space +Z to point in front of camera (toward the target)
+        // So forward vector = target - eye (points toward target, which is in front of camera)
+        Vec3 f = (center - eye).normalized();  // Forward direction (eye -> center)
+        Vec3 s = up.cross(f).normalized();     // Right vector (up x forward for LH)
+        Vec3 u = f.cross(s);                   // Up vector
 
         Mat4 mat = Mat4::Identity();
+        // Row 0: right vector
         mat(0, 0) = s.x();
         mat(0, 1) = s.y();
         mat(0, 2) = s.z();
+        mat(0, 3) = -s.dot(eye);
+        // Row 1: up vector  
         mat(1, 0) = u.x();
         mat(1, 1) = u.y();
         mat(1, 2) = u.z();
-        mat(2, 0) =-f.x();
-        mat(2, 1) =-f.y();
-        mat(2, 2) =-f.z();
-        mat(0, 3) =-s.dot(eye);
-        mat(1, 3) =-u.dot(eye);
-        mat(2, 3) = f.dot(eye);
+        mat(1, 3) = -u.dot(eye);
+        // Row 2: forward vector (+Z points toward target, in front of camera)
+        mat(2, 0) = f.x();
+        mat(2, 1) = f.y();
+        mat(2, 2) = f.z();
+        mat(2, 3) = -f.dot(eye);
 
         return mat;
     }
 
     Mat4 perspective(float fovy, float aspect, float near_plane, float far_plane)
     {
-        float const tan_half_fovy = tan(fovy / 2.0f);
-
+        // DX11 Left-handed perspective projection
+        // Clip space: x/y in [-1, 1], z in [0, 1]
         Mat4 mat = Mat4::Zero();
+        float tan_half_fovy = std::tan(fovy / 2.0f);
+        
         mat(0, 0) = 1.0f / (aspect * tan_half_fovy);
-        mat(1, 1) = 1.0f / (tan_half_fovy);
-        mat(2, 2) = far_plane / (near_plane - far_plane);
-        mat(3, 2) = -1.0f;
+        mat(1, 1) = 1.0f / tan_half_fovy;
+        // For LH: z maps from [near, far] to [0, 1]
+        mat(2, 2) = far_plane / (far_plane - near_plane);
         mat(2, 3) = -(far_plane * near_plane) / (far_plane - near_plane);
+        mat(3, 2) = 1.0f;  // w = z (copy z to w for perspective divide)
+        
         return mat;
     }
 

@@ -1,0 +1,66 @@
+#pragma once
+
+#include "engine/function/render/rhi/rhi_structs.h"
+#include "engine/function/render/render_pass/forward_pass.h"
+#include "engine/function/render/render_pass/mesh_pass.h"
+#include <memory>
+#include <vector>
+
+// Forward declarations
+class MeshRendererComponent;
+class CameraComponent;
+
+/**
+ * @brief Manages mesh rendering for the engine
+ * 
+ * RenderMeshManager is responsible for:
+ * - Managing render passes (ForwardPass, etc.)
+ * - Collecting draw batches from MeshRendererComponents in the scene
+ * - Building and executing the render graph
+ * - Camera management and per-frame data setup
+ */
+class RenderMeshManager {
+public:
+    void init();
+    void destroy();
+    void tick();
+
+    /**
+     * @brief Register a mesh renderer component for rendering
+     * @param component The component to register
+     */
+    void register_mesh_renderer(MeshRendererComponent* component);
+
+    /**
+     * @brief Unregister a mesh renderer component
+     * @param component The component to unregister
+     */
+    void unregister_mesh_renderer(MeshRendererComponent* component);
+
+    /**
+     * @brief Get the forward pass for configuration
+     */
+    std::shared_ptr<render::ForwardPass> get_forward_pass() { return forward_pass_; }
+
+    /**
+     * @brief Set the active camera for rendering
+     * @param camera The active camera component
+     */
+    void set_active_camera(CameraComponent* camera) { active_camera_ = camera; }
+
+    /**
+     * @brief Get the active camera
+     */
+    CameraComponent* get_active_camera() const { return active_camera_; }
+
+private:
+    void prepare_mesh_pass();
+    void execute_render_pass(const std::vector<render::DrawBatch>& batches);
+    void collect_draw_batches(std::vector<render::DrawBatch>& batches);
+
+    std::shared_ptr<render::ForwardPass> forward_pass_;
+    std::vector<MeshRendererComponent*> mesh_renderers_;
+    CameraComponent* active_camera_ = nullptr;
+    
+    bool initialized_ = false;
+};

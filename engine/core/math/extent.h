@@ -1,3 +1,5 @@
+#ifndef ENGINE_CORE_MATH_EXTENT_H_
+#define ENGINE_CORE_MATH_EXTENT_H_
 #include <cmath>
 #include <algorithm>
 typedef struct Extent2D 
@@ -15,6 +17,8 @@ typedef struct Extent2D
 	{ 
 		return (uint32_t)(std::floor(std::log2(std::max(width, height)))) + 1; 
 	}
+    
+    const uint32_t mip_size() const { return MipSize(); }
 
 } Extent2D;
 
@@ -35,6 +39,8 @@ typedef struct Extent3D
 	{ 
 		return (uint32_t)(std::floor(std::log2(std::max(width, std::max(height, depth))))) + 1; 
 	}
+
+    const uint32_t mip_size() const { return MipSize(); }
 
 } Extent3D;
 
@@ -102,3 +108,5 @@ typedef struct Color4
 	float b = 0.0f;
 	float a = 0.0f;
 } Color4;
+
+#endif

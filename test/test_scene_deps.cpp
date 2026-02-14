@@ -1,4 +1,3 @@
-#define CATCH_CONFIG_MAIN
 #include <catch2/catch_test_macros.hpp>
 #include "engine/main/engine_context.h"
 #include "engine/function/asset/asset_manager.h"
@@ -8,7 +7,7 @@
 #include "engine/core/log/Log.h"
 #include "engine/core/utils/file_cleaner.h"
 
-TEST_CASE("Scene Dependency Integration Test", "[scene_asset]") {
+TEST_CASE("Scene Dependency Integration Test", "[scene_deps]") {
     // Phase 1: Save Scene with Dependencies
     utils::clean_old_files(std::filesystem::path(std::string(ENGINE_PATH) + "/test/test_internal/assets"), 5);
     UID texture_uid, scene_uid;

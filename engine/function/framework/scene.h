@@ -57,7 +57,13 @@ public:
 
     virtual void load_asset_deps() override {
         for (auto& entity : entities_) {
-           entity->load_asset_deps();
+            // Fix component owner pointers after deserialization
+            for (auto& comp : entity->get_components()) {
+                if (comp) {
+                    comp->set_owner(entity.get());
+                }
+            }
+            entity->load_asset_deps();
         }
     }
 
