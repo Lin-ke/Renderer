@@ -1,22 +1,28 @@
 #include <catch2/catch_test_macros.hpp>
-#define NOMINMAX
-#include <d3dcompiler.h>
-#include <vector>
-#include <string>
-
+#include <GLFW/glfw3.h>
 #include "engine/main/engine_context.h"
+#include "engine/function/render/graph/rdg_builder.h"
+#include "engine/function/render/rhi/rhi.h"
+#include "engine/function/render/render_system/render_system.h"
 #include "engine/function/framework/scene.h"
 #include "engine/function/framework/entity.h"
 #include "engine/function/framework/component/transform_component.h"
 #include "engine/function/framework/component/mesh_renderer_component.h"
 #include "engine/function/framework/component/point_light_component.h"
 #include "engine/function/framework/component/camera_component.h"
-#include "engine/function/render/rhi/rhi.h"
-#include "engine/function/render/render_system/render_system.h"
 #include "engine/core/math/math.h"
+#include "engine/platform/dx11/platform_rhi.h"
+#include <d3dcompiler.h>
+#include <vector>
+#include <string>
+
+/**
+ * @file test/draw/test_triangle.cpp
+ * @brief Tests for basic drawing including DX11 triangle and cube rendering.
+ */
 
 // Helper to compile shader
-std::vector<uint8_t> compile_shader_draw(const std::string& source, const std::string& entry, const std::string& profile) {
+static std::vector<uint8_t> compile_shader(const std::string& source, const std::string& entry, const std::string& profile) {
     ID3DBlob* blob = nullptr;
     ID3DBlob* error_blob = nullptr;
     HRESULT hr = D3DCompile(source.c_str(), source.size(), nullptr, nullptr, nullptr, entry.c_str(), profile.c_str(), D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_DEBUG, 0, &blob, &error_blob);
@@ -34,6 +40,204 @@ std::vector<uint8_t> compile_shader_draw(const std::string& source, const std::s
     blob->Release();
     if (error_blob) error_blob->Release();
     return code;
+}
+
+TEST_CASE("DX11 Swapchain and Fence - Basic Triangle", "[draw][triangle]") {
+    // Initialize GLFW
+    REQUIRE(glfwInit() == GLFW_TRUE);
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    GLFWwindow* window = glfwCreateWindow(800, 600, "DX11 Test", nullptr, nullptr);
+    REQUIRE(window != nullptr);
+
+    // 1. Initialize Backend
+    RHIBackendInfo info = {};
+    info.type = BACKEND_DX11;
+    info.enable_debug = true;
+    RHIBackendRef backend = RHIBackend::init(info);
+    REQUIRE(backend != nullptr);
+
+    // 2. Create Surface
+    RHISurfaceRef surface = backend->create_surface(window);
+    REQUIRE(surface != nullptr);
+
+    // 3. Create Swapchain
+    RHISwapchainInfo sw_info = {};
+    sw_info.surface = surface;
+    sw_info.image_count = 2;
+    sw_info.extent = { 800, 600 };
+    sw_info.format = FORMAT_R8G8B8A8_UNORM;
+    RHISwapchainRef swapchain = backend->create_swapchain(sw_info);
+    REQUIRE(swapchain != nullptr);
+
+    // Pre-create texture views for all swapchain images
+    std::vector<RHITextureViewRef> swapchain_views;
+    for (uint32_t i = 0; i < sw_info.image_count; ++i) {
+        RHITextureViewInfo view_info = {};
+        view_info.texture = swapchain->get_texture(i);
+        swapchain_views.push_back(backend->create_texture_view(view_info));
+    }
+
+    // 4. Prepare Resources for Triangle
+    const std::string vs_source = R"(
+        struct VSInput {
+            float3 position : POSITION0;
+            float3 color : POSITION1;
+        };
+        struct VSOutput {
+            float4 position : SV_POSITION;
+            float4 color : COLOR;
+        };
+        VSOutput main(VSInput input) {
+            VSOutput output;
+            output.position = float4(input.position, 1.0);
+            output.color = float4(input.color, 1.0);
+            return output;
+        }
+    )";
+
+    const std::string ps_source = R"(
+        struct PSInput {
+            float4 position : SV_POSITION;
+            float4 color : COLOR;
+        };
+        float4 main(PSInput input) : SV_TARGET {
+            return input.color;
+        }
+    )";
+
+    RHIShaderInfo vs_info = {};
+    vs_info.entry = "main";
+    vs_info.frequency = SHADER_FREQUENCY_VERTEX;
+    vs_info.code = compile_shader(vs_source, "main", "vs_5_0");
+    REQUIRE(!vs_info.code.empty());
+    RHIShaderRef vs = backend->create_shader(vs_info);
+
+    RHIShaderInfo ps_info = {};
+    ps_info.entry = "main";
+    ps_info.frequency = SHADER_FREQUENCY_FRAGMENT;
+    ps_info.code = compile_shader(ps_source, "main", "ps_5_0");
+    REQUIRE(!ps_info.code.empty());
+    RHIShaderRef ps = backend->create_shader(ps_info);
+
+    // Vertex Buffer
+    float vertices[] = {
+        // Position         // Color
+         0.0f,  0.5f, 0.0f, 1.0f, 0.0f, 0.0f,
+         0.5f, -0.5f, 0.0f, 0.0f, 1.0f, 0.0f,
+        -0.5f, -0.5f, 0.0f, 0.0f, 0.0f, 1.0f
+    };
+
+    RHIBufferInfo vb_info = {};
+    vb_info.size = sizeof(vertices);
+    vb_info.stride = 6 * sizeof(float);
+    vb_info.memory_usage = MEMORY_USAGE_CPU_TO_GPU;
+    vb_info.type = RESOURCE_TYPE_VERTEX_BUFFER;
+    RHIBufferRef vb = backend->create_buffer(vb_info);
+    REQUIRE(vb != nullptr);
+    
+    void* data = vb->map();
+    REQUIRE(data != nullptr);
+    memcpy(data, vertices, sizeof(vertices));
+    vb->unmap();
+
+    // Graphics Pipeline
+    RHIGraphicsPipelineInfo pipe_info = {};
+    pipe_info.vertex_shader = vs;
+    pipe_info.fragment_shader = ps;
+    
+    pipe_info.vertex_input_state.vertex_elements.resize(2);
+    pipe_info.vertex_input_state.vertex_elements[0].stream_index = 0;
+    pipe_info.vertex_input_state.vertex_elements[0].attribute_index = 0;
+    pipe_info.vertex_input_state.vertex_elements[0].format = FORMAT_R32G32B32_SFLOAT;
+    pipe_info.vertex_input_state.vertex_elements[0].offset = 0;
+    
+    pipe_info.vertex_input_state.vertex_elements[1].stream_index = 0;
+    pipe_info.vertex_input_state.vertex_elements[1].attribute_index = 1;
+    pipe_info.vertex_input_state.vertex_elements[1].format = FORMAT_R32G32B32_SFLOAT;
+    pipe_info.vertex_input_state.vertex_elements[1].offset = 3 * sizeof(float);
+
+    pipe_info.depth_stencil_state.enable_depth_test = false;
+
+    RHIGraphicsPipelineRef pipeline = backend->create_graphics_pipeline(pipe_info);
+    REQUIRE(pipeline != nullptr);
+
+    // 5. Render Loop
+    const int MAX_FRAMES_IN_FLIGHT = 2;
+    uint32_t current_frame = 0;
+    std::vector<RHIFenceRef> flight_fences;
+    std::vector<bool> flight_fence_active;
+
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        flight_fences.push_back(backend->create_fence(false));
+        flight_fence_active.push_back(false);
+    }
+
+    RHICommandPoolInfo pool_info = {};
+    RHICommandPoolRef pool = backend->create_command_pool(pool_info);
+    RHICommandContextRef context = backend->create_command_context(pool);
+
+    int frame_count = 0;
+
+    while (!glfwWindowShouldClose(window) && frame_count < 300) { 
+        glfwPollEvents();
+        frame_count++;
+        
+        if (flight_fence_active[current_frame]) {
+            flight_fences[current_frame]->wait();
+        }
+
+        RHITextureRef back_buffer = swapchain->get_new_frame(nullptr, nullptr);
+        uint32_t image_index = swapchain->get_current_frame_index();
+        RHITextureViewRef back_buffer_view = swapchain_views[image_index];
+
+        RHIRenderPassInfo rp_info = {};
+        rp_info.color_attachments[0].texture_view = back_buffer_view;
+        rp_info.color_attachments[0].load_op = ATTACHMENT_LOAD_OP_CLEAR;
+        rp_info.color_attachments[0].clear_color = { 0.1f, 0.2f, 0.4f, 1.0f };
+        
+        RHIRenderPassRef render_pass = backend->create_render_pass(rp_info);
+
+        context->begin_command();
+        context->begin_render_pass(render_pass);
+        
+        context->set_graphics_pipeline(pipeline);
+        context->set_viewport({0, 0}, {800, 600});
+        context->set_scissor({0, 0}, {800, 600});
+        context->bind_vertex_buffer(vb, 0, 0);
+        context->draw(3, 1, 0, 0);
+
+        context->end_render_pass();
+        context->end_command();
+        
+        context->execute(flight_fences[current_frame], nullptr, nullptr);
+        flight_fence_active[current_frame] = true;
+
+        swapchain->present(nullptr);
+
+        current_frame = (current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
+
+        render_pass->destroy();
+    }
+
+    // Wait for all frames to complete before cleanup
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        if (flight_fence_active[i]) {
+            flight_fences[i]->wait();
+        }
+    }
+
+    // Cleanup
+    pipeline->destroy();
+    vb->destroy();
+    vs->destroy();
+    ps->destroy();
+
+    for (auto view : swapchain_views) view->destroy();
+    context->destroy();
+    pool->destroy();
+    swapchain->destroy();
+    backend->destroy();
+    glfwDestroyWindow(window);
 }
 
 struct PerFrameData {
@@ -54,12 +258,12 @@ struct PerLightData {
     float lightIntensity;
 };
 
-TEST_CASE("Draw Cube Blinn-Phong", "[draw]") {
+TEST_CASE("Draw Cube Blinn-Phong", "[draw][triangle]") {
     // 1. Init Engine
     std::bitset<8> mode;
     mode.set(EngineContext::StartMode::Render_);
     mode.set(EngineContext::StartMode::Window_);
-    mode.set(EngineContext::StartMode::Single_Thread_); // Single thread for simpler test
+    mode.set(EngineContext::StartMode::Single_Thread_);
     EngineContext::init(mode);
 
     auto* rhi = EngineContext::render_system()->get_rhi().get();
@@ -72,10 +276,10 @@ TEST_CASE("Draw Cube Blinn-Phong", "[draw]") {
     auto camera_ent = scene->create_entity();
     auto cam_trans = camera_ent->add_component<TransformComponent>();
     cam_trans->transform.set_position({0.0f, 2.0f, 5.0f});
-    cam_trans->transform.set_rotation(Vec3(-20.0f, 0.0f, 0.0f)); // Look down slightly
+    cam_trans->transform.set_rotation(Vec3(-20.0f, 0.0f, 0.0f));
     auto cam_comp = camera_ent->add_component<CameraComponent>();
     cam_comp->set_fov(60.0f);
-    cam_comp->on_init(); // Manually call lifecycle
+    cam_comp->on_init();
 
     // Light
     auto light_ent = scene->create_entity();
@@ -91,11 +295,9 @@ TEST_CASE("Draw Cube Blinn-Phong", "[draw]") {
     auto cube_trans = cube_ent->add_component<TransformComponent>();
     cube_trans->transform.set_position({0.0f, 0.0f, 0.0f});
     auto cube_mesh = cube_ent->add_component<MeshRendererComponent>();
-    // cube_mesh->set_model(...); // Disabled
     cube_mesh->on_init();
 
     // 3. RHI Resources
-    // Shaders
     const std::string vs_source = R"(
         cbuffer PerFrame : register(b0) { float4x4 view; float4x4 proj; float3 cameraPos; };
         cbuffer PerObject : register(b1) { float4x4 model; };
@@ -116,7 +318,7 @@ TEST_CASE("Draw Cube Blinn-Phong", "[draw]") {
         float4 main(PSInput input) : SV_TARGET {
             float3 N = normalize(input.normal);
             float3 L = normalize(lightPos - input.worldPos);
-            float3 V = normalize(float3(0, 2, 5) - input.worldPos); // Hardcoded camera pos for simplicity in shader or pass uniform
+            float3 V = normalize(float3(0, 2, 5) - input.worldPos);
             float3 H = normalize(L + V);
             float3 ambient = float3(0.1, 0.1, 0.1) * lightColor;
             float diff = max(dot(N, L), 0.0);
@@ -127,8 +329,8 @@ TEST_CASE("Draw Cube Blinn-Phong", "[draw]") {
         }
     )";
 
-    RHIShaderInfo vs_info = { "main", SHADER_FREQUENCY_VERTEX, compile_shader_draw(vs_source, "main", "vs_5_0") };
-    RHIShaderInfo ps_info = { "main", SHADER_FREQUENCY_FRAGMENT, compile_shader_draw(ps_source, "main", "ps_5_0") };
+    RHIShaderInfo vs_info = { "main", SHADER_FREQUENCY_VERTEX, compile_shader(vs_source, "main", "vs_5_0") };
+    RHIShaderInfo ps_info = { "main", SHADER_FREQUENCY_FRAGMENT, compile_shader(ps_source, "main", "ps_5_0") };
     auto vs = rhi->create_shader(vs_info);
     auto ps = rhi->create_shader(ps_info);
 
@@ -165,8 +367,8 @@ TEST_CASE("Draw Cube Blinn-Phong", "[draw]") {
     pipe_info.vertex_shader = vs;
     pipe_info.fragment_shader = ps;
     pipe_info.vertex_input_state.vertex_elements = {
-        { 0, 0, FORMAT_R32G32B32_SFLOAT, 0, 6 * sizeof(float) }, // Pos
-        { 0, 1, FORMAT_R32G32B32_SFLOAT, 3 * sizeof(float), 6 * sizeof(float) } // Normal
+        { 0, 0, FORMAT_R32G32B32_SFLOAT, 0, 6 * sizeof(float) },
+        { 0, 1, FORMAT_R32G32B32_SFLOAT, 3 * sizeof(float), 6 * sizeof(float) }
     };
     pipe_info.depth_stencil_state.enable_depth_test = false;
     auto pipeline = rhi->create_graphics_pipeline(pipe_info);
@@ -179,15 +381,11 @@ TEST_CASE("Draw Cube Blinn-Phong", "[draw]") {
 
     // 4. Loop
     int frames = 0;
-    while (frames < 1) { // Run for 1 frame
-        
-        // Manual Tick
-        // Update Components
-        cam_comp->on_update(0.016f); // 16ms
+    while (frames < 1) {
+        cam_comp->on_update(0.016f);
         light_comp->on_update(0.016f);
         cube_mesh->on_update(0.016f);
 
-        // Update UBOs
         PerFrameData frame_data = { cam_comp->get_view_matrix(), cam_comp->get_projection_matrix(), cam_comp->get_position(), 0.0f };
         void* ptr = ub_frame->map(); memcpy(ptr, &frame_data, sizeof(frame_data)); ub_frame->unmap();
 
@@ -199,10 +397,9 @@ TEST_CASE("Draw Cube Blinn-Phong", "[draw]") {
         light_data.lightIntensity = 1.5f;
         ptr = ub_light->map(); memcpy(ptr, &light_data, sizeof(light_data)); ub_light->unmap();
 
-        // Render
         auto back_buffer = swapchain->get_new_frame(nullptr, nullptr);
         RHIRenderPassInfo rp_info = {};
-        rp_info.color_attachments[0].texture_view = rhi->create_texture_view({back_buffer}); // Leak? Need to destroy or cache.
+        rp_info.color_attachments[0].texture_view = rhi->create_texture_view({back_buffer});
         rp_info.color_attachments[0].load_op = ATTACHMENT_LOAD_OP_CLEAR;
         rp_info.color_attachments[0].clear_color = {0.0f, 0.0f, 0.0f, 1.0f};
         
@@ -225,12 +422,12 @@ TEST_CASE("Draw Cube Blinn-Phong", "[draw]") {
         cmd->end_render_pass();
         cmd->end_command();
         cmd->execute(fence, nullptr, nullptr);
-        fence->wait(); // Sync
+        fence->wait();
         
         swapchain->present(nullptr);
         
         pass->destroy();
-        rp_info.color_attachments[0].texture_view->destroy(); // destroy temp view
+        rp_info.color_attachments[0].texture_view->destroy();
         
         frames++;
     }

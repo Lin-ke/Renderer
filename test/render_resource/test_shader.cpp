@@ -4,14 +4,18 @@
 #include "engine/function/render/render_resource/shader.h"
 #include "engine/function/asset/asset_manager.h"
 #include "engine/core/log/Log.h"
-#include <filesystem>
 #include <fstream>
 #include <d3dcompiler.h>
+
+/**
+ * @file test/render_resource/test_shader.cpp
+ * @brief Unit tests for Shader render resource.
+ */
 
 DEFINE_LOG_TAG(LogShaderTest, "ShaderTest");
 
 // Helper to compile shader
-std::vector<uint8_t> compile_shader_test(const std::string& source, const std::string& entry, const std::string& profile) {
+static std::vector<uint8_t> compile_shader_test(const std::string& source, const std::string& entry, const std::string& profile) {
     ID3DBlob* blob = nullptr;
     ID3DBlob* error_blob = nullptr;
     HRESULT hr = D3DCompile(source.c_str(), source.size(), nullptr, nullptr, nullptr, entry.c_str(), profile.c_str(), D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_DEBUG, 0, &blob, &error_blob);
@@ -30,7 +34,7 @@ std::vector<uint8_t> compile_shader_test(const std::string& source, const std::s
     return code;
 }
 
-TEST_CASE("Shader Loading and Serialization", "[shader]") {
+TEST_CASE("Shader Loading and Serialization", "[render_resource]") {
     std::bitset<8> mode;
     mode.set(EngineContext::StartMode::Asset_);
     mode.set(EngineContext::StartMode::Window_);
@@ -41,7 +45,6 @@ TEST_CASE("Shader Loading and Serialization", "[shader]") {
     std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
     EngineContext::asset()->init(test_asset_dir);
 
-    // Create a valid shader file
     const std::string vs_source = R"(
         float4 main(float3 position : POSITION) : SV_POSITION {
             return float4(position, 1.0);
@@ -59,16 +62,13 @@ TEST_CASE("Shader Loading and Serialization", "[shader]") {
         ofs.write((char*)shader_code.data(), shader_code.size());
     }
 
-    // Create and save shader asset
     auto shader = std::make_shared<Shader>(virtual_path, SHADER_FREQUENCY_VERTEX, "main");
     REQUIRE(shader->get_file_path() == virtual_path);
-    // On Windows/DX11, we expect shader_ to be valid now
     REQUIRE(shader->shader_ != nullptr);
 
     std::string asset_path = "/Game/test_shader_asset.asset";
     EngineContext::asset()->save_asset(shader, asset_path);
 
-    // Load shader asset
     auto loaded_shader = EngineContext::asset()->load_asset<Shader>(asset_path);
     REQUIRE(loaded_shader != nullptr);
     CHECK(loaded_shader->get_file_path() == virtual_path);
