@@ -2,6 +2,10 @@
 #include "engine/core/log/Log.h"
 #include <d3dcompiler.h>
 
+#include <imgui.h>
+#include "imgui_impl_glfw.h"
+#include "imgui_impl_dx11.h"
+
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "d3dcompiler.lib")
@@ -458,7 +462,39 @@ void DX11Backend::destroy() {
     device_.Reset(); 
     factory_.Reset(); 
 }
-void DX11Backend::init_imgui(GLFWwindow* window) {}
+void DX11Backend::init_imgui(GLFWwindow* window) {
+    // Setup ImGui context
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO(); (void)io;
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    
+    // Setup style
+    ImGui::StyleColorsDark();
+    
+    // Setup Platform/Renderer bindings
+    ImGui_ImplGlfw_InitForOther(window, true);
+    ImGui_ImplDX11_Init(device_.Get(), context_.Get());
+    
+    INFO(LogRHI, "ImGui initialized successfully");
+}
+
+void DX11Backend::imgui_new_frame() {
+    ImGui_ImplDX11_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
+}
+
+void DX11Backend::imgui_render() {
+    ImGui::Render();
+    ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+}
+
+void DX11Backend::imgui_shutdown() {
+    ImGui_ImplDX11_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
+}
 RHIQueueRef DX11Backend::get_queue(const RHIQueueInfo& info) { return std::make_shared<DX11Queue>(info); }
 
 RHISurfaceRef DX11Backend::create_surface(GLFWwindow* window) {
@@ -659,8 +695,13 @@ void DX11CommandContext::draw(uint32_t vc, uint32_t ic, uint32_t fv, uint32_t fi
 void DX11CommandContext::draw_indexed(uint32_t ic, uint32_t instc, uint32_t fi, uint32_t vo, uint32_t finst) { if (instc > 1) context_->DrawIndexedInstanced(ic, instc, fi, vo, finst); else context_->DrawIndexed(ic, fi, vo); }
 void DX11CommandContext::draw_indirect(RHIBufferRef b, uint32_t o, uint32_t c) { context_->DrawInstancedIndirect((ID3D11Buffer*)b->raw_handle(), (UINT)o); }
 void DX11CommandContext::draw_indexed_indirect(RHIBufferRef b, uint32_t o, uint32_t c) { context_->DrawIndexedInstancedIndirect((ID3D11Buffer*)b->raw_handle(), (UINT)o); }
-void DX11CommandContext::imgui_create_fonts_texture() {}
-void DX11CommandContext::imgui_render_draw_data() {}
+void DX11CommandContext::imgui_create_fonts_texture() {
+    ImGui_ImplDX11_CreateDeviceObjects();
+}
+
+void DX11CommandContext::imgui_render_draw_data() {
+    ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+}
 
 bool DX11CommandContext::read_texture(RHITextureRef texture, void* data, uint32_t size) {
     if (!texture || !data || size == 0) return false;

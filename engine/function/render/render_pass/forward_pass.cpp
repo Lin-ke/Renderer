@@ -130,10 +130,11 @@ static std::vector<uint8_t> compile_shader_rhi(const char* source, const char* e
 ForwardPass::ForwardPass() = default;
 
 ForwardPass::~ForwardPass() {
-    if (pipeline_) pipeline_->destroy();
+    if (solid_pipeline_) solid_pipeline_->destroy();
+    if (wireframe_pipeline_) wireframe_pipeline_->destroy();
     if (root_signature_) root_signature_->destroy();
-    if (vertex_shader_ && vertex_shader_->shader_) vertex_shader_->shader_->destroy();
-    if (fragment_shader_ && fragment_shader_->shader_) fragment_shader_->shader_->destroy();
+    // Shaders managed by shared_ptr
+    // Shaders managed by shared_ptr
     if (per_frame_buffer_) per_frame_buffer_->destroy();
     if (per_object_buffer_) per_object_buffer_->destroy();
 }
@@ -250,27 +251,27 @@ void ForwardPass::create_pipeline() {
     root_signature_ = backend->create_root_signature(root_info);
     if (!root_signature_) return;
     
-    // Create graphics pipeline
+    // Common pipeline configuration
     RHIGraphicsPipelineInfo pipe_info = {};
     pipe_info.vertex_shader = vertex_shader_->shader_;
     pipe_info.fragment_shader = fragment_shader_->shader_;
     pipe_info.root_signature = root_signature_;
     pipe_info.primitive_type = PRIMITIVE_TYPE_TRIANGLE_LIST;
     
-    // Vertex input layout: position (3 floats) + normal (3 floats)
+    // Vertex input layout: position (stream 0) + normal (stream 1)
+    // Meshes store position and normal in separate buffers
     pipe_info.vertex_input_state.vertex_elements.resize(2);
-    // Position
+    // Position - stream 0
     pipe_info.vertex_input_state.vertex_elements[0].stream_index = 0;
     pipe_info.vertex_input_state.vertex_elements[0].attribute_index = 0;
     pipe_info.vertex_input_state.vertex_elements[0].format = FORMAT_R32G32B32_SFLOAT;
     pipe_info.vertex_input_state.vertex_elements[0].offset = 0;
-    // Normal
-    pipe_info.vertex_input_state.vertex_elements[1].stream_index = 0;
+    // Normal - stream 1
+    pipe_info.vertex_input_state.vertex_elements[1].stream_index = 1;
     pipe_info.vertex_input_state.vertex_elements[1].attribute_index = 1;
     pipe_info.vertex_input_state.vertex_elements[1].format = FORMAT_R32G32B32_SFLOAT;
-    pipe_info.vertex_input_state.vertex_elements[1].offset = sizeof(float) * 3;
+    pipe_info.vertex_input_state.vertex_elements[1].offset = 0;
     
-    pipe_info.rasterizer_state.fill_mode = FILL_MODE_SOLID;
     pipe_info.rasterizer_state.cull_mode = CULL_MODE_NONE;  // Disable culling for testing
     pipe_info.rasterizer_state.depth_clip_mode = DEPTH_CLIP;
     
@@ -287,13 +288,35 @@ void ForwardPass::create_pipeline() {
         pipe_info.depth_stencil_attachment_format = FORMAT_D32_SFLOAT;
     }
     
-    pipeline_ = backend->create_graphics_pipeline(pipe_info);
-    if (!pipeline_) {
-        ERR(LogForwardPass, "Failed to create graphics pipeline");
+    // Create solid pipeline
+    pipe_info.rasterizer_state.fill_mode = FILL_MODE_SOLID;
+    solid_pipeline_ = backend->create_graphics_pipeline(pipe_info);
+    if (!solid_pipeline_) {
+        ERR(LogForwardPass, "Failed to create solid graphics pipeline");
         return;
     }
     
-    INFO(LogForwardPass, "Pipeline created successfully");
+    // Create wireframe pipeline
+    pipe_info.rasterizer_state.fill_mode = FILL_MODE_WIREFRAME;
+    wireframe_pipeline_ = backend->create_graphics_pipeline(pipe_info);
+    if (!wireframe_pipeline_) {
+        ERR(LogForwardPass, "Failed to create wireframe graphics pipeline");
+        return;
+    }
+    
+    // Start with solid pipeline
+    pipeline_ = solid_pipeline_;
+    
+    INFO(LogForwardPass, "Solid and wireframe pipelines created successfully");
+}
+
+void ForwardPass::set_wireframe(bool enable) {
+    if (wireframe_mode_ == enable) return;
+    
+    wireframe_mode_ = enable;
+    pipeline_ = enable ? wireframe_pipeline_ : solid_pipeline_;
+    
+    INFO(LogForwardPass, "Switched to {} mode", enable ? "wireframe" : "solid");
 }
 
 void ForwardPass::set_per_frame_data(const Mat4& view, const Mat4& proj, 

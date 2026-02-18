@@ -8,7 +8,7 @@
 TEST_CASE("Thread Pool Integration Test", "[thread_pool]") {
     EngineContext::exit();
 
-    // Initialize EngineContext in multi-threaded mode (StartMode::Single_Thread_ bit is 0)
+    // Initialize EngineContext in multi-threaded mode (StartMode::SingleThread bit is 0)
     // We only need basic systems, maybe Log
     std::bitset<8> mode;
     EngineContext::init(mode);

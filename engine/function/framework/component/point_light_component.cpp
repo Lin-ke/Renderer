@@ -3,6 +3,9 @@
 #include "engine/function/framework/component/transform_component.h"
 #include "engine/function/framework/entity.h"
 #include "engine/main/engine_context.h"
+#include "engine/core/reflect/class_db.h"
+
+REGISTER_CLASS_IMPL(PointLightComponent)
 
 PointLightComponent::~PointLightComponent() {
     /* //####TODO####: RenderResource logic

@@ -5,12 +5,15 @@
 // #include "engine/function/framework/component/camera_component.h" //####TODO####
 // #include "engine/function/framework/scene/scene.h" //####TODO####
 #include "engine/main/engine_context.h"
+#include "engine/core/reflect/class_db.h"
 
 #include <algorithm>
 #include <array>
 #include <iostream>
 #include <memory>
 #include <cmath>
+
+REGISTER_CLASS_IMPL(DirectionalLightComponent)
 
 void DirectionalLightComponent::on_init() {
     // Component::on_init();

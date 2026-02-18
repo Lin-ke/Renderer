@@ -17,6 +17,8 @@ class Component {
 public:
 	virtual ~Component() = default;
 
+	virtual void on_init() {}  // Called when component is added to entity
+
 	virtual void traverse_deps(std::function<void(std::shared_ptr<class Asset>)> callback) const {}
 
     // 使用 ClassDB 进行属性设置

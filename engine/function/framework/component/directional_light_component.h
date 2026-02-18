@@ -2,6 +2,7 @@
 
 #include "engine/function/framework/component.h"
 #include "engine/core/math/math.h"
+#include "engine/core/reflect/math_reflect.h"
 #include "engine/function/render/data/render_structs.h"
 #include "engine/core/reflect/class_db.h"
 

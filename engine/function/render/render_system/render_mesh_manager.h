@@ -43,6 +43,12 @@ public:
     std::shared_ptr<render::ForwardPass> get_forward_pass() { return forward_pass_; }
 
     /**
+     * @brief Set wireframe rendering mode
+     * @param enable true for wireframe, false for solid
+     */
+    void set_wireframe(bool enable);
+
+    /**
      * @brief Set the active camera for rendering
      * @param camera The active camera component
      */
@@ -53,10 +59,23 @@ public:
      */
     CameraComponent* get_active_camera() const { return active_camera_; }
 
+    /**
+     * @brief Collect draw batches for rendering
+     * @param batches Output vector to fill with draw batches
+     */
+    void collect_draw_batches(std::vector<render::DrawBatch>& batches);
+
+    /**
+     * @brief Render collected batches to the given command context
+     * @param context The command context to record rendering commands
+     * @param back_buffer_view The texture view of the back buffer
+     * @param extent The viewport extent
+     */
+    void render_batches(RHICommandContextRef context, RHITextureViewRef back_buffer_view, Extent2D extent);
+
 private:
     void prepare_mesh_pass();
-    void execute_render_pass(const std::vector<render::DrawBatch>& batches);
-    void collect_draw_batches(std::vector<render::DrawBatch>& batches);
+    std::vector<render::DrawBatch> current_batches_;
 
     std::shared_ptr<render::ForwardPass> forward_pass_;
     std::vector<MeshRendererComponent*> mesh_renderers_;

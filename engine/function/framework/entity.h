@@ -13,6 +13,7 @@ public:
         auto component = std::make_unique<T>(std::forward<Args>(args)...);
         T* ptr = component.get();
         ptr->set_owner(this);
+        ptr->on_init();  // Initialize component after setting owner
         components_.push_back(std::move(component));
         return ptr;
     }

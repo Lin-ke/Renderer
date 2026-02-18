@@ -5,8 +5,14 @@
 #include "engine/function/framework/prefab.h"
 #include "engine/function/framework/component/prefab_component.h"
 #include <memory>
+#include <vector>
 #include <cereal/archives/binary.hpp>
 #include <sstream>
+
+// Forward declarations for light components
+class DirectionalLightComponent;
+class PointLightComponent;
+class VolumeLightComponent;
 
 class Scene : public Asset, public std::enable_shared_from_this<Scene> {
 public:
@@ -71,6 +77,44 @@ public:
         for (auto& entity : entities_) {
             entity->save_asset_deps();
         }
+    }
+
+    /**
+     * @brief Get all components of a specific type from all entities in the scene
+     * @tparam TComponent The component type to search for
+     * @return Vector of pointers to found components
+     */
+    template<typename TComponent>
+    std::vector<TComponent*> get_components() const {
+        std::vector<TComponent*> components;
+        for (const auto& entity : entities_) {
+            if (auto* comp = entity->get_component<TComponent>()) {
+                components.push_back(comp);
+            }
+        }
+        return components;
+    }
+
+    /**
+     * @brief Get the first directional light component in the scene
+     * @return Pointer to directional light, or nullptr if none exists
+     */
+    DirectionalLightComponent* get_directional_light() const;
+
+    /**
+     * @brief Get all point light components in the scene
+     * @return Vector of point light component pointers
+     */
+    std::vector<PointLightComponent*> get_point_lights() const {
+        return get_components<PointLightComponent>();
+    }
+
+    /**
+     * @brief Get all volume light components in the scene
+     * @return Vector of volume light component pointers
+     */
+    std::vector<VolumeLightComponent*> get_volume_lights() const {
+        return get_components<VolumeLightComponent>();
     }
     
 };

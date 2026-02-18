@@ -6,6 +6,9 @@
 #include "engine/function/input/input.h"
 #include "engine/function/render/render_system.h"
 #include "engine/function/framework/world.h"
+#include "engine/function/framework/scene.h"
+#include "engine/function/framework/entity.h"
+#include "engine/function/framework/component/camera_component.h"
 
 DEFINE_LOG_TAG(LogEngine, "Engine");
 
@@ -19,16 +22,16 @@ void EngineContext::init(std::bitset<8> mode) {
 	instance_.reset(new EngineContext());
 	instance_->mode_ = mode;
 	instance_->set_thread_role(ThreadRole::MainGame);
-	if (mode.test(StartMode::Asset_)) { // Asset
+	if (mode.test(StartMode::Asset)) { // Asset
 		instance_->asset_manager_ = std::make_unique<AssetManager>();
 	}
 	// World is always created for scene management
 	instance_->world_ = std::make_unique<World>();
 	instance_->world_->init();
-	if (mode.test(StartMode::Window_)) { // Window
-		instance_->window_ = std::make_unique<Window>(800, 600, L"Renderer Window");
+	if (mode.test(StartMode::Window)) { // Window
+		instance_->window_ = std::make_unique<class Window>(800, 600, L"Renderer Window");
 	}
-	if (mode.test(StartMode::Render_)) {
+	if (mode.test(StartMode::Render)) {
 		instance_->render_system_ = std::make_unique<RenderSystem>();
 		instance_->render_system_->init(instance_->window_ ? instance_->window_->get_hwnd() : nullptr); 
 		instance_->render_resource_manager_ = std::make_unique<RenderResourceManager>();
@@ -38,9 +41,9 @@ void EngineContext::init(std::bitset<8> mode) {
 	instance_->thread_pool_ = std::make_unique<ThreadPool>(std::thread::hardware_concurrency());
 	
 	// main thread
-	if (!mode.test(StartMode::Single_Thread_)) {
+	if (!mode.test(StartMode::SingleThread)) {
 		instance_->render_thread_ = std::make_unique<std::jthread>([](std::stop_token stoken) {
-			instance_->set_thread_role(ThreadRole::Render);
+			instance_->set_thread_role(ThreadRole::Renderer);
 			INFO(LogEngine, "Render thread started.");
 			while (!stoken.stop_requested()) {
 				RenderPacket packet;
@@ -122,9 +125,26 @@ void EngineContext::main_loop_internal() {
 
 		// Logic Tick (Prepare Render Packet)
 		RenderPacket packet;
-		// Fill packet with data here...
-
-		if (instance_->mode_.test(StartMode::Single_Thread_) && instance_->render_system_) {
+		
+		// Fill packet with data from World/Scene
+		if (instance_->world_) {
+			Scene* active_scene = instance_->world_->get_active_scene();
+			packet.active_scene = active_scene;
+			
+			// Find active camera in scene
+			if (active_scene) {
+				for (const auto& entity : active_scene->entities_) {
+					if (auto* camera = entity->get_component<CameraComponent>()) {
+						packet.active_camera = camera;
+						break;
+					}
+				}
+			}
+		}
+		
+		if (instance_->mode_.test(StartMode::SingleThread) && instance_->render_system_) {
+			// Single-threaded: set frame index before tick
+			packet.frame_index = instance_->current_frame_index_;
 			instance_->render_system_->tick(packet);
             instance_->current_frame_index_ = (instance_->current_frame_index_ + 1) % instance_->MAX_FRAMES_IN_FLIGHT;
 		} else if (instance_->render_system_) {
@@ -134,6 +154,8 @@ void EngineContext::main_loop_internal() {
 				return instance_->render_queue_.size() < instance_->MAX_FRAMES_IN_FLIGHT;
 			});
 
+			// Set frame index for this packet before queuing
+			packet.frame_index = instance_->current_frame_index_;
 			instance_->render_queue_.push(packet);
             instance_->current_frame_index_ = (instance_->current_frame_index_ + 1) % instance_->MAX_FRAMES_IN_FLIGHT;
 			lock.unlock();

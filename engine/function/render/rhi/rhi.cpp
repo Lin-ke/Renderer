@@ -10,6 +10,9 @@ public:
     DummyRHIBackend(const RHIBackendInfo& info) : RHIBackend(info) {}
 
     void init_imgui(GLFWwindow* window) override {}
+    void imgui_new_frame() override {}
+    void imgui_render() override {}
+    void imgui_shutdown() override {}
 
     RHIQueueRef get_queue(const RHIQueueInfo& info) override { return nullptr; }
     RHISurfaceRef create_surface(GLFWwindow* window) override { return nullptr; }

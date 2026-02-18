@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/configs.h"
 #include "engine/core/math/math.h"
 #include "engine/function/render/rhi/rhi.h"
 #include "engine/function/render/rhi/rhi_structs.h"
@@ -128,7 +129,7 @@ public:
     RHIBufferRef get_per_frame_camera_buffer();
     RHIBufferRef get_per_frame_object_buffer();
 
-    static constexpr uint32_t FRAMES_IN_FLIGHT = 2;
+    // FRAMES_IN_FLIGHT is defined in configs.h
 
 private:
     void init_global_resources();

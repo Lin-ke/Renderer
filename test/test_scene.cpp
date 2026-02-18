@@ -18,7 +18,7 @@
 
 TEST_CASE("Scene Serialization via AssetManager", "[scene]") {
     {
-        EngineContext::init(1 << EngineContext::StartMode::Asset_);
+        EngineContext::init(1 << EngineContext::StartMode::Asset);
         INFO(LogAsset, "--- Phase 1: Saving Scene ---");
         
         EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
@@ -37,7 +37,7 @@ TEST_CASE("Scene Serialization via AssetManager", "[scene]") {
     }
 
     {
-        EngineContext::init(1 << EngineContext::StartMode::Asset_);
+        EngineContext::init(1 << EngineContext::StartMode::Asset);
         INFO(LogAsset, "--- Phase 2: Loading Scene ---");
         EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
 
@@ -73,7 +73,7 @@ TEST_CASE("Scene Dependency Integration", "[scene]") {
     
     // Phase 1: Save Scene with Dependencies
     {
-        EngineContext::init(1 << EngineContext::StartMode::Asset_);
+        EngineContext::init(1 << EngineContext::StartMode::Asset);
         INFO(LogAsset, "--- Phase 1: Saving Scene ---");
         EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
 
@@ -110,7 +110,7 @@ TEST_CASE("Scene Dependency Integration", "[scene]") {
 
     // Phase 2: Load Scene and Verify
     {
-        EngineContext::init(1 << EngineContext::StartMode::Asset_);
+        EngineContext::init(1 << EngineContext::StartMode::Asset);
         INFO(LogAsset, "--- Phase 2: Loading Scene ---");
         EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
 

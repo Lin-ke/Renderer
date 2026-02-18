@@ -2,6 +2,7 @@
 
 #include "engine/function/framework/component.h"
 #include "engine/core/math/math.h"
+#include "engine/core/reflect/math_reflect.h"
 #include "engine/function/render/data/render_structs.h"
 #include "engine/core/reflect/class_db.h"
 #include <cstdint>
@@ -50,7 +51,8 @@ public:
         Registry::add<PointLightComponent>("PointLightComponent")
             .member("color", &PointLightComponent::color_)
             .member("intensity", &PointLightComponent::intensity_)
-            // ...
+            .member("cast_shadow", &PointLightComponent::cast_shadow_)
+            .member("enable", &PointLightComponent::enable_)
             ;
     }
 

@@ -33,6 +33,7 @@ public:
 
     static void init(); // 实现请放在 .cpp
     static void shutdown();
+    static void set_min_log_level(int level); // 0: INFO, 1: WARNING, 2: ERROR, 3: FATAL
 
     // 这里接收的是 const char* (即全局变量的值)
     template<typename... Args>
@@ -82,7 +83,6 @@ public:
 #undef FATAL
 #endif
 
-// 现在的用法变成了 INFO(LogTagName, "Message")
 #define INFO(Tag, ...)   ::Log::info(__FILE__, __LINE__, ThreadPool::get_thread_id(), Tag, __VA_ARGS__)
 #define WARN(Tag, ...)   ::Log::warn(__FILE__, __LINE__, ThreadPool::get_thread_id(), Tag, __VA_ARGS__)
 #define ERR(Tag, ...)    ::Log::error(__FILE__, __LINE__, ThreadPool::get_thread_id(), Tag, __VA_ARGS__)

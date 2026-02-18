@@ -116,6 +116,10 @@ void Log::init() {
     initialized_.store(true);
 }
 
+void Log::set_min_log_level(int level) {
+    FLAGS_minloglevel = level;
+}
+
 // --- Log::shutdown 实现 ---
 void Log::shutdown() {
     if (!initialized_.load()) {

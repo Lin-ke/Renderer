@@ -43,6 +43,9 @@ public:
 
     // ImGui
     virtual void init_imgui(GLFWwindow* window) = 0;
+    virtual void imgui_new_frame() = 0;
+    virtual void imgui_render() = 0;
+    virtual void imgui_shutdown() = 0;
 
     // Basic Resources
     virtual RHIQueueRef get_queue(const RHIQueueInfo& info) = 0;

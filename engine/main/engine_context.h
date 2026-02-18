@@ -24,16 +24,16 @@ class EngineContext {
 public:
 
     enum StartMode{
-        Asset_ = 0,
-        Render_ = 1,
-        Window_ = 2,
-        Single_Thread_ = 4
+        Asset = 0,
+        Render = 1,
+        Window = 2,
+        SingleThread = 4
     };
 
     enum ThreadRole {
         Unknown = 0,
         MainGame,
-        Render,
+        Renderer,
         Worker
     };
 
@@ -48,7 +48,7 @@ public:
     static ThreadPool* thread_pool();
     static RenderResourceManager* render_resource();
     static World* world();
-    static Window* window() { return instance_ ? instance_->window_.get() : nullptr; }
+    static class Window* window() { return instance_ ? instance_->window_.get() : nullptr; }
     static RenderSystem* render_system() { return instance_ ? instance_->render_system_.get() : nullptr; }
     static EngineContext& get() {
         return *instance_;
@@ -67,7 +67,7 @@ private:
 	EngineContext();
     std::bitset<8> mode_;
 	static std::unique_ptr<EngineContext> instance_;
-    std::unique_ptr<Window> window_;
+    std::unique_ptr<class Window> window_;
     std::unique_ptr<RenderSystem> render_system_;
     std::unique_ptr<AssetManager> asset_manager_;
     std::unique_ptr<RenderResourceManager> render_resource_manager_;

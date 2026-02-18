@@ -4,6 +4,8 @@
 #include <GLFW/glfw3.h>
 #include "engine/core/log/Log.h"
 
+#include <imgui.h>
+
 //####TODO####: Render Passes
 // #include "engine/function/render/render_pass/gpu_culling_pass.h"
 // ...
@@ -18,6 +20,7 @@ void RenderSystem::init_glfw() {
     }
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+    glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE); // Hide window for tests/headless
     window_ = glfwCreateWindow(WINDOW_EXTENT.width, WINDOW_EXTENT.height, "Toy Renderer", nullptr, nullptr);
     if (!window_) {
         ERR(LogRenderSystem, "Failed to create GLFW window");
@@ -49,12 +52,19 @@ void RenderSystem::init(void* window_handle) {
 
     // Initialize RHI backend first so it's available for managers
     init_base_resource();
+    
+    // Initialize ImGui
+    if (backend_ && window_) {
+        backend_->init_imgui(window_);
+    }
 
     light_manager_ = std::make_shared<RenderLightManager>();
     mesh_manager_ = std::make_shared<RenderMeshManager>();
+    gizmo_manager_ = std::make_shared<GizmoManager>();
     
     light_manager_->init();
     mesh_manager_->init();
+    gizmo_manager_->init();
 
     init_passes();
 }
@@ -105,36 +115,117 @@ bool RenderSystem::tick(const RenderPacket& packet) {
         return false;
     }
 
+    // Use frame_index from packet for multi-threaded safety
+    uint32_t frame_index = packet.frame_index;
+    
+    // Update active camera in mesh manager if provided
+    if (packet.active_camera) {
+        mesh_manager_->set_active_camera(packet.active_camera);
+    }
+    
+    // Tick managers (collect render data)
     mesh_manager_->tick();
-    light_manager_->tick();
+    light_manager_->tick(frame_index);
     update_global_setting();
 
-    // auto& resource = per_frame_common_resources_[EngineContext::current_frame_index()];
-    // resource.fence->wait();
+    // Execute rendering using frame_index from packet for thread safety
+    auto& resource = per_frame_common_resources_[frame_index];
+    resource.fence->wait();
     
-    // RHITextureRef swapchain_texture = swapchain_->get_new_frame(nullptr, resource.start_semaphore);
-    // RHICommandContextRef command = resource.command;
+    RHITextureRef swapchain_texture = swapchain_->get_new_frame(nullptr, resource.start_semaphore);
+    RHICommandContextRef command = resource.command;
     
-    // command->begin_command();
-    // {
-        // ENGINE_TIME_SCOPE(RenderSystem::RDGBuild);
-        // RDGBuilder rdg_builder(command);
-        // for(auto& pass : passes_) { if(pass) pass->build(rdg_builder); }
-        // rdg_builder.execute();
-        // rdg_dependency_graph_ = rdg_builder.get_graph();
-    // }
-    // {
-        // ENGINE_TIME_SCOPE(RenderSystem::RecordCommands);
-        // command->end_command();
-        // command->execute(resource.fence, resource.start_semaphore, resource.finish_semaphore);
-    // }
-    // swapchain_->present(resource.finish_semaphore);
+    Extent2D extent = swapchain_->get_extent();
+    
+    command->begin_command();
+    {
+        // Create render pass that loads clear and stores
+        RHIRenderPassInfo rp_info = {};
+        rp_info.extent = extent;
+        
+        // Create texture view for back buffer
+        RHITextureViewInfo view_info = {};
+        view_info.texture = swapchain_texture;
+        RHITextureViewRef back_buffer_view = backend_->create_texture_view(view_info);
+        
+        rp_info.color_attachments[0].texture_view = back_buffer_view;
+        rp_info.color_attachments[0].load_op = ATTACHMENT_LOAD_OP_CLEAR;
+        rp_info.color_attachments[0].clear_color = {0.1f, 0.2f, 0.4f, 1.0f};  // Dark blue background
+        rp_info.color_attachments[0].store_op = ATTACHMENT_STORE_OP_STORE;
+        
+        RHIRenderPassRef render_pass = backend_->create_render_pass(rp_info);
+        command->begin_render_pass(render_pass);
+        
+        // Render all mesh batches (bunny, etc.)
+        mesh_manager_->render_batches(command, back_buffer_view, extent);
+        
+        //####TODO####: Other render passes
+        // for(auto& pass : passes_) { if(pass) pass->build(...); }
+        
+        command->end_render_pass();
+        
+        // Cleanup render pass resources before UI
+        render_pass->destroy();
+        back_buffer_view->destroy();
+    }
+    command->end_command();
+    
+    // Render ImGui and Gizmo
+    // Note: This happens outside the main render pass
+    if (backend_) {
+        backend_->imgui_new_frame();
+        
+        // Build UI
+        if (show_ui_) {
+            ImGui::Begin("Renderer Debug", &show_ui_);
+            
+            // Wireframe toggle
+            if (ImGui::Checkbox("Wireframe", &wireframe_mode_)) {
+                if (mesh_manager_) {
+                    mesh_manager_->set_wireframe(wireframe_mode_);
+                }
+            }
+            
+            // Gizmo controls
+            if (gizmo_manager_) {
+                gizmo_manager_->draw_controls();
+            }
+            
+            // Frame info
+            ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 
+                        1000.0f / ImGui::GetIO().Framerate, 
+                        ImGui::GetIO().Framerate);
+            
+            ImGui::End();
+        }
+        
+        // Draw gizmo for selected entity
+        if (gizmo_manager_ && selected_entity_ && packet.active_camera) {
+            gizmo_manager_->draw_gizmo(packet.active_camera, selected_entity_, 
+                                       ImVec2(0, 0), ImVec2(extent.width, extent.height));
+        }
+        
+        // Render ImGui
+        backend_->imgui_render();
+    }
+    
+    command->execute(resource.fence, resource.start_semaphore, resource.finish_semaphore);
+    swapchain_->present(resource.finish_semaphore);
     
     return true;
 }
 
 void RenderSystem::destroy() {
+    // Shutdown ImGui
+    if (backend_) {
+        backend_->imgui_shutdown();
+    }
+    
     // Cleanup managers first (they may hold RHI resources)
+    if (gizmo_manager_) {
+        gizmo_manager_->shutdown();
+        gizmo_manager_.reset();
+    }
     if (mesh_manager_) {
         mesh_manager_->destroy();
         mesh_manager_.reset();
@@ -175,4 +266,14 @@ void RenderSystem::update_global_setting() {
     // ...
     EngineContext::render_resource()->set_render_global_setting(global_setting_);
     */
+}
+
+// render_ui_begin is now integrated into tick()
+void RenderSystem::render_ui_begin() {
+    // UI building is done directly in tick() after imgui_new_frame()
+}
+
+// render_ui is now integrated into tick()
+void RenderSystem::render_ui(RHICommandContextRef command) {
+    (void)command;
 }

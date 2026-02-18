@@ -135,6 +135,13 @@ namespace Math
 
     Quaternion to_quaternion(Vec3 euler_angle);
 
+    /**
+     * @brief Extract Euler angles from rotation matrix
+     * @param m 3x3 rotation matrix
+     * @return Euler angles in degrees (XYZ order)
+     */
+    Vec3 extract_euler_angles(const Mat3& m);
+
     Mat4 look_at(Vec3 eye, Vec3 center, Vec3 up);
 
     Mat4 perspective(float fovy, float aspect, float near_plane, float far_plane);

@@ -404,6 +404,9 @@ public:
     virtual void destroy() override final;
 
     virtual void init_imgui(GLFWwindow* window) override final;
+    virtual void imgui_new_frame() override final;
+    virtual void imgui_render() override final;
+    virtual void imgui_shutdown() override final;
 
     virtual RHIQueueRef get_queue(const RHIQueueInfo& info) override final;
     virtual RHISurfaceRef create_surface(GLFWwindow* window) override final;

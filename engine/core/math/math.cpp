@@ -180,4 +180,24 @@ namespace Math
         new_mat[10] = mat.row(2).z();
         new_mat[11] = mat.row(2).w();
     }
+
+    Vec3 extract_euler_angles(const Mat3& m)
+    {
+        Vec3 angles;
+        
+        // Extract rotation angles from rotation matrix (XYZ order)
+        // angles.x = pitch, angles.y = yaw, angles.z = roll
+        
+        // Pitch (rotation around X axis)
+        angles.x() = std::atan2(m(2, 1), m(2, 2)) * 180.0f / PI;
+        
+        // Yaw (rotation around Y axis)
+        float c2 = std::sqrt(m(0, 0) * m(0, 0) + m(1, 0) * m(1, 0));
+        angles.y() = std::atan2(-m(2, 0), c2) * 180.0f / PI;
+        
+        // Roll (rotation around Z axis)
+        angles.z() = std::atan2(m(1, 0), m(0, 0)) * 180.0f / PI;
+        
+        return angles;
+    }
 }

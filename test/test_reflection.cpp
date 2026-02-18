@@ -168,7 +168,7 @@ TEST_CASE("Prefab Modifications", "[prefab]") {
 
     // Phase 1: Create Prefab with HealthComponent
     {
-        EngineContext::init(1 << EngineContext::StartMode::Asset_);
+        EngineContext::init(1 << EngineContext::StartMode::Asset);
         EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
 
         auto prefab = std::make_shared<Prefab>();
@@ -184,7 +184,7 @@ TEST_CASE("Prefab Modifications", "[prefab]") {
 
     // Phase 2: Instantiate and Add Modification
     {
-        EngineContext::init(1 << EngineContext::StartMode::Asset_);
+        EngineContext::init(1 << EngineContext::StartMode::Asset);
         EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
 
         auto prefab = EngineContext::asset()->load_asset<Prefab>(prefab_uid);
@@ -207,7 +207,7 @@ TEST_CASE("Prefab Modifications", "[prefab]") {
 
     // Phase 3: Verify JSON Structure and Reload
     {
-        EngineContext::init(1 << EngineContext::StartMode::Asset_);
+        EngineContext::init(1 << EngineContext::StartMode::Asset);
         EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
 
         auto scene = EngineContext::asset()->load_asset<Scene>("/Game/scene_mod.asset");
@@ -241,7 +241,7 @@ TEST_CASE("Complex Prefab System", "[prefab]") {
 
     // Phase 1: Create and Save Two Prefabs
     {
-        EngineContext::init(1 << EngineContext::StartMode::Asset_);
+        EngineContext::init(1 << EngineContext::StartMode::Asset);
         INFO(LogAsset, "--- Phase 1: Create Prefabs ---");
         EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
 
@@ -276,7 +276,7 @@ TEST_CASE("Complex Prefab System", "[prefab]") {
 
     // Phase 2: Instantiate Multiple Copies and Distinct Prefabs
     {
-        EngineContext::init(1 << EngineContext::StartMode::Asset_);
+        EngineContext::init(1 << EngineContext::StartMode::Asset);
         INFO(LogAsset, "--- Phase 2: Instantiate Multiple ---");
         EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
 
@@ -328,7 +328,7 @@ TEST_CASE("Complex Prefab System", "[prefab]") {
 
     // Phase 3: Reload and Verify
     {
-        EngineContext::init(1 << EngineContext::StartMode::Asset_);
+        EngineContext::init(1 << EngineContext::StartMode::Asset);
         INFO(LogAsset, "--- Phase 3: Verify Reload ---");
         EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
 

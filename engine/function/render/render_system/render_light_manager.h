@@ -1,32 +1,32 @@
 #pragma once
 
+#include "engine/function/framework/component/directional_light_component.h"
+#include "engine/function/framework/component/point_light_component.h"
+#include "engine/function/framework/component/volume_light_component.h"
+#include "engine/configs.h"
+
+#include <array>
 #include <memory>
 #include <vector>
-
-//####TODO####: Include actual component headers when available
-// #include "engine/function/framework/component/directional_light_component.h"
-// #include "engine/function/framework/component/point_light_component.h"
-// #include "engine/function/framework/component/volume_light_component.h"
-
-//####TODO####: Remove these forward declarations when components are available
-class DirectionalLightComponent;
-class PointLightComponent;
-class VolumeLightComponent;
 
 class RenderLightManager {
 public:
     void init();
-    void tick();
+    void tick(uint32_t frame_index);
     void destroy() {}
 
-    std::shared_ptr<DirectionalLightComponent> get_directional_light() { return directional_light_; }
-    const std::vector<std::shared_ptr<PointLightComponent>>& get_point_shadow_lights() { return point_shadow_lights_; }
-    const std::vector<std::shared_ptr<VolumeLightComponent>>& get_volume_lights() { return volume_lights_; }
+    DirectionalLightComponent* get_directional_light(uint32_t frame_index);
+    const std::vector<PointLightComponent*>& get_point_shadow_lights(uint32_t frame_index);
+    const std::vector<VolumeLightComponent*>& get_volume_lights(uint32_t frame_index);
 
 private:
-    void prepare_lights();
+    void prepare_lights(uint32_t frame_index);
 
-    std::vector<std::shared_ptr<PointLightComponent>> point_shadow_lights_;
-    std::shared_ptr<DirectionalLightComponent> directional_light_;
-    std::vector<std::shared_ptr<VolumeLightComponent>> volume_lights_;
+    struct PerFrameLights {
+        std::vector<PointLightComponent*> point_shadow_lights;
+        DirectionalLightComponent* directional_light = nullptr;
+        std::vector<VolumeLightComponent*> volume_lights;
+    };
+    
+    std::array<PerFrameLights, FRAMES_IN_FLIGHT> perframe_lights_;
 };

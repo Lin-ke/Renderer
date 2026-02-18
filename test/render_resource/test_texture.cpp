@@ -16,10 +16,10 @@ TEST_CASE("Texture RHI Initialization", "[render_resource]") {
     std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
     
     std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Asset_);
-    mode.set(EngineContext::StartMode::Window_);
-    mode.set(EngineContext::StartMode::Render_);
-    mode.set(EngineContext::StartMode::Single_Thread_);
+    mode.set(EngineContext::StartMode::Asset);
+    mode.set(EngineContext::StartMode::Window);
+    mode.set(EngineContext::StartMode::Render);
+    mode.set(EngineContext::StartMode::SingleThread);
     EngineContext::init(mode);
     EngineContext::asset()->init(test_asset_dir);
 

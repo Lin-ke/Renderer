@@ -221,6 +221,7 @@ void MyComponent::update(float delta_time) {
 | **draw** | 所有绘制测试 | `xmake run utest "[draw]"` |
 | **triangle** | Triangle 绘制测试 (基础DX11、Cube) | `xmake run utest "[triangle]"` |
 | **bunny** | Bunny 模型渲染测试 | `xmake run utest "[bunny]"` |
+| **light** | 灯光系统测试 (LightManager, DirectionalLight, PointLight) | `xmake run utest "[light]"` |
 
 ### 测试目录结构
 ```
@@ -230,6 +231,7 @@ test/
 ├── test_reflection.cpp        # [reflection] 反射 + [prefab] Prefab
 ├── test_scene.cpp             # [scene] Scene 管理
 ├── test_thread_pool.cpp       # [thread_pool] 线程池
+├── test_light_manager.cpp     # [light] 灯光系统
 ├── draw/                      # 绘制测试
 │   ├── test_triangle.cpp      # [draw][triangle] DX11 Triangle + Cube
 │   └── test_bunny.cpp         # [draw][bunny] Bunny 渲染
@@ -247,7 +249,11 @@ test/
 #include "engine/main/engine_context.h"
 
 TEST_CASE("Test Description", "[tag]") {
-    EngineContext::init(1 << EngineContext::StartMode::Asset_);
+    std::bitset<8> mode;
+    mode.set(EngineContext::StartMode::Render);
+    mode.set(EngineContext::StartMode::Window);
+    mode.set(EngineContext::StartMode::SingleThread);
+    EngineContext::init(mode);
     
     // 测试代码...
     REQUIRE(condition == true);
@@ -255,6 +261,17 @@ TEST_CASE("Test Description", "[tag]") {
     EngineContext::exit();
 }
 ```
+
+### 测试资源清理规范
+
+使用 `EngineContext` 的测试必须遵循以下清理约定：
+
+| 测试类型 | 初始化 | 清理 | 说明 |
+|----------|--------|------|------|
+| 标准测试 | `EngineContext::init(mode)` | `EngineContext::exit()` | 所有资源自动清理 |
+| 底层 RHI 测试 | `glfwInit()` + `RHIBackend::init()` | `backend->destroy()` + `RHIBackback::reset_backend()` + `glfwDestroyWindow()` | 不调用 `glfwTerminate()`，保持与 EngineContext 一致 |
+
+**注意**：GLFW 的 `glfwTerminate()` 由进程退出时自动处理，测试代码中不单独调用，以支持多个测试连续运行。
 
 ---
 
@@ -266,9 +283,9 @@ TEST_CASE("Test Description", "[tag]") {
 ```cpp
 // 初始化引擎（使用StartMode位掩码）
 EngineContext::init(
-    (1 << EngineContext::Asset_) |
-    (1 << EngineContext::Render_) |
-    (1 << EngineContext::Window_)
+    (1 << EngineContext::Asset) |
+    (1 << EngineContext::Render) |
+    (1 << EngineContext::Window)
 );
 
 // 主循环

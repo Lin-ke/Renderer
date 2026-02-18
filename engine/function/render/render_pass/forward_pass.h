@@ -78,6 +78,12 @@ public:
      */
     bool is_ready() const { return initialized_ && pipeline_ != nullptr; }
 
+    /**
+     * @brief Set wireframe mode
+     * @param enable true for wireframe, false for solid
+     */
+    void set_wireframe(bool enable);
+
 private:
     void create_shaders();
     void create_pipeline();
@@ -85,8 +91,12 @@ private:
 
     ShaderRef vertex_shader_;
     ShaderRef fragment_shader_;
-    RHIGraphicsPipelineRef pipeline_;
+    RHIGraphicsPipelineRef pipeline_;        // Current active pipeline
+    RHIGraphicsPipelineRef solid_pipeline_;  // Solid fill pipeline
+    RHIGraphicsPipelineRef wireframe_pipeline_; // Wireframe pipeline
     RHIRootSignatureRef root_signature_;
+    
+    bool wireframe_mode_ = false;
 
     // Uniform buffers
     RHIBufferRef per_frame_buffer_;  // Slot b0: view, proj, camera_pos, lights

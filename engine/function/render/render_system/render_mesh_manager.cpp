@@ -71,19 +71,20 @@ void RenderMeshManager::unregister_mesh_renderer(MeshRendererComponent* componen
     }
 }
 
-void RenderMeshManager::prepare_mesh_pass() {
-    // Collect draw batches
-    std::vector<render::DrawBatch> batches;
-    collect_draw_batches(batches);
-    
-    if (batches.empty()) {
-        return;
+void RenderMeshManager::set_wireframe(bool enable) {
+    if (forward_pass_) {
+        forward_pass_->set_wireframe(enable);
     }
+}
+
+void RenderMeshManager::prepare_mesh_pass() {
+    // Collect draw batches for this frame
+    current_batches_.clear();
+    collect_draw_batches(current_batches_);
     
-    INFO(LogRenderMeshManager, "Rendering {} batches", batches.size());
-    
-    // Execute render pass
-    execute_render_pass(batches);
+    if (!current_batches_.empty()) {
+        // INFO(LogRenderMeshManager, "Collected {} draw batches", current_batches_.size());
+    }
 }
 
 void RenderMeshManager::collect_draw_batches(std::vector<render::DrawBatch>& batches) {
@@ -121,25 +122,18 @@ void RenderMeshManager::collect_draw_batches(std::vector<render::DrawBatch>& bat
     }
 }
 
-void RenderMeshManager::execute_render_pass(const std::vector<render::DrawBatch>& batches) {
-    auto render_system = EngineContext::render_system();
-    if (!render_system) return;
-    
-    auto backend = EngineContext::rhi();
-    if (!backend) return;
-    
-    auto swapchain = render_system->get_swapchain();
-    if (!swapchain) return;
-
-    if (!forward_pass_ || !forward_pass_->is_ready()) {
-        ERR(LogRenderMeshManager, "Forward pass not ready");
+void RenderMeshManager::render_batches(RHICommandContextRef context, RHITextureViewRef back_buffer_view, Extent2D extent) {
+    if (!context || !back_buffer_view) {
+        ERR(LogRenderMeshManager, "Invalid context or back buffer view");
         return;
     }
     
-    // Get swapchain image
-    RHITextureRef back_buffer = swapchain->get_new_frame(nullptr, nullptr);
-    if (!back_buffer) {
-        ERR(LogRenderMeshManager, "Failed to acquire swapchain image");
+    if (current_batches_.empty()) {
+        return;  // Nothing to render
+    }
+    
+    if (!forward_pass_ || !forward_pass_->is_ready()) {
+        ERR(LogRenderMeshManager, "Forward pass not ready");
         return;
     }
     
@@ -183,80 +177,12 @@ void RenderMeshManager::execute_render_pass(const std::vector<render::DrawBatch>
         light_intensity
     );
     
-    // Create command pool and context
-    RHICommandPoolInfo pool_info = {};
-    RHICommandPoolRef pool = backend->create_command_pool(pool_info);
-    if (!pool) {
-        ERR(LogRenderMeshManager, "Failed to create command pool");
-        return;
-    }
-    
-    RHICommandContextRef context = backend->create_command_context(pool);
-    if (!context) {
-        ERR(LogRenderMeshManager, "Failed to create command context");
-        return;
-    }
-    
-    // Create render pass
-    RHIRenderPassInfo rp_info = {};
-    rp_info.extent = swapchain->get_extent();
-    
-    // Create texture view for back buffer
-    RHITextureViewInfo view_info = {};
-    view_info.texture = back_buffer;
-    RHITextureViewRef back_buffer_view = backend->create_texture_view(view_info);
-    if (!back_buffer_view) {
-        ERR(LogRenderMeshManager, "Failed to create back buffer view");
-        return;
-    }
-    
-    rp_info.color_attachments[0].texture_view = back_buffer_view;
-    rp_info.color_attachments[0].load_op = ATTACHMENT_LOAD_OP_CLEAR;
-    rp_info.color_attachments[0].store_op = ATTACHMENT_STORE_OP_STORE;
-    rp_info.color_attachments[0].clear_color = { 0.2f, 0.2f, 0.2f, 1.0f }; // Dark gray
-    
-    RHIRenderPassRef render_pass = backend->create_render_pass(rp_info);
-    if (!render_pass) {
-        ERR(LogRenderMeshManager, "Failed to create render pass");
-        back_buffer_view->destroy();
-        return;
-    }
-    
-    // Begin recording
-    context->begin_command();
-    context->begin_render_pass(render_pass);
-    
     // Set viewport and scissor
-    Extent2D extent = swapchain->get_extent();
-    INFO(LogRenderMeshManager, "Viewport: {}x{}, scissor disabled", extent.width, extent.height);
     context->set_viewport({0, 0}, {extent.width, extent.height});
-    // Scissor disabled in pipeline, but set anyway
     context->set_scissor({0, 0}, {extent.width, extent.height});
     
     // Draw all batches using forward pass
-    for (const auto& batch : batches) {
+    for (const auto& batch : current_batches_) {
         forward_pass_->draw_batch(context, batch);
     }
-    
-    // End recording
-    context->end_render_pass();
-    context->end_command();
-    
-    // Execute and present
-    RHIFenceRef fence = backend->create_fence(false);
-    if (!fence) {
-        ERR(LogRenderMeshManager, "Failed to create fence");
-        return;
-    }
-    context->execute(fence, nullptr, nullptr);
-    fence->wait();
-    
-    swapchain->present(nullptr);
-    
-    // Cleanup
-    render_pass->destroy();
-    back_buffer_view->destroy();
-    context->destroy();
-    pool->destroy();
-    fence->destroy();
 }

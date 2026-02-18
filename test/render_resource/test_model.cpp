@@ -14,10 +14,10 @@ DEFINE_LOG_TAG(LogModelTest, "ModelTest");
 
 TEST_CASE("Model Loading with bunny.obj", "[render_resource]") {
     std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Asset_);
-    mode.set(EngineContext::StartMode::Window_);
-    mode.set(EngineContext::StartMode::Render_);
-    mode.set(EngineContext::StartMode::Single_Thread_);
+    mode.set(EngineContext::StartMode::Asset);
+    mode.set(EngineContext::StartMode::Window);
+    mode.set(EngineContext::StartMode::Render);
+    mode.set(EngineContext::StartMode::SingleThread);
     EngineContext::init(mode);
     
     std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
@@ -55,10 +55,10 @@ TEST_CASE("Model Loading with bunny.obj", "[render_resource]") {
 
 TEST_CASE("Model Multiple Submeshes", "[render_resource]") {
     std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Asset_);
-    mode.set(EngineContext::StartMode::Window_);
-    mode.set(EngineContext::StartMode::Render_);
-    mode.set(EngineContext::StartMode::Single_Thread_);
+    mode.set(EngineContext::StartMode::Asset);
+    mode.set(EngineContext::StartMode::Window);
+    mode.set(EngineContext::StartMode::Render);
+    mode.set(EngineContext::StartMode::SingleThread);
     EngineContext::init(mode);
     
     std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
@@ -117,10 +117,10 @@ TEST_CASE("Model Process Settings", "[render_resource]") {
     CHECK(setting1.load_materials == false);
     
     std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Asset_);
-    mode.set(EngineContext::StartMode::Window_);
-    mode.set(EngineContext::StartMode::Render_);
-    mode.set(EngineContext::StartMode::Single_Thread_);
+    mode.set(EngineContext::StartMode::Asset);
+    mode.set(EngineContext::StartMode::Window);
+    mode.set(EngineContext::StartMode::Render);
+    mode.set(EngineContext::StartMode::SingleThread);
     EngineContext::init(mode);
     
     std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";

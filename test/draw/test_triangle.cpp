@@ -46,6 +46,7 @@ TEST_CASE("DX11 Swapchain and Fence - Basic Triangle", "[draw][triangle]") {
     // Initialize GLFW
     REQUIRE(glfwInit() == GLFW_TRUE);
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
     GLFWwindow* window = glfwCreateWindow(800, 600, "DX11 Test", nullptr, nullptr);
     REQUIRE(window != nullptr);
 
@@ -238,6 +239,7 @@ TEST_CASE("DX11 Swapchain and Fence - Basic Triangle", "[draw][triangle]") {
     swapchain->destroy();
     backend->destroy();
     glfwDestroyWindow(window);
+    RHIBackend::reset_backend();
 }
 
 struct PerFrameData {
@@ -261,9 +263,9 @@ struct PerLightData {
 TEST_CASE("Draw Cube Blinn-Phong", "[draw][triangle]") {
     // 1. Init Engine
     std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Render_);
-    mode.set(EngineContext::StartMode::Window_);
-    mode.set(EngineContext::StartMode::Single_Thread_);
+    mode.set(EngineContext::StartMode::Render);
+    mode.set(EngineContext::StartMode::Window);
+    mode.set(EngineContext::StartMode::SingleThread);
     EngineContext::init(mode);
 
     auto* rhi = EngineContext::render_system()->get_rhi().get();
@@ -431,4 +433,6 @@ TEST_CASE("Draw Cube Blinn-Phong", "[draw][triangle]") {
         
         frames++;
     }
+    
+    EngineContext::exit();
 }

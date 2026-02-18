@@ -100,8 +100,8 @@ TEST_CASE("Create and Save Bunny Scene", "[draw][bunny]") {
     INFO(LogBunnyRender, "Starting Create and Save Bunny Scene test...");
     
     std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Asset_);
-    mode.set(EngineContext::StartMode::Single_Thread_);
+    mode.set(EngineContext::StartMode::Asset);
+    mode.set(EngineContext::StartMode::SingleThread);
     
     EngineContext::init(mode);
     
@@ -188,10 +188,10 @@ TEST_CASE("Load and Render Bunny Scene", "[draw][bunny]") {
     }
     
     std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Asset_);
-    mode.set(EngineContext::StartMode::Window_);
-    mode.set(EngineContext::StartMode::Render_);
-    mode.set(EngineContext::StartMode::Single_Thread_);
+    mode.set(EngineContext::StartMode::Asset);
+    mode.set(EngineContext::StartMode::Window);
+    mode.set(EngineContext::StartMode::Render);
+    mode.set(EngineContext::StartMode::SingleThread);
     
     EngineContext::init(mode);
     EngineContext::asset()->init(test_asset_dir);
@@ -341,10 +341,8 @@ TEST_CASE("Camera Movement", "[draw][bunny]") {
     INFO(LogBunnyRender, "Starting camera movement test...");
     
     std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Asset_);
-    mode.set(EngineContext::StartMode::Window_);
-    mode.set(EngineContext::StartMode::Render_);
-    mode.set(EngineContext::StartMode::Single_Thread_);
+    mode.set(EngineContext::StartMode::Asset);
+    mode.set(EngineContext::StartMode::SingleThread);
     
     EngineContext::init(mode);
     
