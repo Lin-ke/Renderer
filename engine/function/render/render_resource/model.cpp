@@ -3,6 +3,7 @@
 #include "engine/core/log/Log.h"
 #include "engine/function/render/data/render_structs.h"
 #include "engine/function/render/rhi/rhi_structs.h"
+#include "engine/function/asset/asset_manager.h"
 
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
@@ -43,6 +44,52 @@ void Mesh::merge(const Mesh& other) {
 Model::Model(std::string path, ModelProcessSetting process_setting)
     : path_(path), process_setting_(process_setting) {
     on_load_asset();
+}
+
+std::shared_ptr<Model> Model::Load(const std::string& path, const ModelProcessSetting& process_setting) {
+    // Get absolute path for consistent caching
+    std::filesystem::path fs_path(path);
+    if (!fs_path.is_absolute()) {
+        fs_path = std::filesystem::path(ENGINE_PATH) / path;
+    }
+    std::string abs_path = fs_path.string();
+    
+    // Try to get from AssetManager if available
+    auto asset_manager = EngineContext::asset();
+    if (asset_manager) {
+        // Get or create UID from path
+        UID model_uid = asset_manager->get_uid_by_path(abs_path);
+        
+        // Check if already loaded
+        auto existing = asset_manager->get_asset_immediate(model_uid);
+        if (existing) {
+            auto model = std::dynamic_pointer_cast<Model>(existing);
+            if (model) {
+                INFO(LogModel, "Model cache hit: {}", abs_path);
+                return model;
+            }
+        }
+    }
+    
+    // Create new model instance
+    INFO(LogModel, "Loading model: {}", abs_path);
+    auto model = std::shared_ptr<Model>(new Model(abs_path, process_setting));
+    
+    // Register with AssetManager if available
+    if (asset_manager) {
+        asset_manager->register_asset(model, abs_path);
+    }
+    
+    return model;
+}
+
+std::shared_ptr<Model> Model::Load(const std::string& path, bool smooth_normal,
+                                    bool load_materials, bool flip_uv) {
+    ModelProcessSetting setting;
+    setting.smooth_normal = smooth_normal;
+    setting.load_materials = load_materials;
+    setting.flip_uv = flip_uv;
+    return Load(path, setting);
 }
 
 Model::~Model() {

@@ -84,6 +84,7 @@ public:
     bool is_ready() const { return initialized_ && pipeline_ != nullptr; }
 
     bool is_initialized() const { return initialized_; }
+    
     RHIGraphicsPipelineRef get_pipeline() const { return pipeline_; }
     
     std::string_view get_name() const override { return "PBRForwardPass"; }

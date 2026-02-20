@@ -657,7 +657,12 @@ void PBRForwardPass::clear_point_lights() {
 }
 
 void PBRForwardPass::draw_batch(RHICommandContextRef cmd, const DrawBatch& batch) {
-    if (!initialized_ || !pipeline_ || !cmd) return;
+    std::cout << "[PBRForwardPass] draw_batch called" << std::endl;
+    if (!initialized_ || !pipeline_ || !cmd) {
+        std::cout << "[PBRForwardPass] Early return: initialized=" << initialized_ 
+                  << ", pipeline=" << (pipeline_ != nullptr) << ", cmd=" << (cmd != nullptr) << std::endl;
+        return;
+    }
 
     // Update and bind per-frame buffer
     if (per_frame_buffer_) {
@@ -750,9 +755,14 @@ void PBRForwardPass::draw_batch(RHICommandContextRef cmd, const DrawBatch& batch
     }
 
     // Draw
+    std::cout << "[PBRForwardPass] About to draw: index_buffer=" << (batch.index_buffer != nullptr) 
+              << ", index_count=" << batch.index_count << std::endl;
     if (batch.index_buffer) {
         cmd->bind_index_buffer(batch.index_buffer, 0);
         cmd->draw_indexed(batch.index_count, 1, batch.index_offset, 0, 0);
+        std::cout << "[PBRForwardPass] Draw call executed" << std::endl;
+    } else {
+        std::cout << "[PBRForwardPass] No index buffer, skipping draw" << std::endl;
     }
 }
 

@@ -140,6 +140,9 @@ struct SubmeshData {
 
 /**
  * @brief Model asset class representing a 3D model with multiple submeshes
+ * 
+ * Model is managed by AssetManager for caching and lifecycle management.
+ * Use Model::Load() to load/create models with automatic caching.
  */
 class Model : public Asset {
 public:
@@ -157,6 +160,29 @@ public:
 
     virtual void on_load_asset() override;
     virtual void on_save_asset() override;
+    
+    /**
+     * @brief Load a model from file path with caching via AssetManager
+     * @param path Path to the model file (relative to ENGINE_PATH or absolute)
+     * @param process_setting Processing settings for import
+     * @return Shared pointer to the loaded model (cached if already loaded)
+     */
+    static std::shared_ptr<Model> Load(const std::string& path, 
+                                        const ModelProcessSetting& process_setting = ModelProcessSetting());
+    
+    /**
+     * @brief Load a model from file path with caching via AssetManager
+     * Convenience overload that takes path and individual settings
+     * @param path Path to the model file
+     * @param smooth_normal Generate smooth normals
+     * @param load_materials Load materials from file
+     * @param flip_uv Flip UV coordinates
+     * @return Shared pointer to the loaded model
+     */
+    static std::shared_ptr<Model> Load(const std::string& path, 
+                                        bool smooth_normal = true,
+                                        bool load_materials = false,
+                                        bool flip_uv = false);
 
     /**
      * @brief Get the number of submeshes
