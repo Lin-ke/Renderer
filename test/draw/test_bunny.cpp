@@ -97,8 +97,6 @@ std::shared_ptr<Scene> load_scene_from_file(const std::string& filepath) {
 }
 
 TEST_CASE("Create and Save Bunny Scene", "[draw][bunny]") {
-    INFO(LogBunnyRender, "Starting Create and Save Bunny Scene test...");
-    
     std::bitset<8> mode;
     mode.set(EngineContext::StartMode::Asset);
     mode.set(EngineContext::StartMode::SingleThread);
@@ -110,12 +108,9 @@ TEST_CASE("Create and Save Bunny Scene", "[draw][bunny]") {
     
     REQUIRE(EngineContext::world() != nullptr);
     
-    INFO(LogBunnyRender, "Engine initialized successfully");
-    
     auto scene = std::make_shared<Scene>();
     
     // Create camera entity
-    INFO(LogBunnyRender, "Creating camera...");
     auto* camera_ent = scene->create_entity();
     REQUIRE(camera_ent != nullptr);
     
@@ -129,7 +124,6 @@ TEST_CASE("Create and Save Bunny Scene", "[draw][bunny]") {
     cam_comp->set_fov(60.0f);
     
     // Create directional light entity
-    INFO(LogBunnyRender, "Creating directional light...");
     auto* light_ent = scene->create_entity();
     REQUIRE(light_ent != nullptr);
     
@@ -144,10 +138,7 @@ TEST_CASE("Create and Save Bunny Scene", "[draw][bunny]") {
     light_comp->set_intensity(1.5f);
     light_comp->set_enable(true);
     
-    INFO(LogBunnyRender, "Directional light created with intensity {}", light_comp->get_intensity());
-    
     // Create bunny entity placeholder
-    INFO(LogBunnyRender, "Creating bunny entity placeholder...");
     auto* bunny_ent = scene->create_entity();
     REQUIRE(bunny_ent != nullptr);
     
@@ -161,8 +152,6 @@ TEST_CASE("Create and Save Bunny Scene", "[draw][bunny]") {
     bool saved = save_scene_to_file(scene_path, scene);
     REQUIRE(saved);
     
-    INFO(LogBunnyRender, "Scene saved successfully to {}", scene_path);
-    
     // Verify file exists
     std::ifstream check_file(scene_path);
     REQUIRE(check_file.good());
@@ -172,8 +161,6 @@ TEST_CASE("Create and Save Bunny Scene", "[draw][bunny]") {
 }
 
 TEST_CASE("Load and Render Bunny Scene", "[draw][bunny]") {
-    INFO(LogBunnyRender, "Starting Load and Render Bunny Scene test...");
-    
     std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
     std::string scene_path = test_asset_dir + "/" + SCENE_FILE_NAME;
     
@@ -200,13 +187,9 @@ TEST_CASE("Load and Render Bunny Scene", "[draw][bunny]") {
     REQUIRE(EngineContext::render_system() != nullptr);
     REQUIRE(EngineContext::world() != nullptr);
     
-    INFO(LogBunnyRender, "Engine initialized successfully");
-    
     auto scene = load_scene_from_file(scene_path);
     REQUIRE(scene != nullptr);
     REQUIRE(!scene->entities_.empty());
-    
-    INFO(LogBunnyRender, "Scene loaded with {} entities", scene->entities_.size());
     
     CameraComponent* cam_comp = nullptr;
     Entity* bunny_ent = nullptr;
@@ -214,10 +197,7 @@ TEST_CASE("Load and Render Bunny Scene", "[draw][bunny]") {
         if (entity) {
             if (!cam_comp) {
                 cam_comp = entity->get_component<CameraComponent>();
-                if (cam_comp) {
-                    cam_comp->on_init();
-                    INFO(LogBunnyRender, "Camera found and initialized");
-                }
+                if (cam_comp) cam_comp->on_init();
             }
             if (entity->get_component<TransformComponent>() && 
                 !entity->get_component<CameraComponent>() &&
@@ -230,7 +210,6 @@ TEST_CASE("Load and Render Bunny Scene", "[draw][bunny]") {
     REQUIRE(bunny_ent != nullptr);
     
     // Add MeshRendererComponent to bunny entity and load model
-    INFO(LogBunnyRender, "Loading bunny model...");
     auto* bunny_mesh = bunny_ent->add_component<MeshRendererComponent>();
     REQUIRE(bunny_mesh != nullptr);
     
@@ -246,25 +225,19 @@ TEST_CASE("Load and Render Bunny Scene", "[draw][bunny]") {
     bunny_mesh->set_model(bunny_model);
     bunny_mesh->on_init();
     
-    INFO(LogBunnyRender, "Bunny model loaded: {} vertices, {} indices",
+    INFO(LogBunnyRender, "Bunny loaded: {} vertices, {} indices",
          bunny_model->submesh(0).vertex_buffer->vertex_num(),
          bunny_model->submesh(0).index_buffer->index_num());
     
     // Initialize lights
     for (auto& entity : scene->entities_) {
         if (!entity) continue;
-        
         auto* light = entity->get_component<DirectionalLightComponent>();
-        if (light) {
-            light->on_init();
-            INFO(LogBunnyRender, "DirectionalLight initialized");
-        }
+        if (light) light->on_init();
     }
     
     EngineContext::world()->set_active_scene(scene);
     EngineContext::render_system()->get_mesh_manager()->set_active_camera(cam_comp);
-    
-    INFO(LogBunnyRender, "Scene setup complete, starting render loop...");
     
     void* window_handle = EngineContext::render_system()->get_window_handle();
     REQUIRE(window_handle != nullptr);
@@ -277,28 +250,11 @@ TEST_CASE("Load and Render Bunny Scene", "[draw][bunny]") {
     std::vector<uint8_t> screenshot_data(screenshot_width * screenshot_height * 4);
     bool screenshot_taken = false;
     
-    // Get mesh manager for debug info
-    auto mesh_manager = EngineContext::render_system()->get_mesh_manager();
-    auto forward_pass = mesh_manager->get_forward_pass();
-    INFO(LogBunnyRender, "Forward pass ready: {}", forward_pass->is_ready());
-    
     while (frames < 60) {
         Input::get_instance().tick();
         EngineContext::world()->tick(0.016f);
         
-        // Debug: log batch count on first frame
-        if (frames == 0) {
-            std::vector<render::DrawBatch> batches;
-            mesh_manager->collect_draw_batches(batches);
-            INFO(LogBunnyRender, "First frame draw batches: {}", batches.size());
-            for (size_t i = 0; i < batches.size(); ++i) {
-                INFO(LogBunnyRender, "Batch {}: index_count={}, has_vb={}, has_nb={}, has_ib={}", 
-                     i, batches[i].index_count,
-                     batches[i].vertex_buffer != nullptr,
-                     batches[i].normal_buffer != nullptr,
-                     batches[i].index_buffer != nullptr);
-            }
-        }
+
         
         RenderPacket packet;
         packet.active_camera = cam_comp;
@@ -332,9 +288,6 @@ TEST_CASE("Load and Render Bunny Scene", "[draw][bunny]") {
                     
                     if (context->read_texture(back_buffer, screenshot_data.data(), screenshot_data.size())) {
                         screenshot_taken = true;
-                        INFO(LogBunnyRender, "Screenshot captured on frame {}", frames);
-                    } else {
-                        WARN(LogBunnyRender, "Failed to read texture on frame {}", frames);
                     }
                 }
             }
@@ -345,8 +298,6 @@ TEST_CASE("Load and Render Bunny Scene", "[draw][bunny]") {
     
     auto end_time = std::chrono::steady_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
-    
-    INFO(LogBunnyRender, "Rendered {} frames in {} ms", frames, duration.count());
     
     CHECK(frames > 0);
     
@@ -369,7 +320,6 @@ TEST_CASE("Load and Render Bunny Scene", "[draw][bunny]") {
                 
                 if (context->read_texture(back_buffer, screenshot_data.data(), screenshot_data.size())) {
                     screenshot_taken = true;
-                    INFO(LogBunnyRender, "Screenshot captured at end of render loop");
                 }
             }
         }
@@ -378,12 +328,8 @@ TEST_CASE("Load and Render Bunny Scene", "[draw][bunny]") {
     if (screenshot_taken) {
         std::string screenshot_path = test_asset_dir + "/bunny_screenshot.png";
         if (save_screenshot_png(screenshot_path, screenshot_width, screenshot_height, screenshot_data)) {
-            INFO(LogBunnyRender, "Screenshot saved to: {}", screenshot_path);
-            
             float brightness = calculate_average_brightness(screenshot_data);
-            INFO(LogBunnyRender, "Screenshot average brightness: {}", brightness);
-            
-            // More lenient brightness check
+            INFO(LogBunnyRender, "Screenshot saved: {} (brightness: {:.1f})", screenshot_path, brightness);
             CHECK(brightness > 1.0f);
             CHECK(brightness < 255.0f);
         }
@@ -392,15 +338,10 @@ TEST_CASE("Load and Render Bunny Scene", "[draw][bunny]") {
     }
     
     EngineContext::world()->set_active_scene(nullptr);
-    
-    INFO(LogBunnyRender, "Bunny render test completed successfully");
-    
     EngineContext::exit();
 }
 
 TEST_CASE("Camera Movement", "[draw][bunny]") {
-    INFO(LogBunnyRender, "Starting camera movement test...");
-    
     std::bitset<8> mode;
     mode.set(EngineContext::StartMode::Asset);
     mode.set(EngineContext::StartMode::SingleThread);
@@ -417,14 +358,8 @@ TEST_CASE("Camera Movement", "[draw][bunny]") {
     cam_comp->on_init();
     
     Vec3 initial_pos = cam_trans->transform.get_position();
-    INFO(LogBunnyRender, "Initial camera position: ({}, {}, {})",
-         initial_pos.x(), initial_pos.y(), initial_pos.z());
-    
     cam_comp->on_update(16.0f);
-    
     Vec3 final_pos = cam_trans->transform.get_position();
-    INFO(LogBunnyRender, "Final camera position: ({}, {}, {})",
-         final_pos.x(), final_pos.y(), final_pos.z());
     
     REQUIRE(cam_comp->get_position() == final_pos);
     

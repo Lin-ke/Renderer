@@ -7,6 +7,8 @@
 #include <mutex>
 #include <ctime>
 #include <atomic>
+#include <sstream>
+#include <iomanip>
 #include "engine/core/utils/file_cleaner.h"
 
 // --- 全局静态变量 ---
@@ -22,6 +24,13 @@ void CustomLogSink::send(google::LogSeverity severity, const char* full_filename
                          const struct tm* tm_time,
                          const char* message, size_t message_len) {
     
+    // Debug: ensure sink is being called
+    static bool first_call = true;
+    if (first_call) {
+        first_call = false;
+        std::cerr << "[LogSink] First call received" << std::endl;
+    }
+    
     std::lock_guard<std::mutex> lock(g_log_mutex);
 
     auto now = std::chrono::system_clock::now();
@@ -32,8 +41,12 @@ void CustomLogSink::send(google::LogSeverity severity, const char* full_filename
     localtime_s(&local_tm, &t);
 
     // Format: [h-m-s-ms] 
-    std::string time_str = std::format("[{:02}-{:02}-{:02}-{:03}]", 
-        local_tm.tm_hour, local_tm.tm_min, local_tm.tm_sec, ms.count());
+    std::ostringstream time_oss;
+    time_oss << "[" << std::setw(2) << std::setfill('0') << local_tm.tm_hour << "-"
+             << std::setw(2) << std::setfill('0') << local_tm.tm_min << "-"
+             << std::setw(2) << std::setfill('0') << local_tm.tm_sec << "-"
+             << std::setw(3) << std::setfill('0') << ms.count() << "]";
+    std::string time_str = time_oss.str();
 
     std::string_view filename_view(full_filename);
     size_t last_slash = filename_view.find_last_of("/\\");
@@ -41,12 +54,22 @@ void CustomLogSink::send(google::LogSeverity severity, const char* full_filename
         filename_view = filename_view.substr(last_slash + 1);
     }
     
-    std::string formatted_message = std::format("{} [{}:{}] {}",
-        time_str,
-        filename_view,
-        line,
-        std::string_view(message, message_len)
-    );
+    // Clean message to avoid Unicode issues in console output
+    std::string clean_message;
+    for (size_t i = 0; i < message_len; i++) {
+        unsigned char c = static_cast<unsigned char>(message[i]);
+        if (c >= 32 && c < 127) {
+            clean_message += static_cast<char>(c);
+        }
+        // Skip non-ASCII characters
+    }
+    if (clean_message.empty() && message_len > 0) {
+        clean_message = "<unicode>";
+    }
+    
+    std::ostringstream msg_oss;
+    msg_oss << time_str << " [" << filename_view << ":" << line << "] " << clean_message;
+    std::string formatted_message = msg_oss.str();
 
     std::cout << formatted_message << std::endl;
     if (g_log_file_stream.is_open()) {
@@ -86,18 +109,24 @@ void Log::init() {
         std::tm local_tm;
         localtime_s(&local_tm, &t);
 
-        std::string time_str = std::format("{:04}-{:02}-{:02}-{:02}-{:02}-{:02}", 
-            local_tm.tm_year + 1900, local_tm.tm_mon + 1, local_tm.tm_mday, 
-            local_tm.tm_hour, local_tm.tm_min, local_tm.tm_sec);
+        std::ostringstream time_oss;
+        time_oss << std::setw(4) << std::setfill('0') << (local_tm.tm_year + 1900) << "-"
+                 << std::setw(2) << std::setfill('0') << (local_tm.tm_mon + 1) << "-"
+                 << std::setw(2) << std::setfill('0') << local_tm.tm_mday << "-"
+                 << std::setw(2) << std::setfill('0') << local_tm.tm_hour << "-"
+                 << std::setw(2) << std::setfill('0') << local_tm.tm_min << "-"
+                 << std::setw(2) << std::setfill('0') << local_tm.tm_sec;
+        std::string time_str = time_oss.str();
         
-        g_session_log_filename = (log_dir / std::format("renderer_{}.log", time_str)).string();
+        g_session_log_filename = (log_dir / ("renderer_" + time_str + ".log")).string();
     }
 
     g_log_file_stream.open(g_session_log_filename, std::ios::app);
     if (!g_is_glog_lib_initialized) {
-        FLAGS_logtostderr = 0;
-        FLAGS_alsologtostderr = 0;
+        FLAGS_logtostderr = 1;  // 临时设置为1，查看日志输出
+        FLAGS_alsologtostderr = 1;
         FLAGS_log_prefix = false;
+        FLAGS_minloglevel = 0;  // 记录 INFO 及以上级别 (0=INFO, 1=WARNING, 2=ERROR, 3=FATAL)
 
         // 【关键】清空默认日志路径，禁止 Glog 创建默认的 .INFO/.ERROR 文件
         // 这解决了 "File exists" 和文件碎片问题
@@ -112,6 +141,9 @@ void Log::init() {
     
     // 5. 挂载自定义 Sink
     google::AddLogSink(&g_custom_log_sink);
+    
+    // 测试日志
+    LOG(INFO) << "Log system initialized";
     
     initialized_.store(true);
 }

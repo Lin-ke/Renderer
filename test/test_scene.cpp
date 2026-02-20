@@ -19,8 +19,6 @@
 TEST_CASE("Scene Serialization via AssetManager", "[scene]") {
     {
         EngineContext::init(1 << EngineContext::StartMode::Asset);
-        INFO(LogAsset, "--- Phase 1: Saving Scene ---");
-        
         EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
 
         auto scene = std::make_shared<Scene>();
@@ -53,7 +51,6 @@ TEST_CASE("Scene Serialization via AssetManager", "[scene]") {
         REQUIRE(transform_comp != nullptr);
 
         auto pos = transform_comp->transform.get_position();
-        INFO(LogAsset, "Loaded Position:{}", cereal::to_json_string(pos));
         CHECK(pos.x() == (10.0f));
         CHECK(pos.y() == (20.0f));
         CHECK(pos.z() == (30.0f));
@@ -74,7 +71,6 @@ TEST_CASE("Scene Dependency Integration", "[scene]") {
     // Phase 1: Save Scene with Dependencies
     {
         EngineContext::init(1 << EngineContext::StartMode::Asset);
-        INFO(LogAsset, "--- Phase 1: Saving Scene ---");
         EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
 
         // 1. Create a dependency asset (Texture)
@@ -87,7 +83,6 @@ TEST_CASE("Scene Dependency Integration", "[scene]") {
         std::string texture_path = "/Game/texture.binasset";
         EngineContext::asset()->save_asset(texture, texture_path);
         texture_uid = texture->get_uid();
-        INFO(LogAsset, "Texture UID: {}", texture_uid.to_string());
 
         // 2. Create Scene
         auto scene = std::make_shared<Scene>();
@@ -103,7 +98,6 @@ TEST_CASE("Scene Dependency Integration", "[scene]") {
         std::string scene_path = "/Game/level1.asset";
         EngineContext::asset()->save_asset(scene, scene_path);
         scene_uid = scene->get_uid();
-        INFO(LogAsset, "Scene UID: {}", scene_uid.to_string());
 
         EngineContext::exit();
     }
@@ -111,7 +105,6 @@ TEST_CASE("Scene Dependency Integration", "[scene]") {
     // Phase 2: Load Scene and Verify
     {
         EngineContext::init(1 << EngineContext::StartMode::Asset);
-        INFO(LogAsset, "--- Phase 2: Loading Scene ---");
         EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
 
         std::string scene_path = "/Game/level1.asset";

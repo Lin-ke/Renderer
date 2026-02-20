@@ -282,8 +282,9 @@ void ForwardPass::create_pipeline() {
     pipe_info.rasterizer_state.cull_mode = CULL_MODE_NONE;  // Disable culling for testing
     pipe_info.rasterizer_state.depth_clip_mode = DEPTH_CLIP;
     
-    pipe_info.depth_stencil_state.enable_depth_test = false;
-    pipe_info.depth_stencil_state.enable_depth_write = false;
+    pipe_info.depth_stencil_state.enable_depth_test = true;
+    pipe_info.depth_stencil_state.enable_depth_write = true;
+    pipe_info.depth_stencil_state.depth_test = COMPARE_FUNCTION_LESS_EQUAL;
     
     // Render targets
     auto render_system = EngineContext::render_system();

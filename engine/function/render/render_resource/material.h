@@ -73,9 +73,9 @@ public:
     }
     
     // Shaders
-    void set_vertex_shader(ShaderRef shader) { shaders[0] = shader; }
-    void set_geometry_shader(ShaderRef shader) { shaders[1] = shader; }
-    void set_fragment_shader(ShaderRef shader) { shaders[2] = shader; }
+    void set_vertex_shader(ShaderRef shader) { shaders[0] = shader; update(); }
+    void set_geometry_shader(ShaderRef shader) { shaders[1] = shader; update(); }
+    void set_fragment_shader(ShaderRef shader) { shaders[2] = shader; update(); }
 
     // Getters
     inline Vec4 get_diffuse() const { return this->diffuse_; }

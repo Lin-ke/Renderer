@@ -16,7 +16,9 @@
 TEST_CASE("MeshRenderer Collection and ForwardPass", "[render_resource]") {
     std::bitset<8> mode;
     mode.set(EngineContext::StartMode::Asset);
+    mode.set(EngineContext::StartMode::Window);
     mode.set(EngineContext::StartMode::Render);
+    mode.set(EngineContext::StartMode::SingleThread);
     
     EngineContext::init(mode);
     

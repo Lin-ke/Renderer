@@ -24,8 +24,6 @@ DEFINE_LOG_TAG(LogRDGForward, "RDGForward");
  */
 
 TEST_CASE("RDG Forward Pass - Bunny Rendering", "[draw][rdg]") {
-    INFO(LogRDGForward, "Starting RDG forward pass test with bunny model...");
-    
     std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
     
     std::bitset<8> mode;
@@ -40,8 +38,6 @@ TEST_CASE("RDG Forward Pass - Bunny Rendering", "[draw][rdg]") {
     REQUIRE(EngineContext::rhi() != nullptr);
     REQUIRE(EngineContext::render_system() != nullptr);
     REQUIRE(EngineContext::world() != nullptr);
-    
-    INFO(LogRDGForward, "Engine initialized successfully");
     
     // Create scene
     auto scene = std::make_shared<Scene>();
@@ -88,15 +84,13 @@ TEST_CASE("RDG Forward Pass - Bunny Rendering", "[draw][rdg]") {
     bunny_mesh->set_model(bunny_model);
     bunny_mesh->on_init();
     
-    INFO(LogRDGForward, "Bunny model loaded: {} vertices, {} indices",
+    INFO(LogRDGForward, "Bunny loaded: {} vertices, {} indices",
          bunny_model->submesh(0).vertex_buffer->vertex_num(),
          bunny_model->submesh(0).index_buffer->index_num());
     
     // Set active scene
     EngineContext::world()->set_active_scene(scene);
     EngineContext::render_system()->get_mesh_manager()->set_active_camera(cam_comp);
-    
-    INFO(LogRDGForward, "Scene setup complete, starting render loop with RDG...");
     
     void* window_handle = EngineContext::render_system()->get_window_handle();
     REQUIRE(window_handle != nullptr);
@@ -124,20 +118,13 @@ TEST_CASE("RDG Forward Pass - Bunny Rendering", "[draw][rdg]") {
     auto end_time = std::chrono::steady_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
     
-    INFO(LogRDGForward, "Rendered {} frames in {} ms using RDG forward pass", frames, duration.count());
-    
     CHECK(frames > 0);
     
     EngineContext::world()->set_active_scene(nullptr);
-    
-    INFO(LogRDGForward, "RDG forward pass test completed successfully");
-    
     EngineContext::exit();
 }
 
 TEST_CASE("RDG Forward Pass - Wireframe Toggle", "[draw][rdg]") {
-    INFO(LogRDGForward, "Testing RDG forward pass wireframe toggle...");
-    
     std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
     
     std::bitset<8> mode;
@@ -199,7 +186,6 @@ TEST_CASE("RDG Forward Pass - Wireframe Toggle", "[draw][rdg]") {
         std::this_thread::sleep_for(std::chrono::milliseconds(16));
     }
     
-    INFO(LogRDGForward, "Rendered {} frames in wireframe mode", frames);
     CHECK(frames > 0);
     
     // Switch back to solid mode
@@ -222,7 +208,6 @@ TEST_CASE("RDG Forward Pass - Wireframe Toggle", "[draw][rdg]") {
         std::this_thread::sleep_for(std::chrono::milliseconds(16));
     }
     
-    INFO(LogRDGForward, "Rendered {} frames in solid mode", frames);
     CHECK(frames > 0);
     
     EngineContext::world()->set_active_scene(nullptr);

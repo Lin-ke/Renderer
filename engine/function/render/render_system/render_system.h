@@ -65,6 +65,7 @@ public:
     std::shared_ptr<RenderMeshManager> get_mesh_manager() { return mesh_manager_; }
     std::shared_ptr<RenderLightManager> get_light_manager() { return light_manager_; }
     std::shared_ptr<GizmoManager> get_gizmo_manager() { return gizmo_manager_; }
+    RHITextureViewRef get_depth_texture_view() { return depth_texture_view_; }
 
     // UI Methods
     void render_ui_begin();
@@ -94,6 +95,8 @@ private:
     RHISurfaceRef surface_;
     RHIQueueRef queue_;
     RHISwapchainRef swapchain_;
+    RHITextureRef depth_texture_;
+    RHITextureViewRef depth_texture_view_;
     RHICommandPoolRef pool_;
 
     struct PerFrameCommonResource {
@@ -117,6 +120,7 @@ private:
     void draw_scene_hierarchy(class Scene* scene);
     void draw_entity_node(class Entity* entity);
     void draw_inspector_panel();
+    void draw_buffer_debug();
     void draw_light_gizmo(class CameraComponent* camera, class Entity* entity, const Extent2D& extent);
 
     std::shared_ptr<RenderMeshManager> mesh_manager_;

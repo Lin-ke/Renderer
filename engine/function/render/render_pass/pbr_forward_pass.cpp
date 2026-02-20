@@ -581,10 +581,10 @@ void PBRForwardPass::create_pipeline() {
     pipe_info.rasterizer_state.fill_mode = FILL_MODE_SOLID;
     pipe_info.rasterizer_state.depth_clip_mode = DEPTH_CLIP;
     
-    // Disable depth testing - RDG render pass doesn't have depth attachment bound
-    // (This matches ForwardPass behavior; depth testing would require depth buffer in RDG)
-    pipe_info.depth_stencil_state.enable_depth_test = false;
-    pipe_info.depth_stencil_state.enable_depth_write = false;
+    // Enable depth testing
+    pipe_info.depth_stencil_state.enable_depth_test = true;
+    pipe_info.depth_stencil_state.enable_depth_write = true;
+    pipe_info.depth_stencil_state.depth_test = COMPARE_FUNCTION_LESS_EQUAL;
     
     // Render targets
     auto render_system = EngineContext::render_system();
@@ -824,11 +824,29 @@ void PBRForwardPass::build(RDGBuilder& builder) {
         .import(back_buffer, RESOURCE_STATE_COLOR_ATTACHMENT)
         .finish();
     
-    // Create render pass
-    builder.create_render_pass("PBRForwardPass_Main")
+    // Import depth texture if available
+    auto depth_texture_view = render_system->get_depth_texture_view();
+    RHITextureRef depth_texture = depth_texture_view ? depth_texture_view->get_info().texture : nullptr;
+    
+    // Create depth target if depth texture is available
+    std::optional<RDGTextureHandle> depth_target;
+    if (depth_texture) {
+        depth_target = builder.create_texture("PBRForwardPass_Depth")
+            .import(depth_texture, RESOURCE_STATE_DEPTH_STENCIL_ATTACHMENT)
+            .finish();
+    }
+    
+    // Create render pass builder
+    auto rp_builder = builder.create_render_pass("PBRForwardPass_Main")
         .color(0, color_target, ATTACHMENT_LOAD_OP_CLEAR, ATTACHMENT_STORE_OP_STORE, 
-               Color4{0.1f, 0.1f, 0.2f, 1.0f})
-        .execute([this, render_system](RDGPassContext context) {
+               Color4{0.1f, 0.1f, 0.2f, 1.0f});
+    
+    // Add depth attachment if available
+    if (depth_target.has_value()) {
+        rp_builder.depth_stencil(depth_target.value(), ATTACHMENT_LOAD_OP_CLEAR, ATTACHMENT_STORE_OP_DONT_CARE, 1.0f, 0);
+    }
+    
+    rp_builder.execute([this, render_system](RDGPassContext context) {
             auto mesh_manager = render_system->get_mesh_manager();
             if (!mesh_manager) return;
             

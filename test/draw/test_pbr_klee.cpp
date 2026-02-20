@@ -28,13 +28,13 @@
 
 /**
  * @file test/draw/test_pbr_klee.cpp
- * @brief PBR rendering test using material_ball model (Klee model is missing)
+ * @brief PBR rendering test using Klee model
  */
 
 DEFINE_LOG_TAG(LogPBRKlee, "PBRKlee");
 
-// Using material_ball.fbx for rendering test
-static const std::string PBR_MODEL_PATH = std::string(ENGINE_PATH) + "/assets/models/material_ball.fbx";
+// Using Klee model for rendering test
+static const std::string PBR_MODEL_PATH = "/Engine/models/Klee/klee.fbx";
 
 static bool save_screenshot_png_klee(const std::string& filename, uint32_t width, uint32_t height, const std::vector<uint8_t>& data) {
     int stride_in_bytes = width * 4;
@@ -59,9 +59,6 @@ static float calculate_average_brightness_klee(const std::vector<uint8_t>& data)
 }
 
 TEST_CASE("Load PBR FBX Model", "[draw][pbr]") {
-    INFO(LogPBRKlee, "Starting PBR FBX model load test...");
-    
-    // Note: Model loading requires Render mode because it creates GPU buffers
     std::bitset<8> mode;
     mode.set(EngineContext::StartMode::Asset);
     mode.set(EngineContext::StartMode::Window);
@@ -77,15 +74,6 @@ TEST_CASE("Load PBR FBX Model", "[draw][pbr]") {
     EngineContext::asset()->init(test_asset_dir);
     
     REQUIRE(EngineContext::world() != nullptr);
-    
-    INFO(LogPBRKlee, "Engine initialized successfully");
-    
-    // Check if model file exists
-    if (!std::filesystem::exists(PBR_MODEL_PATH)) {
-        WARN(LogPBRKlee, "PBR model not found at: {}. Skipping test.", PBR_MODEL_PATH);
-        EngineContext::exit();
-        return;
-    }
     
     // Load model with materials (using AssetManager for caching)
     INFO(LogPBRKlee, "Loading PBR model from: {}", PBR_MODEL_PATH);
@@ -96,38 +84,10 @@ TEST_CASE("Load PBR FBX Model", "[draw][pbr]") {
     
     INFO(LogPBRKlee, "PBR model loaded: {} submeshes", pbr_model->get_submesh_count());
     
-    for (size_t i = 0; i < pbr_model->get_submesh_count(); i++) {
-        const auto& submesh = pbr_model->submesh(i);
-        auto material = pbr_model->get_material(i);
-        INFO(LogPBRKlee, "Submesh {}: material = {}", i, material ? "yes" : "no");
-        
-        if (material) {
-            INFO(LogPBRKlee, "  - diffuse: ({}, {}, {}, {})", 
-                 material->get_diffuse().x(),
-                 material->get_diffuse().y(),
-                 material->get_diffuse().z(),
-                 material->get_diffuse().w());
-            INFO(LogPBRKlee, "  - roughness: {}, metallic: {}", 
-                 material->get_roughness(),
-                 material->get_metallic());
-        }
-    }
-    
     EngineContext::exit();
-    
-    INFO(LogPBRKlee, "PBR model load test completed");
 }
 
 TEST_CASE("Render PBR Model", "[draw][pbr]") {
-    INFO(LogPBRKlee, "Starting PBR render test...");
-    
-    // Check if model file exists first
-    if (!std::filesystem::exists(PBR_MODEL_PATH)) {
-        WARN(LogPBRKlee, "PBR model not found at: {}. Skipping test.", PBR_MODEL_PATH);
-        REQUIRE(true);
-        return;
-    }
-    
     std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
     
     std::bitset<8> mode;
@@ -143,52 +103,46 @@ TEST_CASE("Render PBR Model", "[draw][pbr]") {
     REQUIRE(EngineContext::render_system() != nullptr);
     REQUIRE(EngineContext::world() != nullptr);
     
-    // Disable PBR for debugging - use standard forward pass
-    EngineContext::render_system()->get_mesh_manager()->set_pbr_enabled(false);
-    
-    INFO(LogPBRKlee, "Engine initialized successfully with PBR enabled");
+    // Enable PBR for better quality
+    EngineContext::render_system()->get_mesh_manager()->set_pbr_enabled(true);
     
     // Create scene
     auto scene = std::make_shared<Scene>();
     
     // Create camera entity
-    INFO(LogPBRKlee, "Creating camera...");
     auto* camera_ent = scene->create_entity();
     REQUIRE(camera_ent != nullptr);
     
     auto* cam_trans = camera_ent->add_component<TransformComponent>();
     REQUIRE(cam_trans != nullptr);
-    // Place camera at -X, looking toward origin (+X direction)
-    // Default transform front is +X, so camera at (-3, 0, 0) looks toward origin
+    // Place camera at (-3, 0, 0) looking along +X axis toward origin
     cam_trans->transform.set_position({-3.0f, 0.0f, 0.0f});
-    cam_trans->transform.set_rotation({0.0f, 0.0f, 0.0f});
+    // Default rotation (0,0,0) looks along +X axis
+    // Model at origin will be visible
     
     auto* cam_comp = camera_ent->add_component<CameraComponent>();
     REQUIRE(cam_comp != nullptr);
     cam_comp->set_fov(60.0f);
+    cam_comp->set_far(100.0f);
     cam_comp->on_init();
     
     // Create directional light entity
-    INFO(LogPBRKlee, "Creating directional light...");
     auto* light_ent = scene->create_entity();
     REQUIRE(light_ent != nullptr);
     
     auto* light_trans = light_ent->add_component<TransformComponent>();
     REQUIRE(light_trans != nullptr);
-    light_trans->transform.set_position({5.0f, 10.0f, 5.0f});
+    light_trans->transform.set_position({100.0f, 200.0f, 100.0f});
     light_trans->transform.set_rotation({0.0f, -45.0f, -60.0f});
     
     auto* light_comp = light_ent->add_component<DirectionalLightComponent>();
     REQUIRE(light_comp != nullptr);
     light_comp->set_color({1.0f, 1.0f, 1.0f});
-    light_comp->set_intensity(2.0f);
+    light_comp->set_intensity(5.0f); // Increase intensity for PBR
     light_comp->set_enable(true);
     light_comp->on_init();
     
-    INFO(LogPBRKlee, "Directional light created with intensity {}", light_comp->get_intensity());
-    
     // Create model entity
-    INFO(LogPBRKlee, "Creating model entity...");
     auto* model_ent = scene->create_entity();
     REQUIRE(model_ent != nullptr);
     
@@ -196,7 +150,7 @@ TEST_CASE("Render PBR Model", "[draw][pbr]") {
     REQUIRE(model_trans != nullptr);
     model_trans->transform.set_position({0.0f, 0.0f, 0.0f});
     model_trans->transform.set_rotation({0.0f, 0.0f, 0.0f});
-    model_trans->transform.set_scale({0.5f, 0.5f, 0.5f});    // Material ball scale
+    model_trans->transform.set_scale({1.0f, 1.0f, 1.0f});
     
     // Load PBR model with AssetManager caching
     INFO(LogPBRKlee, "Loading PBR model from: {}", PBR_MODEL_PATH);
@@ -216,8 +170,6 @@ TEST_CASE("Render PBR Model", "[draw][pbr]") {
     // Set active scene
     EngineContext::world()->set_active_scene(scene);
     EngineContext::render_system()->get_mesh_manager()->set_active_camera(cam_comp);
-    
-    INFO(LogPBRKlee, "Scene setup complete, starting render loop...");
     
     int frames = 0;
     auto start_time = std::chrono::steady_clock::now();
@@ -263,7 +215,6 @@ TEST_CASE("Render PBR Model", "[draw][pbr]") {
                     
                     if (context->read_texture(back_buffer, screenshot_data.data(), screenshot_data.size())) {
                         screenshot_taken = true;
-                        INFO(LogPBRKlee, "Screenshot captured on frame {}", frames);
                     }
                 }
             }
@@ -275,19 +226,14 @@ TEST_CASE("Render PBR Model", "[draw][pbr]") {
     auto end_time = std::chrono::steady_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
     
-    INFO(LogPBRKlee, "Rendered {} frames in {} ms", frames, duration.count());
-    
     CHECK(frames > 0);
     
     // Save screenshot
     if (screenshot_taken) {
-        std::string screenshot_path = test_asset_dir + "/pbr_screenshot.png";
+        std::string screenshot_path = test_asset_dir + "/klee_pbr_screenshot.png";
         if (save_screenshot_png_klee(screenshot_path, screenshot_width, screenshot_height, screenshot_data)) {
-            INFO(LogPBRKlee, "Screenshot saved to: {}", screenshot_path);
-            
             float brightness = calculate_average_brightness_klee(screenshot_data);
-            INFO(LogPBRKlee, "Screenshot average brightness: {}", brightness);
-            
+            INFO(LogPBRKlee, "Screenshot saved: {} (brightness: {:.1f})", screenshot_path, brightness);
             CHECK(brightness > 0.0f);
         }
     }
@@ -297,8 +243,6 @@ TEST_CASE("Render PBR Model", "[draw][pbr]") {
 }
 
 TEST_CASE("PBR Forward Pass Basic", "[draw][pbr]") {
-    INFO(LogPBRKlee, "Starting PBR Forward Pass basic test...");
-    
     std::bitset<8> mode;
     mode.set(EngineContext::StartMode::Asset);
     mode.set(EngineContext::StartMode::Window);
@@ -318,8 +262,6 @@ TEST_CASE("PBR Forward Pass Basic", "[draw][pbr]") {
     
     REQUIRE(pbr_pass->is_initialized());
     
-    INFO(LogPBRKlee, "PBR Forward Pass initialized successfully");
-    
     // Test setting per-frame data
     Mat4 view = Mat4::Identity();
     Mat4 proj = Mat4::Identity();
@@ -329,15 +271,9 @@ TEST_CASE("PBR Forward Pass Basic", "[draw][pbr]") {
     
     pbr_pass->set_per_frame_data(view, proj, camera_pos, light_dir, light_color, 1.0f);
     
-    INFO(LogPBRKlee, "Per-frame data set successfully");
-    
     // Test point lights
     pbr_pass->add_point_light(Vec3(1.0f, 1.0f, 1.0f), Vec3(1.0f, 0.5f, 0.0f), 1.0f, 10.0f);
     pbr_pass->add_point_light(Vec3(-1.0f, 1.0f, -1.0f), Vec3(0.0f, 0.5f, 1.0f), 0.5f, 5.0f);
     
-    INFO(LogPBRKlee, "Point lights added successfully");
-    
     EngineContext::exit();
-    
-    INFO(LogPBRKlee, "PBR Forward Pass basic test completed");
 }

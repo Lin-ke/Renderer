@@ -97,6 +97,28 @@ void RenderSystem::init_base_resource() {
     sw_info.format = COLOR_FORMAT;
     
     swapchain_ = backend_->create_swapchain(sw_info);
+    
+    // Create depth buffer
+    RHITextureInfo depth_info = {};
+    depth_info.format = DEPTH_FORMAT;
+    depth_info.extent = { WINDOW_EXTENT.width, WINDOW_EXTENT.height, 1 };
+    depth_info.mip_levels = 1;
+    depth_info.array_layers = 1;
+    depth_info.memory_usage = MEMORY_USAGE_GPU_ONLY;
+    depth_info.type = RESOURCE_TYPE_DEPTH_STENCIL;
+    
+    depth_texture_ = backend_->create_texture(depth_info);
+    
+    RHITextureViewInfo depth_view_info = {};
+    depth_view_info.texture = depth_texture_;
+    depth_view_info.format = DEPTH_FORMAT;
+    depth_view_info.view_type = VIEW_TYPE_2D;
+    depth_view_info.subresource.aspect = TEXTURE_ASPECT_DEPTH;
+    depth_view_info.subresource.level_count = 1;
+    depth_view_info.subresource.layer_count = 1;
+    
+    depth_texture_view_ = backend_->create_texture_view(depth_view_info);
+    
     pool_ = backend_->create_command_pool({ queue_ });
 
     for(uint32_t i = 0; i < FRAMES_IN_FLIGHT; i++) {
@@ -156,6 +178,13 @@ bool RenderSystem::tick(const RenderPacket& packet) {
         rp_info.color_attachments[0].clear_color = {0.1f, 0.2f, 0.4f, 1.0f};  // Dark blue background
         rp_info.color_attachments[0].store_op = ATTACHMENT_STORE_OP_STORE;
         
+        // Depth attachment
+        rp_info.depth_stencil_attachment.texture_view = depth_texture_view_;
+        rp_info.depth_stencil_attachment.load_op = ATTACHMENT_LOAD_OP_CLEAR;
+        rp_info.depth_stencil_attachment.clear_depth = 1.0f;
+        rp_info.depth_stencil_attachment.clear_stencil = 0;
+        rp_info.depth_stencil_attachment.store_op = ATTACHMENT_STORE_OP_STORE;
+        
         RHIRenderPassRef render_pass = backend_->create_render_pass(rp_info);
         command->begin_render_pass(render_pass);
         
@@ -188,6 +217,9 @@ bool RenderSystem::tick(const RenderPacket& packet) {
             
             // Inspector Window for selected entity
             draw_inspector_panel();
+            
+            // Buffer Debug Window
+            draw_buffer_debug();
             
             ImGui::Begin("Renderer Debug", &show_ui_);
             
@@ -427,6 +459,33 @@ void RenderSystem::draw_inspector_panel() {
         ImGui::Text("Click an entity in Scene Hierarchy to inspect");
     }
     
+    ImGui::End();
+}
+
+// Draw Buffer Debug panel
+void RenderSystem::draw_buffer_debug() {
+    if (!show_ui_) return;
+
+    ImGui::Begin("Buffer Debug");
+
+    if (ImGui::CollapsingHeader("Render Targets", ImGuiTreeNodeFlags_DefaultOpen)) {
+        // Depth Buffer
+        if (depth_texture_view_) {
+            ImGui::Text("Depth Buffer");
+            void* tex_id = depth_texture_view_->raw_handle();
+            if (tex_id) {
+                // Calculate aspect ratio for display
+                float width = 320.0f;
+                float height = width * (float)WINDOW_EXTENT.height / (float)WINDOW_EXTENT.width;
+                // Note: Depth buffer visualization in ImGui might need a special shader 
+                // to make it visible (currently it might look all white or black depending on values)
+                ImGui::Image(tex_id, ImVec2(width, height));
+            } else {
+                ImGui::Text("Depth SRV not available");
+            }
+        }
+    }
+
     ImGui::End();
 }
 

@@ -14,6 +14,28 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <string>
+
+#ifdef _WIN32
+#include <Windows.h>
+#endif
+
+// Helper function to safely convert aiString to std::string, replacing non-ASCII chars
+static std::string safe_ai_string(const aiString& ai_str) {
+    const char* data = ai_str.C_Str();
+    std::string result;
+    result.reserve(ai_str.length);
+    for (size_t i = 0; i < ai_str.length; ++i) {
+        unsigned char c = static_cast<unsigned char>(data[i]);
+        // Keep ASCII printable chars, replace others with '?'
+        if (c >= 32 && c < 127) {
+            result += static_cast<char>(c);
+        } else {
+            result += '?';
+        }
+    }
+    return result;
+}
 
 DECLARE_LOG_TAG(LogModel);
 DEFINE_LOG_TAG(LogModel, "Model");
@@ -43,19 +65,37 @@ void Mesh::merge(const Mesh& other) {
 
 Model::Model(std::string path, ModelProcessSetting process_setting)
     : path_(path), process_setting_(process_setting) {
-    on_load_asset();
+    try {
+        on_load_asset();
+    } catch (const std::exception& e) {
+        (void)e;
+        ERR(LogModel, "Exception in Model constructor");
+        throw;
+    }
 }
 
 std::shared_ptr<Model> Model::Load(const std::string& path, const ModelProcessSetting& process_setting) {
     // Get absolute path for consistent caching
     std::filesystem::path fs_path(path);
-    if (!fs_path.is_absolute()) {
-        fs_path = std::filesystem::path(ENGINE_PATH) / path;
+    std::string abs_path;
+
+    auto asset_manager = EngineContext::asset();
+    if (asset_manager && asset_manager->is_virtual_path(path)) {
+        auto phys_path = asset_manager->get_physical_path(path);
+        if (phys_path) {
+            abs_path = phys_path->generic_string();
+        } else {
+            ERR(LogModel, "Failed to resolve virtual path: {}", path);
+            abs_path = path; // Fallback
+        }
+    } else {
+        if (!fs_path.is_absolute()) {
+            fs_path = std::filesystem::path(ENGINE_PATH) / path;
+        }
+        abs_path = fs_path.string();
     }
-    std::string abs_path = fs_path.string();
     
     // Try to get from AssetManager if available
-    auto asset_manager = EngineContext::asset();
     if (asset_manager) {
         // Get or create UID from path
         UID model_uid = asset_manager->get_uid_by_path(abs_path);
@@ -98,6 +138,7 @@ Model::~Model() {
 }
 
 void Model::on_load_asset() {
+    try {
     // Load cache if exists
     //####TODO#### Load cache binding
     
@@ -143,6 +184,11 @@ void Model::on_load_asset() {
         //####TODO#### Build BLAS
         INFO(LogModel, "BLAS generation not fully implemented");
     }
+    } catch (const std::exception& e) {
+        (void)e;
+        ERR(LogModel, "Exception in on_load_asset");
+        throw;
+    }
 }
 
 void Model::on_save_asset() {
@@ -156,6 +202,7 @@ void Model::on_save_asset() {
 }
 
 bool Model::load_from_file(std::string path) {
+    try {
     // Force smooth normal for virtual mesh generation (requires vertex deduplication)
     if (process_setting_.generate_virtual_mesh) {
         process_setting_.smooth_normal = true;
@@ -226,7 +273,7 @@ bool Model::load_from_file(std::string path) {
     // Process each mesh
     for (int i = 0; i < process_meshes.size(); i++) {
         aiMesh* mesh = process_meshes[i];
-        INFO(LogModel, "[{}/{}] Processing mesh [{}]", i, scene->mNumMeshes, mesh->mName.C_Str());
+        INFO(LogModel, "[{}/{}] Processing mesh [{}]", i, scene->mNumMeshes, safe_ai_string(mesh->mName));
         process_mesh(mesh, scene, i);
     }
     
@@ -243,6 +290,11 @@ bool Model::load_from_file(std::string path) {
     
     INFO(LogModel, "Model loaded successfully: {} vertices, {} indices", total_vertex_, total_index_);
     return true;
+    } catch (const std::exception& e) {
+        (void)e;
+        ERR(LogModel, "Exception in load_from_file");
+        throw;
+    }
 }
 
 void Model::process_node(aiNode* node, const aiScene* scene, std::vector<aiMesh*>& process_meshes) {
@@ -422,7 +474,7 @@ void Model::process_mesh(aiMesh* mesh, const aiScene* scene, int index) {
     }
     
     // Store mesh name
-    submesh->name = std::string(mesh->mName.C_Str());
+    submesh->name = safe_ai_string(mesh->mName);
     
     // Store mesh in submesh data
     submeshes_[index].mesh = submesh;
@@ -454,7 +506,7 @@ void Model::extract_bone_weights(Mesh* submesh, aiMesh* mesh, const aiScene* sce
     // Simple bone weight extraction (full implementation needs proper bone index management)
     for (uint32_t bone_index = 0; bone_index < mesh->mNumBones; ++bone_index) {
         aiBone* bone = mesh->mBones[bone_index];
-        std::string bone_name = bone->mName.C_Str();
+        std::string bone_name = safe_ai_string(bone->mName);
         
         // Process bone weights
         for (uint32_t weight_index = 0; weight_index < bone->mNumWeights; ++weight_index) {
@@ -473,31 +525,53 @@ void Model::extract_bone_weights(Mesh* submesh, aiMesh* mesh, const aiScene* sce
     }
 }
 
+// Helper to convert UTF-8 to wide string for Windows path
+static std::wstring utf8_to_wstring(const std::string& str) {
+    if (str.empty()) return std::wstring();
+    int size_needed = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, nullptr, 0);
+    std::wstring wstr(size_needed - 1, 0);
+    MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, &wstr[0], size_needed);
+    return wstr;
+}
+
 std::shared_ptr<Texture> Model::load_material_texture(aiMaterial* mat, aiTextureType type) {
     for (unsigned int i = 0; i < mat->GetTextureCount(type); i++) {
         aiString str;
         mat->GetTexture(type, i, &str);
         
-        // Construct full texture path
+        // Construct full texture path (handle UTF-8 properly on Windows)
         std::filesystem::path model_dir = std::filesystem::path(path_).parent_path();
-        std::string texture_path = (model_dir / str.C_Str()).string();
+        std::string texture_name = str.C_Str();
+        std::filesystem::path texture_path;
         
-        // Force PNG extension if requested (for unsupported texture formats)
+        // Use wide string constructor for Unicode support
+        std::wstring wtexture_name = utf8_to_wstring(texture_name);
+        texture_path = model_dir / wtexture_name;
+        
+        // Force PNG extension if requested
         if (process_setting_.force_png_texture) {
-            texture_path = std::filesystem::path(texture_path).replace_extension(".png").string();
+            texture_path.replace_extension(".png");
         }
+        
+        std::string texture_path_str = texture_path.string();
         
         // Check texture cache
-        auto iter = texture_map_.find(texture_path);
+        auto iter = texture_map_.find(texture_path_str);
         if (iter != texture_map_.end()) {
             return iter->second;
-        } else {
-            // Load new texture
-            INFO(LogModel, "Loading texture [{}] from FBX material...", texture_path);
-            auto texture = std::make_shared<Texture>(texture_path);
-            texture_map_[texture_path] = texture;
-            return texture;
         }
+        
+        // Check if file exists before creating texture
+        if (!std::filesystem::exists(texture_path)) {
+            WARN(LogModel, "Texture file not found: {}", texture_path_str);
+            continue;
+        }
+        
+        // Load new texture
+        INFO(LogModel, "Loading texture [{}] from FBX material...", texture_path_str);
+        auto texture = std::make_shared<Texture>(texture_path_str);
+        texture_map_[texture_path_str] = texture;
+        return texture;
     }
     return nullptr;
 }

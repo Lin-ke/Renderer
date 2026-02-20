@@ -19,8 +19,7 @@ MeshRendererComponent::~MeshRendererComponent() {
     release_object_ids();
 }
 
-void MeshRendererComponent::load_asset_deps() {
-    
+void MeshRendererComponent::on_init() {
     // Ensure materials vector matches submesh count
     if (model_) {
         uint32_t submesh_count = model_->get_submesh_count();
@@ -28,13 +27,7 @@ void MeshRendererComponent::load_asset_deps() {
             materials_.resize(submesh_count);
         }
     }
-}
-
-void MeshRendererComponent::save_asset_deps() {
-    //####TODO####: Serialize model and materials
-}
-
-void MeshRendererComponent::on_init() {
+    
     allocate_object_ids();
     
     // Initialize object infos

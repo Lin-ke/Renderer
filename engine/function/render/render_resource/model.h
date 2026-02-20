@@ -263,8 +263,10 @@ protected:
 
 protected:
     std::vector<SubmeshData> submeshes_;
-    std::vector<MaterialRef> materials_;
     std::shared_ptr<ModelCache> cache_;
+
+    // Asset dependency management - declares materials_ and materials_uid_
+    ASSET_DEPS((std::vector<MaterialRef>, materials_))
     
     std::string path_;
     ModelProcessSetting process_setting_;
@@ -283,8 +285,10 @@ private:
     
     template<class Archive>
     void serialize(Archive& ar) {
+        ar(cereal::base_class<Asset>(this));
         ar(cereal::make_nvp("path", path_));
         ar(cereal::make_nvp("process_setting", process_setting_));
+        serialize_deps(ar);
     }
     
     friend class cereal::access;

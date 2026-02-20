@@ -12,9 +12,12 @@
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 
+static int s_window_class_counter = 0;
+
 Window::Window(int width, int height, const std::wstring& title, bool visible) 
     : width_(width), height_(height), title_(title), visible_(visible), 
-      hinstance_(GetModuleHandle(nullptr)), class_name_(L"RendererWindowClass")
+      hinstance_(GetModuleHandle(nullptr)), 
+      class_name_(L"RendererWindowClass_" + std::to_wstring(++s_window_class_counter))
 {
     WNDCLASSEX wc = { 0 };
     wc.cbSize = sizeof(wc);

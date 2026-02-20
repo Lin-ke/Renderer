@@ -31,8 +31,6 @@ extern bool save_screenshot_png(const std::string& filename, uint32_t width, uin
 extern float calculate_average_brightness(const std::vector<uint8_t>& data);
 
 TEST_CASE("GBuffer Pass Initialization", "[pbr][deferred]") {
-    INFO(LogPbrDeferred, "Testing GBuffer Pass initialization...");
-    
     std::bitset<8> mode;
     mode.set(EngineContext::StartMode::Asset);
     mode.set(EngineContext::StartMode::Render);
@@ -46,14 +44,10 @@ TEST_CASE("GBuffer Pass Initialization", "[pbr][deferred]") {
     gbuffer_pass->init();
     
     REQUIRE(gbuffer_pass->is_ready());
-    INFO(LogPbrDeferred, "GBuffer Pass initialized successfully");
-    
     EngineContext::exit();
 }
 
 TEST_CASE("Deferred Lighting Pass Initialization", "[pbr][deferred]") {
-    INFO(LogPbrDeferred, "Testing Deferred Lighting Pass initialization...");
-    
     std::bitset<8> mode;
     mode.set(EngineContext::StartMode::Asset);
     mode.set(EngineContext::StartMode::Render);
@@ -67,14 +61,10 @@ TEST_CASE("Deferred Lighting Pass Initialization", "[pbr][deferred]") {
     lighting_pass->init();
     
     REQUIRE(lighting_pass->is_ready());
-    INFO(LogPbrDeferred, "Deferred Lighting Pass initialized successfully");
-    
     EngineContext::exit();
 }
 
 TEST_CASE("PBR Deferred Rendering - Material Ball", "[pbr][deferred]") {
-    INFO(LogPbrDeferred, "Starting PBR deferred rendering test with material ball...");
-    
     std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
     
     std::bitset<8> mode;
@@ -100,8 +90,6 @@ TEST_CASE("PBR Deferred Rendering - Material Ball", "[pbr][deferred]") {
     
     REQUIRE(gbuffer_pass->is_ready());
     REQUIRE(lighting_pass->is_ready());
-    
-    INFO(LogPbrDeferred, "PBR passes initialized");
     
     // Create scene
     auto scene = std::make_shared<Scene>();
@@ -129,7 +117,7 @@ TEST_CASE("PBR Deferred Rendering - Material Ball", "[pbr][deferred]") {
     light_comp->on_init();
     
     // Load material ball model
-    std::string model_path = std::string(ENGINE_PATH) + "/assets/models/material_ball.fbx";
+    std::string model_path = std::string(ENGINE_PATH) + "/assets/models/material_ball/material_ball.fbx";
     
     ModelProcessSetting setting;
     setting.smooth_normal = true;
@@ -148,7 +136,7 @@ TEST_CASE("PBR Deferred Rendering - Material Ball", "[pbr][deferred]") {
     mesh_comp->set_model(model);
     mesh_comp->on_init();
     
-    INFO(LogPbrDeferred, "Model loaded: {} submeshes", model->get_submesh_count());
+    INFO(LogPbrDeferred, "Loaded {} submeshes", model->get_submesh_count());
     
     // Set active scene and camera
     EngineContext::world()->set_active_scene(scene);
@@ -159,8 +147,6 @@ TEST_CASE("PBR Deferred Rendering - Material Ball", "[pbr][deferred]") {
     const uint32_t screenshot_height = 720;
     std::vector<uint8_t> screenshot_data(screenshot_width * screenshot_height * 4);
     bool screenshot_taken = false;
-    
-    INFO(LogPbrDeferred, "Starting render loop...");
     
     for (int frame = 0; frame < 60; frame++) {
         EngineContext::world()->tick(0.016f);
@@ -191,7 +177,6 @@ TEST_CASE("PBR Deferred Rendering - Material Ball", "[pbr][deferred]") {
                     
                     if (context->read_texture(back_buffer, screenshot_data.data(), screenshot_data.size())) {
                         screenshot_taken = true;
-                        INFO(LogPbrDeferred, "Screenshot captured");
                     }
                 }
             }
@@ -204,11 +189,8 @@ TEST_CASE("PBR Deferred Rendering - Material Ball", "[pbr][deferred]") {
     if (screenshot_taken) {
         std::string screenshot_path = test_asset_dir + "/pbr_material_ball.png";
         if (save_screenshot_png(screenshot_path, screenshot_width, screenshot_height, screenshot_data)) {
-            INFO(LogPbrDeferred, "Screenshot saved to: {}", screenshot_path);
-            
             float brightness = calculate_average_brightness(screenshot_data);
-            INFO(LogPbrDeferred, "Screenshot average brightness: {}", brightness);
-            
+            INFO(LogPbrDeferred, "Screenshot saved: {} (brightness: {:.1f})", screenshot_path, brightness);
             CHECK(brightness > 1.0f);
             CHECK(brightness < 255.0f);
         }
@@ -216,6 +198,4 @@ TEST_CASE("PBR Deferred Rendering - Material Ball", "[pbr][deferred]") {
     
     EngineContext::world()->set_active_scene(nullptr);
     EngineContext::exit();
-    
-    INFO(LogPbrDeferred, "PBR deferred rendering test completed");
 }

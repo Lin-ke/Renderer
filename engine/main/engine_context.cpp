@@ -10,7 +10,21 @@
 #include "engine/function/framework/entity.h"
 #include "engine/function/framework/component/camera_component.h"
 
+#include <windows.h>
+
 DEFINE_LOG_TAG(LogEngine, "Engine");
+
+/**
+ * @brief Set Windows console and system to UTF-8 mode for Unicode support
+ */
+static void setup_utf8_locale() {
+    // Set console output code page to UTF-8
+    SetConsoleOutputCP(CP_UTF8);
+    // Set console input code page to UTF-8  
+    SetConsoleCP(CP_UTF8);
+    // Set system locale to UTF-8 (Windows 10 1903+)
+    SetThreadPreferredUILanguages(MUI_CONSOLE_FILTER, L"en-US", nullptr);
+}
 
 std::unique_ptr<EngineContext> EngineContext::instance_;
 EngineContext::ThreadRole EngineContext::thread_role_ = EngineContext::ThreadRole::Unknown;
@@ -18,6 +32,9 @@ EngineContext::EngineContext() {}
 EngineContext::~EngineContext() {}
 
 void EngineContext::init(std::bitset<8> mode) {
+	// Setup UTF-8 locale for Unicode support (must be before Log::init)
+	setup_utf8_locale();
+	
 	Log::init();
 	instance_.reset(new EngineContext());
 	instance_->mode_ = mode;

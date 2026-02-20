@@ -18,6 +18,8 @@ public:
     bool is_moved() const { return move_; }
 
     void set_fov(float fovy) { this->fovy_ = fovy; }
+    void set_near(float near_plane) { this->near_ = near_plane; }
+    void set_far(float far_plane) { this->far_ = far_plane; }
 
     inline Vec3 get_position() const { return position_; }
     inline Vec3 get_front() const { return front_; }

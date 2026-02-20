@@ -50,7 +50,10 @@ public:
     DX11Swapchain(const RHISwapchainInfo& info, DX11Backend& backend);
 
     virtual uint32_t get_current_frame_index() override final { return current_index_; }
-    virtual RHITextureRef get_texture(uint32_t index) override final { return textures_[index]; }
+    virtual RHITextureRef get_texture(uint32_t index) override final { 
+        if (index >= textures_.size()) return nullptr;
+        return textures_[index]; 
+    }
     virtual RHITextureRef get_new_frame(RHIFenceRef fence, RHISemaphoreRef signal_semaphore) override final;
     virtual void present(RHISemaphoreRef wait_semaphore) override final;
 
@@ -449,6 +452,18 @@ private:
     ComPtr<ID3D11Device> device_;
     ComPtr<ID3D11DeviceContext> context_;
     RHICommandContextImmediateRef immediate_context_;
+
+    struct StagingTextureKey {
+        uint32_t width, height;
+        DXGI_FORMAT format;
+        bool operator==(const StagingTextureKey& o) const { return width == o.width && height == o.height && format == o.format; }
+    };
+    struct StagingTextureHash {
+        size_t operator()(const StagingTextureKey& k) const {
+            return std::hash<uint32_t>()(k.width) ^ std::hash<uint32_t>()(k.height) ^ std::hash<uint32_t>()(k.format);
+        }
+    };
+    std::unordered_map<StagingTextureKey, ComPtr<ID3D11Texture2D>, StagingTextureHash> staging_texture_cache_;
 };
 
 template<class T>

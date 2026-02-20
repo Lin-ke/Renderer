@@ -23,7 +23,6 @@ TEST_CASE("Texture RHI Initialization", "[render_resource]") {
     EngineContext::init(mode);
     EngineContext::asset()->init(test_asset_dir);
 
-    INFO(LogTextureTest, "Checking RHI backend...");
     REQUIRE(EngineContext::rhi() != nullptr);
 
     Extent3D extent = { 128, 128, 1 };

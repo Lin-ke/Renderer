@@ -63,7 +63,7 @@ void Texture::init_rhi() {
     }
     
     if (is_depth_format(format_)) {
-        resource_type |= RESOURCE_TYPE_RENDER_TARGET;
+        resource_type |= RESOURCE_TYPE_DEPTH_STENCIL;
     }
 
     TextureAspectFlags aspects = TEXTURE_ASPECT_COLOR;

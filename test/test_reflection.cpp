@@ -242,7 +242,7 @@ TEST_CASE("Complex Prefab System", "[prefab]") {
     // Phase 1: Create and Save Two Prefabs
     {
         EngineContext::init(1 << EngineContext::StartMode::Asset);
-        INFO(LogAsset, "--- Phase 1: Create Prefabs ---");
+
         EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
 
         // 1. Create "Ball" Prefab at (1, 2, 3)
@@ -255,7 +255,7 @@ TEST_CASE("Complex Prefab System", "[prefab]") {
             std::string path = "/Game/ball.asset";
             EngineContext::asset()->save_asset(ball_prefab, path);
             ball_uid = ball_prefab->get_uid();
-            INFO(LogAsset, "Ball Prefab UID: {}", ball_uid.to_string());
+
         }
 
         // 2. Create "Cube" Prefab at (10, 0, 0)
@@ -268,7 +268,7 @@ TEST_CASE("Complex Prefab System", "[prefab]") {
             std::string path = "/Game/cube.asset";
             EngineContext::asset()->save_asset(cube_prefab, path);
             cube_uid = cube_prefab->get_uid();
-            INFO(LogAsset, "Cube Prefab UID: {}", cube_uid.to_string());
+
         }
 
         EngineContext::exit();
@@ -277,7 +277,7 @@ TEST_CASE("Complex Prefab System", "[prefab]") {
     // Phase 2: Instantiate Multiple Copies and Distinct Prefabs
     {
         EngineContext::init(1 << EngineContext::StartMode::Asset);
-        INFO(LogAsset, "--- Phase 2: Instantiate Multiple ---");
+
         EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
 
         auto ball_prefab = EngineContext::asset()->load_asset<Prefab>(ball_uid);
@@ -329,7 +329,7 @@ TEST_CASE("Complex Prefab System", "[prefab]") {
     // Phase 3: Reload and Verify
     {
         EngineContext::init(1 << EngineContext::StartMode::Asset);
-        INFO(LogAsset, "--- Phase 3: Verify Reload ---");
+
         EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
 
         auto scene = EngineContext::asset()->load_asset<Scene>("/Game/complex_scene.asset");

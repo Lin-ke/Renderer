@@ -69,10 +69,18 @@ TEST_CASE("DX11 Swapchain and Fence - Basic Triangle", "[draw][triangle]") {
 
     // Pre-create texture views for all swapchain images
     std::vector<RHITextureViewRef> swapchain_views;
-    for (uint32_t i = 0; i < sw_info.image_count; ++i) {
+    uint32_t image_count = 0;
+    // Query actual image count from swapchain
+    while (swapchain->get_texture(image_count) != nullptr) {
+        image_count++;
+    }
+    
+    for (uint32_t i = 0; i < image_count; ++i) {
+        RHITextureRef tex = swapchain->get_texture(i);
         RHITextureViewInfo view_info = {};
-        view_info.texture = swapchain->get_texture(i);
-        swapchain_views.push_back(backend->create_texture_view(view_info));
+        view_info.texture = tex;
+        RHITextureViewRef view = backend->create_texture_view(view_info);
+        swapchain_views.push_back(view);
     }
 
     // 4. Prepare Resources for Triangle

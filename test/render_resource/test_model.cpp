@@ -23,8 +23,6 @@ TEST_CASE("Model Loading with bunny.obj", "[render_resource]") {
     std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
     EngineContext::asset()->init(test_asset_dir);
     
-    INFO(LogModelTest, "Testing Model loading with bunny.obj...");
-    
     REQUIRE(EngineContext::rhi() != nullptr);
     
     ModelProcessSetting setting;
@@ -45,9 +43,6 @@ TEST_CASE("Model Loading with bunny.obj", "[render_resource]") {
     
     REQUIRE(submesh.vertex_buffer != nullptr);
     REQUIRE(submesh.index_buffer != nullptr);
-    
-    INFO(LogModelTest, "Bunny model loaded: {} vertices, {} indices", 
-         submesh.mesh->position.size(), submesh.mesh->index.size());
     
     model.reset();
     EngineContext::exit();
