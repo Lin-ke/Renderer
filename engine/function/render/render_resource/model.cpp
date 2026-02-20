@@ -184,6 +184,8 @@ void Model::on_load_asset() {
         //####TODO#### Build BLAS
         INFO(LogModel, "BLAS generation not fully implemented");
     }
+
+    clear_dirty();
     } catch (const std::exception& e) {
         (void)e;
         ERR(LogModel, "Exception in on_load_asset");

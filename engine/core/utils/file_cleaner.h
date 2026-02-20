@@ -5,8 +5,6 @@
 #include <vector>
 #include <algorithm>
 #include <string>
-#include <iostream>
-
 namespace fs = std::filesystem;
 
 namespace utils{
@@ -29,7 +27,7 @@ static void clean_old_files(const std::filesystem::path& directory_path, size_t 
             }
         }
     } catch (const fs::filesystem_error& e) {
-        std::cerr << "[FileCleaner] Error iterating directory: " << e.what() << std::endl;
+        // Directory iteration error - silently return
         return;
     }
 
@@ -47,13 +45,12 @@ static void clean_old_files(const std::filesystem::path& directory_path, size_t 
     // 5. 计算需要删除的数量
     size_t files_to_delete = files.size() - max_keep_count;
 
-    // 6. 删除最旧的文件
+    // 6. 删除最旧的文件（静默处理错误）
     for (size_t i = 0; i < files_to_delete; ++i) {
         try {
             fs::remove(files[i].path());
-            std::cout << "[FileCleaner] Cleaned up old asset: " << files[i].path().string() << std::endl;
         } catch (const fs::filesystem_error& e) {
-            std::cerr << "[FileCleaner] Failed to delete file: " << files[i].path().string() << " Error: " << e.what() << std::endl;
+            // Deletion error - silently continue
         }
     }
 }

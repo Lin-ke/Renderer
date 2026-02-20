@@ -53,7 +53,11 @@ public:
         if (type & RESOURCE_TYPE_UNIFORM_BUFFER) flags |= D3D11_BIND_CONSTANT_BUFFER;
         if (type & RESOURCE_TYPE_TEXTURE) flags |= D3D11_BIND_SHADER_RESOURCE;
         if (type & RESOURCE_TYPE_RENDER_TARGET) flags |= D3D11_BIND_RENDER_TARGET;
-        if (type & (RESOURCE_TYPE_DEPTH_STENCIL | RESOURCE_STATE_DEPTH_STENCIL_ATTACHMENT)) flags |= D3D11_BIND_DEPTH_STENCIL;
+        if (type & (RESOURCE_TYPE_DEPTH_STENCIL | RESOURCE_STATE_DEPTH_STENCIL_ATTACHMENT)) {
+            flags |= D3D11_BIND_DEPTH_STENCIL;
+            // Also add SRV bind flag so depth buffer can be sampled/shown in ImGui
+            flags |= D3D11_BIND_SHADER_RESOURCE;
+        }
         if (type & RESOURCE_TYPE_RW_TEXTURE) flags |= D3D11_BIND_UNORDERED_ACCESS;
         if (type & RESOURCE_TYPE_RW_BUFFER) flags |= D3D11_BIND_UNORDERED_ACCESS;
         return flags;
@@ -89,6 +93,16 @@ public:
             default: return D3D11_COMPARISON_LESS_EQUAL;
         }
     }
+
+    static D3D11_PRIMITIVE_TOPOLOGY primitive_type_to_dx11(PrimitiveType type) {
+        switch (type) {
+            case PRIMITIVE_TYPE_TRIANGLE_LIST: return D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+            case PRIMITIVE_TYPE_TRIANGLE_STRIP: return D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP;
+            case PRIMITIVE_TYPE_LINE_LIST: return D3D11_PRIMITIVE_TOPOLOGY_LINELIST;
+            case PRIMITIVE_TYPE_POINT_LIST: return D3D11_PRIMITIVE_TOPOLOGY_POINTLIST;
+            default: return D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+        }
+    }
 };
 
 // --- DX11Buffer ---
@@ -115,16 +129,31 @@ bool DX11Buffer::init() {
 }
 
 void* DX11Buffer::map() {
-    if (!buffer_) return nullptr;
+    if (!buffer_ || mapped_data_) return nullptr;
+    
     D3D11_MAPPED_SUBRESOURCE mapped_res;
     D3D11_MAP map_type = D3D11_MAP_WRITE_DISCARD;
     
     D3D11_BUFFER_DESC desc;
     buffer_->GetDesc(&desc);
+    
+    // Determine map type based on buffer usage and CPU access flags
     if (desc.Usage == D3D11_USAGE_STAGING) {
-        map_type = D3D11_MAP_WRITE;
-    } else if (desc.Usage != D3D11_USAGE_DYNAMIC) {
-        // Can't map non-dynamic/non-staging buffer with WRITE_DISCARD
+        // Staging buffers: check CPU access flags for read/write permissions
+        if ((desc.CPUAccessFlags & D3D11_CPU_ACCESS_READ) && (desc.CPUAccessFlags & D3D11_CPU_ACCESS_WRITE)) {
+            map_type = D3D11_MAP_READ_WRITE;
+        } else if (desc.CPUAccessFlags & D3D11_CPU_ACCESS_READ) {
+            map_type = D3D11_MAP_READ;
+        } else if (desc.CPUAccessFlags & D3D11_CPU_ACCESS_WRITE) {
+            map_type = D3D11_MAP_WRITE;
+        } else {
+            return nullptr; // No CPU access
+        }
+    } else if (desc.Usage == D3D11_USAGE_DYNAMIC) {
+        // Dynamic buffers: use WRITE_DISCARD for CPU-to-GPU updates
+        map_type = D3D11_MAP_WRITE_DISCARD;
+    } else {
+        // Default/Immutable buffers cannot be mapped
         return nullptr;
     }
 
@@ -137,6 +166,7 @@ void* DX11Buffer::map() {
 }
 
 void DX11Buffer::unmap() {
+    if (!buffer_ || !mapped_data_) return;
     backend_.get_context()->Unmap(buffer_.Get(), 0);
     mapped_data_ = nullptr;
 }
@@ -214,44 +244,87 @@ DX11TextureView::DX11TextureView(const RHITextureViewInfo& info, DX11Backend& ba
     auto dx_tex = resource_cast(info.texture);
     if (!dx_tex) return;
 
-    if (info.texture->get_info().type & RESOURCE_TYPE_TEXTURE) {
+    const auto& tex_info = info.texture->get_info();
+    DXGI_FORMAT base_format = DX11Util::rhi_format_to_dxgi(tex_info.format);
+    DXGI_FORMAT view_format = (info.format != FORMAT_UKNOWN) ? DX11Util::rhi_format_to_dxgi(info.format) : base_format;
+
+    // Create SRV for texture types
+    if (tex_info.type & RESOURCE_TYPE_TEXTURE) {
         D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
-        DXGI_FORMAT format = DX11Util::rhi_format_to_dxgi(info.format != FORMAT_UKNOWN ? info.format : info.texture->get_info().format);
+        DXGI_FORMAT srv_format = view_format;
         
-        // Handle depth format mapping for SRV
-        if (format == DXGI_FORMAT_D32_FLOAT) format = DXGI_FORMAT_R32_FLOAT;
-        else if (format == DXGI_FORMAT_D24_UNORM_S8_UINT) format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+        // Handle depth format mapping for SRV (depth formats cannot be directly sampled)
+        // view_format might be the original depth format (e.g., DXGI_FORMAT_D32_FLOAT)
+        // or the typeless format from texture creation (e.g., DXGI_FORMAT_R32_TYPELESS)
+        if (srv_format == DXGI_FORMAT_D32_FLOAT || srv_format == DXGI_FORMAT_R32_TYPELESS) {
+            srv_format = DXGI_FORMAT_R32_FLOAT;
+        } else if (srv_format == DXGI_FORMAT_D24_UNORM_S8_UINT || srv_format == DXGI_FORMAT_R24G8_TYPELESS) {
+            srv_format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+        }
         
-        srv_desc.Format = format;
+        srv_desc.Format = srv_format;
         srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-        srv_desc.Texture2D.MipLevels = info.texture->get_info().mip_levels;
-        srv_desc.Texture2D.MostDetailedMip = 0;
-        backend.get_device()->CreateShaderResourceView(dx_tex->get_handle().Get(), &srv_desc, srv_.GetAddressOf());
+        srv_desc.Texture2D.MipLevels = tex_info.mip_levels;
+        srv_desc.Texture2D.MostDetailedMip = info.subresource.base_mip_level;
+        HRESULT hr = backend.get_device()->CreateShaderResourceView(dx_tex->get_handle().Get(), &srv_desc, srv_.GetAddressOf());
+        if (FAILED(hr)) {
+            ERR(LogRHI, "Failed to create texture SRV (format: {}, HRESULT: 0x{:08X})", (uint32_t)srv_format, (uint32_t)hr);
+        }
     }
 
-    if (info.texture->get_info().type & RESOURCE_TYPE_RENDER_TARGET) {
-        backend.get_device()->CreateRenderTargetView(dx_tex->get_handle().Get(), nullptr, rtv_.GetAddressOf());
+    // Create RTV for render target types
+    if (tex_info.type & RESOURCE_TYPE_RENDER_TARGET) {
+        D3D11_RENDER_TARGET_VIEW_DESC rtv_desc = {};
+        DXGI_FORMAT rtv_format = view_format;
+        
+        // Handle typeless format mapping for RTV
+        if (rtv_format == DXGI_FORMAT_R32_TYPELESS || rtv_format == DXGI_FORMAT_D32_FLOAT) rtv_format = DXGI_FORMAT_R32_FLOAT;
+        else if (rtv_format == DXGI_FORMAT_R24G8_TYPELESS || rtv_format == DXGI_FORMAT_D24_UNORM_S8_UINT) rtv_format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+        
+        rtv_desc.Format = rtv_format;
+        rtv_desc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+        rtv_desc.Texture2D.MipSlice = info.subresource.base_mip_level;
+        backend.get_device()->CreateRenderTargetView(dx_tex->get_handle().Get(), &rtv_desc, rtv_.GetAddressOf());
     }
 
-    if (info.texture->get_info().type & RESOURCE_TYPE_DEPTH_STENCIL) {
+    // Create DSV for depth-stencil types
+    if (tex_info.type & RESOURCE_TYPE_DEPTH_STENCIL) {
         D3D11_DEPTH_STENCIL_VIEW_DESC dsv_desc = {};
-        dsv_desc.Format = DX11Util::rhi_format_to_dxgi(info.format != FORMAT_UKNOWN ? info.format : info.texture->get_info().format);
+        DXGI_FORMAT dsv_format = view_format;
+        
+        // Handle typeless format mapping for DSV
+        if (dsv_format == DXGI_FORMAT_R32_TYPELESS) dsv_format = DXGI_FORMAT_D32_FLOAT;
+        else if (dsv_format == DXGI_FORMAT_R24G8_TYPELESS) dsv_format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+        // Ensure we're using a depth-stencil format, not a typeless one
+        else if (dsv_format == DXGI_FORMAT_UNKNOWN || dsv_format == 0) {
+            // Fallback based on original texture format
+            if (base_format == DXGI_FORMAT_R32_TYPELESS || base_format == DXGI_FORMAT_D32_FLOAT) {
+                dsv_format = DXGI_FORMAT_D32_FLOAT;
+            } else if (base_format == DXGI_FORMAT_R24G8_TYPELESS || base_format == DXGI_FORMAT_D24_UNORM_S8_UINT) {
+                dsv_format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+            }
+        }
+        
+        dsv_desc.Format = dsv_format;
         dsv_desc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
-        dsv_desc.Texture2D.MipSlice = 0;
+        dsv_desc.Texture2D.MipSlice = info.subresource.base_mip_level;
         backend.get_device()->CreateDepthStencilView(dx_tex->get_handle().Get(), &dsv_desc, dsv_.GetAddressOf());
         
-        // If srv_ was not created yet (e.g. not marked as TEXTURE), create it now for debugging
+        // If srv_ was not created yet (e.g. depth texture not marked as TEXTURE), create it for shader sampling
         if (!srv_) {
             D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
-            DXGI_FORMAT srv_format = dsv_desc.Format;
+            DXGI_FORMAT srv_format = dsv_format;
             if (srv_format == DXGI_FORMAT_D32_FLOAT) srv_format = DXGI_FORMAT_R32_FLOAT;
             else if (srv_format == DXGI_FORMAT_D24_UNORM_S8_UINT) srv_format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
             
             srv_desc.Format = srv_format;
             srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
             srv_desc.Texture2D.MipLevels = 1;
-            srv_desc.Texture2D.MostDetailedMip = 0;
-            backend.get_device()->CreateShaderResourceView(dx_tex->get_handle().Get(), &srv_desc, srv_.GetAddressOf());
+            srv_desc.Texture2D.MostDetailedMip = info.subresource.base_mip_level;
+            HRESULT hr = backend.get_device()->CreateShaderResourceView(dx_tex->get_handle().Get(), &srv_desc, srv_.GetAddressOf());
+            if (FAILED(hr)) {
+                ERR(LogRHI, "Failed to create depth buffer SRV (HRESULT: 0x{:08X})", (uint32_t)hr);
+            }
         }
     }
 }
@@ -319,15 +392,27 @@ DX11Swapchain::DX11Swapchain(const RHISwapchainInfo& info, DX11Backend& backend)
 }
 
 RHITextureRef DX11Swapchain::get_new_frame(RHIFenceRef fence, RHISemaphoreRef signal_semaphore) {
-    if (swap_chain_) {
-        current_index_ = swap_chain_->GetCurrentBackBufferIndex();
+    if (!swap_chain_ || textures_.empty()) {
+        return nullptr;
     }
+    
+    // Get current back buffer index from swapchain
+    current_index_ = swap_chain_->GetCurrentBackBufferIndex();
+    
+    // Validate index is within bounds
+    if (current_index_ >= textures_.size()) {
+        current_index_ = 0;
+    }
+    
     return textures_[current_index_];
 }
 
 void DX11Swapchain::present(RHISemaphoreRef wait_semaphore) {
     if (swap_chain_) {
-        swap_chain_->Present(1, 0);
+        HRESULT hr = swap_chain_->Present(1, 0);
+        if (FAILED(hr)) {
+            ERR(LogRHI, "Present failed with HRESULT: 0x{:08X}", (uint32_t)hr);
+        }
     }
 }
 
@@ -452,16 +537,25 @@ bool DX11GraphicsPipeline::init() {
     ds_desc.StencilEnable = FALSE;
     
     backend_.get_device()->CreateDepthStencilState(&ds_desc, depth_stencil_state_.GetAddressOf());
-    topology_ = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    
+    // Set topology from pipeline info instead of hardcoding
+    topology_ = DX11Util::primitive_type_to_dx11(info_.primitive_type);
 
     return true;
 }
 
 void DX11GraphicsPipeline::bind(ID3D11DeviceContext* context) {
+    // Clear previous shader bindings to avoid resource conflicts
+    ID3D11ShaderResourceView* null_srvs[16] = {};
+    context->VSSetShaderResources(0, 16, null_srvs);
+    context->PSSetShaderResources(0, 16, null_srvs);
+    
     auto vs = resource_cast(info_.vertex_shader);
     auto ps = resource_cast(info_.fragment_shader);
     if (vs) context->VSSetShader((ID3D11VertexShader*)vs->get_shader().Get(), nullptr, 0);
+    else context->VSSetShader(nullptr, nullptr, 0);
     if (ps) context->PSSetShader((ID3D11PixelShader*)ps->get_shader().Get(), nullptr, 0);
+    else context->PSSetShader(nullptr, nullptr, 0);
     context->IASetInputLayout(input_layout_.Get());
     context->IASetPrimitiveTopology(topology_);
     context->RSSetState(rasterizer_state_.Get());
@@ -565,14 +659,18 @@ void DX11Backend::init_imgui(void* window_handle) {
 }
 
 void DX11Backend::imgui_new_frame() {
-    ImGui_ImplDX11_NewFrame();
+    // Order matters: Platform first, then Renderer, then NewFrame
     ImGui_ImplWin32_NewFrame();
+    ImGui_ImplDX11_NewFrame();
     ImGui::NewFrame();
 }
 
 void DX11Backend::imgui_render() {
     ImGui::Render();
-    ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+    ImDrawData* draw_data = ImGui::GetDrawData();
+    if (draw_data && draw_data->CmdListsCount > 0) {
+        ImGui_ImplDX11_RenderDrawData(draw_data);
+    }
 }
 
 void DX11Backend::imgui_shutdown() {
@@ -755,7 +853,12 @@ void DX11CommandContext::begin_render_pass(RHIRenderPassRef rp) {
         context_->OMSetRenderTargets((UINT)rtvs.size(), rtvs.data(), dsv);
     }
 }
-void DX11CommandContext::end_render_pass() {}
+void DX11CommandContext::end_render_pass() {
+    // Unbind render targets to prevent resource conflicts
+    ID3D11RenderTargetView* null_rtvs[MAX_RENDER_TARGETS] = {};
+    ID3D11DepthStencilView* null_dsv = nullptr;
+    context_->OMSetRenderTargets(MAX_RENDER_TARGETS, null_rtvs, null_dsv);
+}
 void DX11CommandContext::set_viewport(Offset2D min, Offset2D max) { D3D11_VIEWPORT vp = { (float)min.x, (float)min.y, (float)(max.x - min.x), (float)(max.y - min.y), 0.0f, 1.0f }; context_->RSSetViewports(1, &vp); }
 void DX11CommandContext::set_scissor(Offset2D min, Offset2D max) { D3D11_RECT rect = { (LONG)min.x, (LONG)min.y, (LONG)max.x, (LONG)max.y }; context_->RSSetScissorRects(1, &rect); }
 void DX11CommandContext::set_depth_bias(float c, float s, float cl) {}

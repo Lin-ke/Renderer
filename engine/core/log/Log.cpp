@@ -23,14 +23,6 @@ void CustomLogSink::send(google::LogSeverity severity, const char* full_filename
                          const char* base_filename, int line,
                          const struct tm* tm_time,
                          const char* message, size_t message_len) {
-    
-    // Debug: ensure sink is being called
-    static bool first_call = true;
-    if (first_call) {
-        first_call = false;
-        std::cerr << "[LogSink] First call received" << std::endl;
-    }
-    
     std::lock_guard<std::mutex> lock(g_log_mutex);
 
     auto now = std::chrono::system_clock::now();
@@ -71,7 +63,6 @@ void CustomLogSink::send(google::LogSeverity severity, const char* full_filename
     msg_oss << time_str << " [" << filename_view << ":" << line << "] " << clean_message;
     std::string formatted_message = msg_oss.str();
 
-    std::cout << formatted_message << std::endl;
     if (g_log_file_stream.is_open()) {
         g_log_file_stream << formatted_message << std::endl;
     }

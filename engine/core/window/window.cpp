@@ -58,6 +58,7 @@ Window::Window(int width, int height, const std::wstring& title, bool visible)
 
     if (hwnd_ && visible_) {
         ShowWindow(hwnd_, SW_SHOW);
+        UpdateWindow(hwnd_);
     }
 }
 

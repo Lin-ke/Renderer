@@ -105,7 +105,8 @@ void RenderSystem::init_base_resource() {
     depth_info.mip_levels = 1;
     depth_info.array_layers = 1;
     depth_info.memory_usage = MEMORY_USAGE_GPU_ONLY;
-    depth_info.type = RESOURCE_TYPE_DEPTH_STENCIL;
+    // Add TEXTURE type so SRV can be created for ImGui visualization
+    depth_info.type = RESOURCE_TYPE_DEPTH_STENCIL | RESOURCE_TYPE_TEXTURE;
     
     depth_texture_ = backend_->create_texture(depth_info);
     
@@ -194,32 +195,24 @@ bool RenderSystem::tick(const RenderPacket& packet) {
         //####TODO####: Other render passes
         // for(auto& pass : passes_) { if(pass) pass->build(...); }
         
-        command->end_render_pass();
-        
-        // Cleanup render pass resources before UI
-        render_pass->destroy();
-        back_buffer_view->destroy();
-    }
-    command->end_command();
-    
-    // Render ImGui and Gizmo
-    // Note: This happens outside the main render pass
-    if (backend_) {
-        backend_->imgui_new_frame();
-        
-        // Begin ImGuizmo frame (must be called after ImGui::NewFrame)
-        ImGuizmo::BeginFrame();
-        
-        // Build UI windows FIRST (so they get input priority)
-        if (show_ui_) {
+        // Render ImGui and Gizmo on top of the scene
+        if (backend_ && show_ui_) {
+            backend_->imgui_new_frame();
+            
+            // Begin ImGuizmo frame (must be called after ImGui::NewFrame)
+            ImGuizmo::BeginFrame();
+            
+            // Build UI windows FIRST (so they get input priority)
             // Scene Hierarchy Window
             draw_scene_hierarchy(packet.active_scene);
             
             // Inspector Window for selected entity
             draw_inspector_panel();
             
-            // Buffer Debug Window
-            draw_buffer_debug();
+            // Buffer Debug Window (only if enabled)
+            if (show_buffer_debug_) {
+                draw_buffer_debug();
+            }
             
             ImGui::Begin("Renderer Debug", &show_ui_);
             
@@ -229,6 +222,9 @@ bool RenderSystem::tick(const RenderPacket& packet) {
                     mesh_manager_->set_wireframe(wireframe_mode_);
                 }
             }
+            
+            // Buffer Debug toggle
+            ImGui::Checkbox("Show Buffer Debug", &show_buffer_debug_);
             
             // Gizmo controls
             if (gizmo_manager_) {
@@ -241,55 +237,67 @@ bool RenderSystem::tick(const RenderPacket& packet) {
                         ImGui::GetIO().Framerate);
             
             ImGui::End();
-        }
-        
-        // Draw gizmo LAST (on top of everything)
-        // Use a stable fullscreen window for gizmo rendering
-        if (gizmo_manager_ && selected_entity_ && packet.active_camera) {
-            ImGuiIO& io = ImGui::GetIO();
             
-            // Create a transparent window for gizmo (between hierarchy and inspector)
-            float hierarchy_width = 250.0f;
-            float inspector_width = 300.0f;
-            float gizmo_x = hierarchy_width;
-            float gizmo_width = io.DisplaySize.x - hierarchy_width - inspector_width;
-            
-            ImGui::SetNextWindowPos(ImVec2(gizmo_x, 0));
-            ImGui::SetNextWindowSize(ImVec2(gizmo_width, io.DisplaySize.y));
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-            ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
-            
-            ImGui::Begin("GizmoViewport", nullptr, 
-                ImGuiWindowFlags_NoTitleBar | 
-                ImGuiWindowFlags_NoResize | 
-                ImGuiWindowFlags_NoScrollbar |
-                ImGuiWindowFlags_NoNavFocus |
-                ImGuiWindowFlags_NoInputs);
-            
-            // Draw main transform gizmo
-            ImVec2 window_pos = ImGui::GetWindowPos();
-            ImVec2 window_size = ImGui::GetWindowSize();
-            gizmo_manager_->draw_gizmo(packet.active_camera, selected_entity_, 
-                                       window_pos, window_size);
-            
-            // Draw light gizmo for selected entity if it's a light
-            if (packet.active_camera) {
-                draw_light_gizmo(packet.active_camera, selected_entity_, 
-                                Extent2D{static_cast<uint32_t>(io.DisplaySize.x), 
-                                        static_cast<uint32_t>(io.DisplaySize.y)});
+            // Draw gizmo LAST (on top of everything)
+            // Use a stable fullscreen window for gizmo rendering
+            if (gizmo_manager_ && selected_entity_ && packet.active_camera) {
+                ImGuiIO& io = ImGui::GetIO();
+                
+                // Create a transparent window for gizmo (between hierarchy and inspector)
+                float hierarchy_width = 250.0f;
+                float inspector_width = 300.0f;
+                float gizmo_x = hierarchy_width;
+                float gizmo_width = io.DisplaySize.x - hierarchy_width - inspector_width;
+                
+                ImGui::SetNextWindowPos(ImVec2(gizmo_x, 0));
+                ImGui::SetNextWindowSize(ImVec2(gizmo_width, io.DisplaySize.y));
+                ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+                ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
+                
+                ImGui::Begin("GizmoViewport", nullptr, 
+                    ImGuiWindowFlags_NoTitleBar | 
+                    ImGuiWindowFlags_NoResize | 
+                    ImGuiWindowFlags_NoScrollbar |
+                    ImGuiWindowFlags_NoNavFocus |
+                    ImGuiWindowFlags_NoInputs);
+                
+                // Draw main transform gizmo
+                ImVec2 window_pos = ImGui::GetWindowPos();
+                ImVec2 window_size = ImGui::GetWindowSize();
+                gizmo_manager_->draw_gizmo(packet.active_camera, selected_entity_, 
+                                           window_pos, window_size);
+                
+                // Draw light gizmo for selected entity if it's a light
+                if (packet.active_camera) {
+                    draw_light_gizmo(packet.active_camera, selected_entity_, 
+                                    Extent2D{static_cast<uint32_t>(io.DisplaySize.x), 
+                                            static_cast<uint32_t>(io.DisplaySize.y)});
+                }
+                
+                ImGui::End();
+                ImGui::PopStyleColor();
+                ImGui::PopStyleVar();
             }
             
-            ImGui::End();
-            ImGui::PopStyleColor();
-            ImGui::PopStyleVar();
+            // Render ImGui directly to back buffer
+            backend_->imgui_render();
         }
         
-        // Render ImGui
-        backend_->imgui_render();
+        command->end_render_pass();
+        
+        // Cleanup render pass resources
+        render_pass->destroy();
+        back_buffer_view->destroy();
     }
+    command->end_command();
     
     command->execute(resource.fence, resource.start_semaphore, resource.finish_semaphore);
     swapchain_->present(resource.finish_semaphore);
+    
+    // Tick backend for resource garbage collection
+    if (backend_) {
+        backend_->tick();
+    }
     
     return true;
 }
@@ -324,6 +332,8 @@ void RenderSystem::destroy() {
     
     // Cleanup RHI resources in reverse order of creation
     // Important: swapchain must be destroyed before pool/surface
+    depth_texture_view_.reset();
+    depth_texture_.reset();
     pool_.reset();
     swapchain_.reset();
     queue_.reset();
@@ -464,26 +474,58 @@ void RenderSystem::draw_inspector_panel() {
 
 // Draw Buffer Debug panel
 void RenderSystem::draw_buffer_debug() {
-    if (!show_ui_) return;
+    if (!show_ui_ || !show_buffer_debug_) return;
 
-    ImGui::Begin("Buffer Debug");
+    // Always set position and size to ensure window is visible at center-top
+    float window_width = (float)WINDOW_EXTENT.width * 0.5f;
+    float window_height = (float)WINDOW_EXTENT.height * 0.25f;
+    float pos_x = ((float)WINDOW_EXTENT.width - window_width) * 0.5f;
+    float pos_y = 0.0f;
 
-    if (ImGui::CollapsingHeader("Render Targets", ImGuiTreeNodeFlags_DefaultOpen)) {
-        // Depth Buffer
-        if (depth_texture_view_) {
-            ImGui::Text("Depth Buffer");
-            void* tex_id = depth_texture_view_->raw_handle();
-            if (tex_id) {
-                // Calculate aspect ratio for display
-                float width = 320.0f;
-                float height = width * (float)WINDOW_EXTENT.height / (float)WINDOW_EXTENT.width;
-                // Note: Depth buffer visualization in ImGui might need a special shader 
-                // to make it visible (currently it might look all white or black depending on values)
-                ImGui::Image(tex_id, ImVec2(width, height));
-            } else {
-                ImGui::Text("Depth SRV not available");
-            }
+    ImGui::SetNextWindowPos(ImVec2(pos_x, pos_y), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(window_width, window_height), ImGuiCond_Always);
+
+    // Force window to be open
+    bool open = true;
+    ImGui::Begin("Buffer Debug", &open);
+
+    // Depth Buffer
+    ImGui::Text("Depth Buffer:");
+    if (depth_texture_) {
+        const auto& info = depth_texture_->get_info();
+        ImGui::Text("  Texture: valid");
+        ImGui::Text("  Type flags: 0x%X (DEPTH=%s, TEXTURE=%s)", 
+            info.type,
+            (info.type & RESOURCE_TYPE_DEPTH_STENCIL) ? "Y" : "N",
+            (info.type & RESOURCE_TYPE_TEXTURE) ? "Y" : "N");
+    } else {
+        ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "  Texture: NULL");
+    }
+    
+    if (depth_texture_view_) {
+        void* tex_id = depth_texture_view_->raw_handle();
+        ImGui::Text("  View raw_handle: %p", tex_id);
+        if (tex_id) {
+            float display_width = 300.0f;
+            float display_height = display_width * ((float)WINDOW_EXTENT.height / (float)WINDOW_EXTENT.width);
+            ImGui::Image(tex_id, ImVec2(display_width, display_height));
+        } else {
+            ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "  Error: SRV is null");
         }
+    } else {
+        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "  Warning: depth_texture_view_ is null");
+    }
+    
+    ImGui::Separator();
+    
+    // Back Buffer info
+    ImGui::Text("Back Buffer:");
+    if (swapchain_) {
+        auto tex = swapchain_->get_texture(swapchain_->get_current_frame_index());
+        ImGui::Text("  Current frame: %d", swapchain_->get_current_frame_index());
+        ImGui::Text("  Texture valid: %s", tex ? "Yes" : "No");
+    } else {
+        ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "  Swapchain not available");
     }
 
     ImGui::End();

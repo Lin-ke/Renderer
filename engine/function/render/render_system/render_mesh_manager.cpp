@@ -133,17 +133,9 @@ void RenderMeshManager::collect_draw_batches(std::vector<render::DrawBatch>& bat
 }
 
 void RenderMeshManager::render_batches(RHICommandContextRef context, RHITextureViewRef back_buffer_view, Extent2D extent) {
-    std::cout << "[RenderMeshManager] render_batches called: initialized=" << initialized_ 
-              << ", pbr_enabled=" << pbr_enabled_ << ", batches=" << current_batches_.size() << std::endl;
-    
     if (!context || !back_buffer_view) {
-        std::cerr << "[RenderMeshManager] Invalid context or back buffer view" << std::endl;
+        ERR(LogRenderMeshManager, "Invalid context or back buffer view");
         return;
-    }
-    
-    if (current_batches_.empty()) {
-        std::cout << "[RenderMeshManager] No batches to render" << std::endl;
-        return;  // Nothing to render
     }
     
     // Get camera data
@@ -180,19 +172,19 @@ void RenderMeshManager::render_batches(RHICommandContextRef context, RHITextureV
     context->set_viewport({0, 0}, {extent.width, extent.height});
     context->set_scissor({0, 0}, {extent.width, extent.height});
 
-    INFO(LogRenderMeshManager, "render_batches: pbr_enabled={}, batches={}", pbr_enabled_, current_batches_.size());
+    //####TODO####: DEBUG only - INFO(LogRenderMeshManager, "render_batches: pbr_enabled={}, batches={}", pbr_enabled_, current_batches_.size());
     
     if (pbr_enabled_) {
-        std::cout << "[RenderMeshManager] PBR path selected" << std::endl;
+        //####TODO####: DEBUG only - std::cout << "[RenderMeshManager] PBR path selected" << std::endl;
         if (!pbr_forward_pass_) {
-            std::cerr << "[RenderMeshManager] PBR Forward pass is null" << std::endl;
+            ERR(LogRenderMeshManager, "PBR Forward pass is null");
             return;
         }
         if (!pbr_forward_pass_->is_ready()) {
-            std::cerr << "[RenderMeshManager] PBR Forward pass not ready" << std::endl;
+            ERR(LogRenderMeshManager, "PBR Forward pass not ready");
             return;
         }
-        std::cout << "[RenderMeshManager] Using PBR Forward pass" << std::endl;
+        //####TODO####: DEBUG only - std::cout << "[RenderMeshManager] Using PBR Forward pass" << std::endl;
 
         pbr_forward_pass_->set_per_frame_data(
             active_camera_->get_view_matrix(),

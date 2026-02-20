@@ -39,8 +39,6 @@ public:
     // 这里接收的是 const char* (即全局变量的值)
     template<typename... Args>
     static void info(const char* file, int line, int thread_id, const char* tag, std::format_string<Args...> fmt, Args&&... args) {
-        // Debug: direct cout output
-        std::cout << "[DEBUG-INFO] " << tag << " " << std::format(fmt, std::forward<Args>(args)...) << std::endl;
         google::LogMessage(file, line, google::GLOG_INFO).stream() 
             << "[" << tag << "] "
             << std::format(fmt, std::forward<Args>(args)...);

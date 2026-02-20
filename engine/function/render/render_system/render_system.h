@@ -85,6 +85,7 @@ public:
     // Debug settings
     bool wireframe_mode_ = false;
     bool show_ui_ = true;
+    bool show_buffer_debug_ = true;   // Toggle for buffer debug visualization (default ON for debugging)
 
     // DependencyGraphRef get_rdg_dependency_graph() { return rdg_dependency_graph_; } //####TODO####
 

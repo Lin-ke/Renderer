@@ -204,11 +204,11 @@ int main() {
                     }
                 }
                 
-                INFO(LogGame, "Frame {}: {} entities, {} mesh renderers, camera: {}",
-                     g_frame_count,
-                     active_scene->entities_.size(),
-                     mesh_count,
-                     packet.active_camera ? "yes" : "no");
+                // INFO(LogGame, "Frame {}: {} entities, {} mesh renderers, camera: {}",
+                //      g_frame_count,
+                //      active_scene->entities_.size(),
+                //      mesh_count,
+                //      packet.active_camera ? "yes" : "no");
             }
         }
         

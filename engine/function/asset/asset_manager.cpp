@@ -86,6 +86,12 @@ static auto with_asset_read(const fs::path &path, Func &&func)
 // 写入口，总是写入完整文件
 template <typename Func>
 static void with_asset_write(const fs::path &path, Func &&func) {
+	auto ext = path.extension();
+	if (ext != ".binasset" && ext != ".asset") {
+		ERR(LogAsset, "Unsupported save format: {}", path.string());
+		return;
+	}
+
 	if (path.has_parent_path()) {
 		std::error_code ec;
 		fs::create_directories(path.parent_path(), ec);
@@ -99,15 +105,12 @@ static void with_asset_write(const fs::path &path, Func &&func) {
 		func(file_data); // 填充数据
 
 		try {
-			auto ext = path.extension();
 			if (ext == ".binasset") {
 				cereal::BinaryOutputArchive ar(ofs);
 				file_data.serialize(ar);
 			} else if (ext == ".asset") {
 				cereal::JSONOutputArchive ar(ofs);
 				file_data.serialize(ar);
-			} else {
-				ERR(LogAsset, "Unsupported save format: {}", path.string());
 			}
 		} catch (const std::exception &e) {
 			ERR(LogAsset, "Asset write error {}: {}", path.string(), e.what());
