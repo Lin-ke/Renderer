@@ -577,13 +577,14 @@ void PBRForwardPass::create_pipeline() {
     pipe_info.vertex_input_state.vertex_elements[3].format = FORMAT_R32G32_SFLOAT;
     pipe_info.vertex_input_state.vertex_elements[3].offset = 0;
     
-    pipe_info.rasterizer_state.cull_mode = CULL_MODE_BACK;
+    pipe_info.rasterizer_state.cull_mode = CULL_MODE_NONE;  // Disable culling like ForwardPass
     pipe_info.rasterizer_state.fill_mode = FILL_MODE_SOLID;
     pipe_info.rasterizer_state.depth_clip_mode = DEPTH_CLIP;
     
-    pipe_info.depth_stencil_state.enable_depth_test = true;
-    pipe_info.depth_stencil_state.enable_depth_write = true;
-    pipe_info.depth_stencil_state.depth_test = COMPARE_FUNCTION_LESS_EQUAL;
+    // Disable depth testing - RDG render pass doesn't have depth attachment bound
+    // (This matches ForwardPass behavior; depth testing would require depth buffer in RDG)
+    pipe_info.depth_stencil_state.enable_depth_test = false;
+    pipe_info.depth_stencil_state.enable_depth_write = false;
     
     // Render targets
     auto render_system = EngineContext::render_system();

@@ -148,8 +148,8 @@ TEST_CASE("Render PBR Model", "[draw][pbr]") {
     REQUIRE(EngineContext::render_system() != nullptr);
     REQUIRE(EngineContext::world() != nullptr);
     
-    // Use standard forward pass
-    EngineContext::render_system()->get_mesh_manager()->set_pbr_enabled(false);
+    // Enable PBR rendering
+    EngineContext::render_system()->get_mesh_manager()->set_pbr_enabled(true);
     
     INFO(LogPBRKlee, "Engine initialized successfully with PBR enabled");
     
