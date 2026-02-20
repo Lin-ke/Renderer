@@ -7,9 +7,6 @@
 #include <d3d11.h>
 #include <dxgi.h>
 #include <dxgi1_4.h>
-#define GLFW_EXPOSE_NATIVE_WIN32
-#include <GLFW/glfw3.h>
-#include <GLFW/glfw3native.h>
 #include <wrl/client.h>
 #include <vector>
 #include <memory>
@@ -111,9 +108,13 @@ public:
     virtual void* raw_handle() override final { return texture_.Get(); }
 
     ComPtr<ID3D11Texture2D> get_handle() const { return texture_; }
+    
+    ComPtr<ID3D11ShaderResourceView> get_srv() const { return srv_; }
+    ComPtr<ID3D11ShaderResourceView> create_srv();
 
 private:
     ComPtr<ID3D11Texture2D> texture_;
+    ComPtr<ID3D11ShaderResourceView> srv_;
     DX11Backend& backend_;
 };
 
@@ -350,6 +351,8 @@ public:
     virtual void bind_constant_buffer(RHIBufferRef buffer, uint32_t slot, ShaderFrequency frequency) override final;
     virtual void bind_vertex_buffer(RHIBufferRef buffer, uint32_t stream_index, uint32_t offset) override final;
     virtual void bind_index_buffer(RHIBufferRef buffer, uint32_t offset) override final;
+    virtual void bind_texture(RHITextureRef texture, uint32_t slot, ShaderFrequency frequency) override final;
+    virtual void bind_sampler(RHISamplerRef sampler, uint32_t slot, ShaderFrequency frequency) override final;
 
     virtual void dispatch(uint32_t group_count_x, uint32_t group_count_y, uint32_t group_count_z) override final;
     virtual void dispatch_indirect(RHIBufferRef argument_buffer, uint32_t argument_offset) override final;
@@ -403,13 +406,13 @@ public:
     virtual void tick() override final;
     virtual void destroy() override final;
 
-    virtual void init_imgui(GLFWwindow* window) override final;
+    virtual void init_imgui(void* window_handle) override final;
     virtual void imgui_new_frame() override final;
     virtual void imgui_render() override final;
     virtual void imgui_shutdown() override final;
 
     virtual RHIQueueRef get_queue(const RHIQueueInfo& info) override final;
-    virtual RHISurfaceRef create_surface(GLFWwindow* window) override final;
+    virtual RHISurfaceRef create_surface(void* native_window_handle) override final;
     virtual RHISwapchainRef create_swapchain(const RHISwapchainInfo& info) override final;
     virtual RHICommandPoolRef create_command_pool(const RHICommandPoolInfo& info) override final;
     virtual RHICommandContextRef create_command_context(RHICommandPoolRef pool) override final;

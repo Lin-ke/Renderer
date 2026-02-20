@@ -3,7 +3,7 @@
 #include <d3dcompiler.h>
 
 #include <imgui.h>
-#include "imgui_impl_glfw.h"
+#include "imgui_impl_win32.h"
 #include "imgui_impl_dx11.h"
 
 #pragma comment(lib, "d3d11.lib")
@@ -169,7 +169,29 @@ bool DX11Texture::init() {
     return true;
 }
 
-void DX11Texture::destroy() { texture_.Reset(); }
+void DX11Texture::destroy() {
+    srv_.Reset();
+    texture_.Reset();
+}
+
+ComPtr<ID3D11ShaderResourceView> DX11Texture::create_srv() {
+    if (!texture_) return nullptr;
+    if (srv_) return srv_;
+    
+    D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
+    srv_desc.Format = DX11Util::rhi_format_to_dxgi(info_.format);
+    srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+    srv_desc.Texture2D.MipLevels = info_.mip_levels;
+    srv_desc.Texture2D.MostDetailedMip = 0;
+    
+    HRESULT hr = backend_.get_device()->CreateShaderResourceView(texture_.Get(), &srv_desc, srv_.GetAddressOf());
+    if (FAILED(hr)) {
+        ERR(LogRHI, "Failed to create SRV for texture (HRESULT: 0x{:08X})", (uint32_t)hr);
+        return nullptr;
+    }
+    
+    return srv_;
+}
 
 // --- DX11TextureView ---
 DX11TextureView::DX11TextureView(const RHITextureViewInfo& info, DX11Backend& backend)
@@ -462,7 +484,7 @@ void DX11Backend::destroy() {
     device_.Reset(); 
     factory_.Reset(); 
 }
-void DX11Backend::init_imgui(GLFWwindow* window) {
+void DX11Backend::init_imgui(void* window_handle) {
     // Setup ImGui context
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -473,7 +495,7 @@ void DX11Backend::init_imgui(GLFWwindow* window) {
     ImGui::StyleColorsDark();
     
     // Setup Platform/Renderer bindings
-    ImGui_ImplGlfw_InitForOther(window, true);
+    ImGui_ImplWin32_Init(window_handle);
     ImGui_ImplDX11_Init(device_.Get(), context_.Get());
     
     INFO(LogRHI, "ImGui initialized successfully");
@@ -481,7 +503,7 @@ void DX11Backend::init_imgui(GLFWwindow* window) {
 
 void DX11Backend::imgui_new_frame() {
     ImGui_ImplDX11_NewFrame();
-    ImGui_ImplGlfw_NewFrame();
+    ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
 }
 
@@ -492,13 +514,13 @@ void DX11Backend::imgui_render() {
 
 void DX11Backend::imgui_shutdown() {
     ImGui_ImplDX11_Shutdown();
-    ImGui_ImplGlfw_Shutdown();
+    ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
 }
 RHIQueueRef DX11Backend::get_queue(const RHIQueueInfo& info) { return std::make_shared<DX11Queue>(info); }
 
-RHISurfaceRef DX11Backend::create_surface(GLFWwindow* window) {
-    HWND hwnd = glfwGetWin32Window(window);
+RHISurfaceRef DX11Backend::create_surface(void* native_window_handle) {
+    HWND hwnd = static_cast<HWND>(native_window_handle);
     return std::make_shared<DX11Surface>(hwnd);
 }
 
@@ -685,6 +707,31 @@ void DX11CommandContext::bind_constant_buffer(RHIBufferRef b, uint32_t s, Shader
     if (f & SHADER_FREQUENCY_VERTEX) context_->VSSetConstantBuffers(s, 1, &cb);
     if (f & SHADER_FREQUENCY_FRAGMENT) context_->PSSetConstantBuffers(s, 1, &cb);
     if (f & SHADER_FREQUENCY_COMPUTE) context_->CSSetConstantBuffers(s, 1, &cb);
+}
+void DX11CommandContext::bind_texture(RHITextureRef t, uint32_t s, ShaderFrequency f) {
+    auto* dx11_texture = static_cast<DX11Texture*>(t.get());
+    if (!dx11_texture) return;
+    
+    // Create or get SRV
+    auto srv = dx11_texture->get_srv();
+    if (!srv) {
+        srv = dx11_texture->create_srv();
+    }
+    if (!srv) return;
+    
+    ID3D11ShaderResourceView* srv_ptr = srv.Get();
+    if (f & SHADER_FREQUENCY_VERTEX) context_->VSSetShaderResources(s, 1, &srv_ptr);
+    if (f & SHADER_FREQUENCY_FRAGMENT) context_->PSSetShaderResources(s, 1, &srv_ptr);
+    if (f & SHADER_FREQUENCY_COMPUTE) context_->CSSetShaderResources(s, 1, &srv_ptr);
+}
+void DX11CommandContext::bind_sampler(RHISamplerRef s, uint32_t slot, ShaderFrequency f) {
+    auto* dx11_sampler = static_cast<DX11Sampler*>(s.get());
+    if (!dx11_sampler) return;
+    
+    ID3D11SamplerState* sampler = (ID3D11SamplerState*)s->raw_handle();
+    if (f & SHADER_FREQUENCY_VERTEX) context_->VSSetSamplers(slot, 1, &sampler);
+    if (f & SHADER_FREQUENCY_FRAGMENT) context_->PSSetSamplers(slot, 1, &sampler);
+    if (f & SHADER_FREQUENCY_COMPUTE) context_->CSSetSamplers(slot, 1, &sampler);
 }
 void DX11CommandContext::bind_vertex_buffer(RHIBufferRef b, uint32_t s, uint32_t o) { ID3D11Buffer* vb = (ID3D11Buffer*)b->raw_handle(); UINT stride = b->get_info().stride; UINT uo = (UINT)o; context_->IASetVertexBuffers(s, 1, &vb, &stride, &uo); }
 void DX11CommandContext::bind_index_buffer(RHIBufferRef b, uint32_t o) { context_->IASetIndexBuffer((ID3D11Buffer*)b->raw_handle(), DXGI_FORMAT_R32_UINT, (UINT)o); }

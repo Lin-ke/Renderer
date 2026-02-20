@@ -4,7 +4,7 @@
 
 // 坐标系定义
 // World Space:      +X Forward, +Y Up, +Z Right
-// View Space:       +X Right,   +Y Up, -Z Forward
+// View Space:       +X Right,   +Y Up, +Z Forward
 // Clip Space:       +X Right,   -Y Up, +Z Forward
 // NDC Space:        Top-Left [-1, -1], Bottom-Right [1, 1]
 // Screen Space:     Top-Left [0, 0],   Bottom-Right [1, 1]

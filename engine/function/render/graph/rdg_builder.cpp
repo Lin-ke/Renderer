@@ -68,6 +68,7 @@ RDGBufferBuilder RDGBuilder::create_buffer(std::string name) {
 }
 
 RDGRenderPassBuilder RDGBuilder::create_render_pass(std::string name) {
+    ERR(LogRDGBuilder, "Creating Render Pass: {}", name);
     RDGRenderPassNodeRef pass_node = graph_->CreateNode<RDGRenderPassNode>(name);
     black_board_.add_pass(pass_node);
     passes_.push_back(pass_node);
@@ -75,6 +76,7 @@ RDGRenderPassBuilder RDGBuilder::create_render_pass(std::string name) {
 }
 
 RDGComputePassBuilder RDGBuilder::create_compute_pass(std::string name) {
+    ERR(LogRDGBuilder, "Creating Compute Pass: {}", name);
     RDGComputePassNodeRef pass_node = graph_->CreateNode<RDGComputePassNode>(name);
     black_board_.add_pass(pass_node);
     passes_.push_back(pass_node);
@@ -121,9 +123,15 @@ RDGBufferHandle RDGBuilder::get_buffer(std::string name) {
 }
 
 void RDGBuilder::execute() {
+    ERR(LogRDGBuilder, "Executing RDG with {} passes", passes_.size());
     for (auto& pass : passes_) {
-        if (pass->is_culled_ || !pass) continue;
+        if (!pass) continue;
+        if (pass->is_culled_) {
+            ERR(LogRDGBuilder, "Pass {} is culled", pass->name());
+            continue;
+        }
 
+        ERR(LogRDGBuilder, "Executing pass: {}", pass->name());
         switch (pass->node_type()) {
             case RDG_PASS_NODE_TYPE_RENDER: execute_pass(static_cast<RDGRenderPassNodeRef>(pass)); break;
             case RDG_PASS_NODE_TYPE_COMPUTE: execute_pass(static_cast<RDGComputePassNodeRef>(pass)); break;

@@ -178,6 +178,8 @@ void MeshRendererComponent::collect_draw_batch(std::vector<render::DrawBatch>& b
         if (submesh.vertex_buffer) {
             batch.vertex_buffer = submesh.vertex_buffer->position_buffer_;
             batch.normal_buffer = submesh.vertex_buffer->normal_buffer_;
+            batch.tangent_buffer = submesh.vertex_buffer->tangent_buffer_;
+            batch.texcoord_buffer = submesh.vertex_buffer->tex_coord_buffer_;
         }
         if (submesh.index_buffer) {
             batch.index_buffer = submesh.index_buffer->buffer_;
@@ -186,6 +188,14 @@ void MeshRendererComponent::collect_draw_batch(std::vector<render::DrawBatch>& b
         
         batch.model_matrix = model_mat;
         batch.inv_model_matrix = model_mat.inverse();
+        
+        // Get material for this submesh
+        if (i < materials_.size() && materials_[i]) {
+            batch.material = materials_[i];
+        } else if (model_->get_material(i)) {
+            // Use material from model if component material is not set
+            batch.material = model_->get_material(i);
+        }
         
         batches.push_back(batch);
     }

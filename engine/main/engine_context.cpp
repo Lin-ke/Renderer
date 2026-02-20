@@ -29,11 +29,18 @@ void EngineContext::init(std::bitset<8> mode) {
 	instance_->world_ = std::make_unique<World>();
 	instance_->world_->init();
 	if (mode.test(StartMode::Window)) { // Window
-		instance_->window_ = std::make_unique<class Window>(800, 600, L"Renderer Window");
+		instance_->window_ = std::make_unique<class Window>(1280, 720, L"Toy Renderer");
+		if (instance_->window_ && instance_->window_->get_hwnd()) {
+			INFO(LogEngine, "Window created successfully");
+		} else {
+			ERR(LogEngine, "Failed to create window!");
+		}
 	}
 	if (mode.test(StartMode::Render)) {
 		instance_->render_system_ = std::make_unique<RenderSystem>();
-		instance_->render_system_->init(instance_->window_ ? instance_->window_->get_hwnd() : nullptr); 
+		void* hwnd = instance_->window_ ? instance_->window_->get_hwnd() : nullptr;
+		INFO(LogEngine, "Initializing RenderSystem with hwnd={}", hwnd);
+		instance_->render_system_->init(hwnd); 
 		instance_->render_resource_manager_ = std::make_unique<RenderResourceManager>();
 		instance_->render_resource_manager_->init();
 	}
@@ -97,10 +104,9 @@ void EngineContext::exit() {
 		instance_->asset_manager_.reset();
 	}
 
-	// Cleanup render system (includes RHI resources and GLFW)
+	// Cleanup render system (includes RHI resources)
 	if (instance_->render_system_) {
 		instance_->render_system_->destroy();
-		instance_->render_system_->destroy_glfw();
 		instance_->render_system_.reset();
 	}
 	
@@ -116,12 +122,28 @@ void EngineContext::main_loop() {
 }
 
 void EngineContext::main_loop_internal() {
+	// Reset timer at start of main loop
+	instance_->timer_.reset();
+	
 	while (true) {
+		// Calculate delta time (time since last frame)
+		instance_->delta_time_ = instance_->timer_.get_elapsed_sec();
+		
+		// Process window messages
 		if (instance_->window_ && !instance_->window_->process_messages()) {
 			break;
 		}
 
+		// System Ticks
 		Input::get_instance().tick();
+		
+		if (instance_->world_) {
+			instance_->world_->tick(instance_->delta_time_);
+		}
+		
+		if (instance_->asset_manager_) {
+			instance_->asset_manager_->tick();
+		}
 
 		// Logic Tick (Prepare Render Packet)
 		RenderPacket packet;
@@ -161,6 +183,9 @@ void EngineContext::main_loop_internal() {
 			lock.unlock();
 			instance_->render_cv_.notify_one();
 		}
+		
+		// Increment tick counter
+		instance_->current_tick_++;
 	}
 }
 
@@ -173,6 +198,14 @@ RHIBackendRef EngineContext::rhi() {
 
 uint32_t EngineContext::current_frame_index() {
     return instance_ ? instance_->current_frame_index_ : 0;
+}
+
+float EngineContext::get_delta_time() {
+    return instance_ ? instance_->delta_time_ : 0.0f;
+}
+
+uint32_t EngineContext::get_current_tick() {
+    return instance_ ? instance_->current_tick_ : 0;
 }
 
 AssetManager *EngineContext::asset() {

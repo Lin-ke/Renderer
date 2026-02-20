@@ -1,5 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
-#include <GLFW/glfw3.h>
+#include "engine/core/window/window.h"
 #include "engine/main/engine_context.h"
 #include "engine/function/render/graph/rdg_builder.h"
 #include "engine/function/render/rhi/rhi.h"
@@ -43,12 +43,9 @@ static std::vector<uint8_t> compile_shader(const std::string& source, const std:
 }
 
 TEST_CASE("DX11 Swapchain and Fence - Basic Triangle", "[draw][triangle]") {
-    // Initialize GLFW
-    REQUIRE(glfwInit() == GLFW_TRUE);
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
-    GLFWwindow* window = glfwCreateWindow(800, 600, "DX11 Test", nullptr, nullptr);
-    REQUIRE(window != nullptr);
+    // Create a hidden window for testing
+    auto window = std::make_unique<Window>(800, 600, L"DX11 Test", false);
+    REQUIRE(window->get_hwnd() != nullptr);
 
     // 1. Initialize Backend
     RHIBackendInfo info = {};
@@ -57,8 +54,8 @@ TEST_CASE("DX11 Swapchain and Fence - Basic Triangle", "[draw][triangle]") {
     RHIBackendRef backend = RHIBackend::init(info);
     REQUIRE(backend != nullptr);
 
-    // 2. Create Surface
-    RHISurfaceRef surface = backend->create_surface(window);
+    // 2. Create Surface using native HWND
+    RHISurfaceRef surface = backend->create_surface(window->get_hwnd());
     REQUIRE(surface != nullptr);
 
     // 3. Create Swapchain
@@ -106,72 +103,45 @@ TEST_CASE("DX11 Swapchain and Fence - Basic Triangle", "[draw][triangle]") {
         }
     )";
 
-    RHIShaderInfo vs_info = {};
-    vs_info.entry = "main";
-    vs_info.frequency = SHADER_FREQUENCY_VERTEX;
-    vs_info.code = compile_shader(vs_source, "main", "vs_5_0");
-    REQUIRE(!vs_info.code.empty());
-    RHIShaderRef vs = backend->create_shader(vs_info);
+    RHIShaderInfo vs_info = { "main", SHADER_FREQUENCY_VERTEX, compile_shader(vs_source, "main", "vs_5_0") };
+    RHIShaderInfo ps_info = { "main", SHADER_FREQUENCY_FRAGMENT, compile_shader(ps_source, "main", "ps_5_0") };
+    auto vs = backend->create_shader(vs_info);
+    auto ps = backend->create_shader(ps_info);
+    REQUIRE(vs != nullptr);
+    REQUIRE(ps != nullptr);
 
-    RHIShaderInfo ps_info = {};
-    ps_info.entry = "main";
-    ps_info.frequency = SHADER_FREQUENCY_FRAGMENT;
-    ps_info.code = compile_shader(ps_source, "main", "ps_5_0");
-    REQUIRE(!ps_info.code.empty());
-    RHIShaderRef ps = backend->create_shader(ps_info);
-
-    // Vertex Buffer
+    // Triangle Vertex Buffer (Position + Color)
     float vertices[] = {
-        // Position         // Color
-         0.0f,  0.5f, 0.0f, 1.0f, 0.0f, 0.0f,
-         0.5f, -0.5f, 0.0f, 0.0f, 1.0f, 0.0f,
-        -0.5f, -0.5f, 0.0f, 0.0f, 0.0f, 1.0f
+        // Position              Color
+         0.0f,  0.5f, 0.0f,     1.0f, 0.0f, 0.0f,  // Top - Red
+         0.5f, -0.5f, 0.0f,     0.0f, 1.0f, 0.0f,  // Right - Green
+        -0.5f, -0.5f, 0.0f,     0.0f, 0.0f, 1.0f,  // Left - Blue
     };
 
-    RHIBufferInfo vb_info = {};
-    vb_info.size = sizeof(vertices);
-    vb_info.stride = 6 * sizeof(float);
-    vb_info.memory_usage = MEMORY_USAGE_CPU_TO_GPU;
-    vb_info.type = RESOURCE_TYPE_VERTEX_BUFFER;
-    RHIBufferRef vb = backend->create_buffer(vb_info);
-    REQUIRE(vb != nullptr);
-    
-    void* data = vb->map();
-    REQUIRE(data != nullptr);
-    memcpy(data, vertices, sizeof(vertices));
-    vb->unmap();
+    RHIBufferInfo vb_info = { sizeof(vertices), 6 * sizeof(float), MEMORY_USAGE_CPU_TO_GPU, RESOURCE_TYPE_VERTEX_BUFFER };
+    auto vb = backend->create_buffer(vb_info);
+    void* vb_ptr = vb->map(); memcpy(vb_ptr, vertices, sizeof(vertices)); vb->unmap();
 
-    // Graphics Pipeline
+    // Pipeline
     RHIGraphicsPipelineInfo pipe_info = {};
     pipe_info.vertex_shader = vs;
     pipe_info.fragment_shader = ps;
-    
-    pipe_info.vertex_input_state.vertex_elements.resize(2);
-    pipe_info.vertex_input_state.vertex_elements[0].stream_index = 0;
-    pipe_info.vertex_input_state.vertex_elements[0].attribute_index = 0;
-    pipe_info.vertex_input_state.vertex_elements[0].format = FORMAT_R32G32B32_SFLOAT;
-    pipe_info.vertex_input_state.vertex_elements[0].offset = 0;
-    
-    pipe_info.vertex_input_state.vertex_elements[1].stream_index = 0;
-    pipe_info.vertex_input_state.vertex_elements[1].attribute_index = 1;
-    pipe_info.vertex_input_state.vertex_elements[1].format = FORMAT_R32G32B32_SFLOAT;
-    pipe_info.vertex_input_state.vertex_elements[1].offset = 3 * sizeof(float);
-
+    pipe_info.vertex_input_state.vertex_elements = {
+        { 0, 0, FORMAT_R32G32B32_SFLOAT, 0, 6 * sizeof(float) },
+        { 0, 1, FORMAT_R32G32B32_SFLOAT, 3 * sizeof(float), 6 * sizeof(float) }
+    };
     pipe_info.depth_stencil_state.enable_depth_test = false;
-
-    RHIGraphicsPipelineRef pipeline = backend->create_graphics_pipeline(pipe_info);
+    auto pipeline = backend->create_graphics_pipeline(pipe_info);
     REQUIRE(pipeline != nullptr);
 
     // 5. Render Loop
     const int MAX_FRAMES_IN_FLIGHT = 2;
-    uint32_t current_frame = 0;
-    std::vector<RHIFenceRef> flight_fences;
-    std::vector<bool> flight_fence_active;
-
+    std::array<RHIFenceRef, MAX_FRAMES_IN_FLIGHT> flight_fences;
+    std::array<bool, MAX_FRAMES_IN_FLIGHT> flight_fence_active = { false, false };
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-        flight_fences.push_back(backend->create_fence(false));
-        flight_fence_active.push_back(false);
+        flight_fences[i] = backend->create_fence(false);
     }
+    int current_frame = 0;
 
     RHICommandPoolInfo pool_info = {};
     RHICommandPoolRef pool = backend->create_command_pool(pool_info);
@@ -179,8 +149,11 @@ TEST_CASE("DX11 Swapchain and Fence - Basic Triangle", "[draw][triangle]") {
 
     int frame_count = 0;
 
-    while (!glfwWindowShouldClose(window) && frame_count < 300) { 
-        glfwPollEvents();
+    while (frame_count < 300) { 
+        // Process window messages
+        if (!window->process_messages()) {
+            break;
+        }
         frame_count++;
         
         if (flight_fence_active[current_frame]) {
@@ -238,7 +211,7 @@ TEST_CASE("DX11 Swapchain and Fence - Basic Triangle", "[draw][triangle]") {
     pool->destroy();
     swapchain->destroy();
     backend->destroy();
-    glfwDestroyWindow(window);
+    window.reset();
     RHIBackend::reset_backend();
 }
 
@@ -269,7 +242,8 @@ TEST_CASE("Draw Cube Blinn-Phong", "[draw][triangle]") {
     EngineContext::init(mode);
 
     auto* rhi = EngineContext::render_system()->get_rhi().get();
-    auto* window = EngineContext::render_system()->get_window(); 
+    void* window_handle = EngineContext::render_system()->get_window_handle();
+    REQUIRE(window_handle != nullptr);
     
     // 2. Setup Scene
     auto scene = std::make_shared<Scene>();

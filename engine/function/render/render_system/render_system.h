@@ -7,8 +7,12 @@
 #include "engine/function/render/render_system/render_light_manager.h"
 #include "engine/function/render/render_system/render_mesh_manager.h"
 #include "engine/function/render/render_system/gizmo_manager.h"
+#include "engine/function/render/render_pass/forward_pass.h"
 // #include "engine/function/render/render_system/render_surface_cache_manager.h"
 #include <imgui.h>
+
+// Forward declarations
+class RDGBuilder;
 #include <array>
 #include <memory>
 
@@ -43,17 +47,15 @@ struct RenderPacket {
 
 class RenderSystem {
 public:
-    void init(void* window_handle); // Match EngineContext
+    void init(void* window_handle);
     void destroy();
-    void init_glfw();
-    void destroy_glfw();
 
-    bool tick(const RenderPacket& packet); // Match EngineContext
+    bool tick(const RenderPacket& packet);
 
     //####TODO####: RenderPass accessors
     // const std::array<std::shared_ptr<RenderPass>, PASS_TYPE_MAX_CNT>& get_passes() { return passes_; }
     
-    struct GLFWwindow* get_window() { return window_; }
+    void* get_window_handle() { return native_window_handle_; }
     RHIFormat get_hdr_color_format() { return HDR_COLOR_FORMAT; }
     RHIFormat get_color_format() { return COLOR_FORMAT; }
     RHIFormat get_depth_format() { return DEPTH_FORMAT; }
@@ -68,6 +70,13 @@ public:
     void render_ui_begin();
     void render_ui(RHICommandContextRef command);
 
+private:
+    // RDG methods
+    void build_and_execute_rdg(uint32_t frame_index, const RenderPacket& packet);
+    void build_fallback_rdg(RDGBuilder& builder);
+    void render_imgui_and_gizmo(const RenderPacket& packet, const Extent2D& extent);
+
+public:
     // Entity selection for gizmo
     void set_selected_entity(Entity* entity) { selected_entity_ = entity; }
     Entity* get_selected_entity() const { return selected_entity_; }
@@ -79,7 +88,7 @@ public:
     // DependencyGraphRef get_rdg_dependency_graph() { return rdg_dependency_graph_; } //####TODO####
 
 private:
-    struct GLFWwindow* window_;
+    void* native_window_handle_ = nullptr;
 
     RHIBackendRef backend_;
     RHISurfaceRef surface_;
@@ -103,10 +112,17 @@ private:
     void init_passes();
     void init_base_resource();
     void update_global_setting();
+    
+    // UI Helpers
+    void draw_scene_hierarchy(class Scene* scene);
+    void draw_entity_node(class Entity* entity);
+    void draw_inspector_panel();
+    void draw_light_gizmo(class CameraComponent* camera, class Entity* entity, const Extent2D& extent);
 
     std::shared_ptr<RenderMeshManager> mesh_manager_;
     std::shared_ptr<RenderLightManager> light_manager_;
     std::shared_ptr<GizmoManager> gizmo_manager_;
+    std::shared_ptr<render::ForwardPass> forward_pass_;
 
     Entity* selected_entity_ = nullptr;
 };

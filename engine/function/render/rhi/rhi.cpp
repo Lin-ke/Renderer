@@ -9,13 +9,13 @@ class DummyRHIBackend : public RHIBackend {
 public:
     DummyRHIBackend(const RHIBackendInfo& info) : RHIBackend(info) {}
 
-    void init_imgui(GLFWwindow* window) override {}
+    void init_imgui(void* window_handle) override {}
     void imgui_new_frame() override {}
     void imgui_render() override {}
     void imgui_shutdown() override {}
 
     RHIQueueRef get_queue(const RHIQueueInfo& info) override { return nullptr; }
-    RHISurfaceRef create_surface(GLFWwindow* window) override { return nullptr; }
+    RHISurfaceRef create_surface(void* native_window_handle) override { return nullptr; }
     RHISwapchainRef create_swapchain(const RHISwapchainInfo& info) override { return nullptr; }
     RHICommandPoolRef create_command_pool(const RHICommandPoolInfo& info) override { return nullptr; }
     RHICommandContextRef create_command_context(RHICommandPoolRef pool) override { return nullptr; }

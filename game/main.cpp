@@ -1,5 +1,6 @@
 #include "engine/main/engine_context.h"
 #include "engine/core/window/window.h"
+#include "engine/function/input/input.h"
 #include "engine/function/framework/world.h"
 #include "engine/function/framework/scene.h"
 #include "engine/function/framework/entity.h"
@@ -23,7 +24,7 @@ DEFINE_LOG_TAG(LogGame, "Game");
 
 // Frame counter for debugging
 static uint32_t g_frame_count = 0;
-static const uint32_t MAX_FRAMES = 30;  // Only render 30 frames then exit
+static const uint32_t MAX_FRAMES = 3000;  // Only render 30 frames then exit
 
 Entity* setup_bunny_scene() {
     INFO(LogGame, "Setting up bunny render scene...");
@@ -37,7 +38,8 @@ Entity* setup_bunny_scene() {
     INFO(LogGame, "Creating camera...");
     auto* camera_ent = scene->create_entity();
     auto* cam_trans = camera_ent->add_component<TransformComponent>();
-    cam_trans->transform.set_position({0.0f, 0.0f, 3.0f});
+    // Move back along X (World Forward) to see the origin (0,0,0)
+    cam_trans->transform.set_position({-5.0f, 0.0f, 0.0f});
     cam_trans->transform.set_rotation({0.0f, 0.0f, 0.0f});
     
     auto* cam_comp = camera_ent->add_component<CameraComponent>();
@@ -132,7 +134,7 @@ int main() {
     	mode.set(EngineContext::StartMode::Asset);
     	mode.set(EngineContext::StartMode::Window);
     	mode.set(EngineContext::StartMode::Render);
-    	// mode.set(EngineContext::StartMode::SingleThread);    
+    	mode.set(EngineContext::StartMode::SingleThread);  // Required for direct RenderSystem::tick() calls
     EngineContext::init(mode);
     
     // Initialize asset manager
@@ -153,7 +155,14 @@ int main() {
     // Run main loop with frame limit
     INFO(LogGame, "Entering main loop (max {} frames)...", MAX_FRAMES);
     
+    auto last_time = std::chrono::steady_clock::now();
+    
     while (g_frame_count < MAX_FRAMES) {
+        // Calculate delta time
+        auto current_time = std::chrono::steady_clock::now();
+        float delta_time = std::chrono::duration<float>(current_time - last_time).count();
+        last_time = current_time;
+        
         // Process window messages
         auto* window = EngineContext::window();
         if (window && !window->process_messages()) {
@@ -162,11 +171,16 @@ int main() {
         }
         
         // Tick input
-        // Input::get_instance().tick();  // Not available in this build
+        Input::get_instance().tick();
+        
+        // Tick world (this updates components including camera)
+        if (EngineContext::world()) {
+            EngineContext::world()->tick(delta_time);
+        }
         
         // Prepare render packet
         RenderPacket packet;
-        packet.frame_index = g_frame_count % 3;  // FRAMES_IN_FLIGHT = 3
+        packet.frame_index = g_frame_count % 2;  // MAX_FRAMES_IN_FLIGHT = 2
         
         // Fill packet with scene data
         if (EngineContext::world()) {
@@ -207,6 +221,14 @@ int main() {
         if (EngineContext::render_system()) {
             if (!EngineContext::render_system()->tick(packet)) {
                 INFO(LogGame, "RenderSystem tick returned false, exiting");
+                break;
+            }
+        }
+        
+        // Process window messages (needed for Win32 window updates)
+        if (EngineContext::window()) {
+            if (!EngineContext::window()->process_messages()) {
+                INFO(LogGame, "Window close requested");
                 break;
             }
         }

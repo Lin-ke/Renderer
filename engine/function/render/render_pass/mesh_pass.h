@@ -6,6 +6,10 @@
 #include <memory>
 #include <map>
 
+// Forward declaration
+class Material;
+using MaterialRef = std::shared_ptr<Material>;
+
 namespace render {
 
 /**
@@ -15,12 +19,14 @@ struct DrawBatch {
     uint32_t object_id = 0;
     RHIBufferRef vertex_buffer;      // Position buffer
     RHIBufferRef normal_buffer;      // Normal buffer (for lighting)
+    RHIBufferRef tangent_buffer;     // Tangent buffer (for normal mapping)
+    RHIBufferRef texcoord_buffer;    // Texture coordinate buffer
     RHIBufferRef index_buffer;
     uint32_t index_count = 0;
     uint32_t index_offset = 0;
     Mat4 model_matrix = Mat4::Identity();
     Mat4 inv_model_matrix = Mat4::Identity();
-    // MaterialRef material; //####TODO####: Material support
+    MaterialRef material;            // Material for PBR rendering
 };
 
 /**

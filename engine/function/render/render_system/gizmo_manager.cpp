@@ -40,7 +40,7 @@ void GizmoManager::shutdown() {
 }
 
 void GizmoManager::draw_gizmo(CameraComponent* camera, Entity* selected_entity,
-                              ImVec2 window_pos, ImVec2 window_size) {
+                              ImVec2 viewport_pos, ImVec2 viewport_size) {
     if (!initialized_ || !enabled_ || !camera || !selected_entity) {
         return;
     }
@@ -54,16 +54,16 @@ void GizmoManager::draw_gizmo(CameraComponent* camera, Entity* selected_entity,
         return; // Not in a valid frame
     }
     
-    static bool logged_once = false;
-    if (!logged_once) {
-        INFO(LogGizmo, "Drawing gizmo for entity, viewport: {}x{} at ({}, {})", 
-             window_size.x, window_size.y, window_pos.x, window_pos.y);
-        logged_once = true;
-    }
-
+    ImGuiIO& io = ImGui::GetIO();
+    (void)io;
+    
     // Get camera matrices (ImGuizmo expects column-major matrices)
     Mat4 view = camera->get_view_matrix();
     Mat4 proj = camera->get_projection_matrix();
+    
+    // ImGuizmo works with DirectX coordinate system directly
+    // No Y-flip needed for projection matrix
+    Mat4 proj_gl = proj;
 
     // Convert Eigen matrices to float arrays (column-major for ImGuizmo)
     float view_matrix[16];
@@ -74,7 +74,7 @@ void GizmoManager::draw_gizmo(CameraComponent* camera, Entity* selected_entity,
     for (int i = 0; i < 4; ++i) {
         for (int j = 0; j < 4; ++j) {
             view_matrix[i + j * 4] = view(i, j);
-            proj_matrix[i + j * 4] = proj(i, j);
+            proj_matrix[i + j * 4] = proj_gl(i, j);
         }
     }
 
@@ -86,23 +86,46 @@ void GizmoManager::draw_gizmo(CameraComponent* camera, Entity* selected_entity,
         }
     }
 
-    // Begin ImGuizmo drawing
-    ImGuizmo::BeginFrame();
+    // Set viewport to full screen - this is crucial for correct mouse interaction!
+    ImGuizmo::SetRect(viewport_pos.x, viewport_pos.y, viewport_size.x, viewport_size.y);
     
-    // Set viewport - must be called before Manipulate
-    ImGuizmo::SetRect(window_pos.x, window_pos.y, window_size.x, window_size.y);
+    // Enable gizmo
+    ImGuizmo::Enable(true);
     
-    // Optional: Set drawlist (nullptr uses foreground draw list)
-    ImGuizmo::SetDrawlist();
+    // Draw gizmo - use window draw list since we're inside a window
+    ImGuizmo::SetDrawlist(ImGui::GetWindowDrawList());
 
-    // Draw gizmo
-    ImGuizmo::Manipulate(view_matrix, proj_matrix, 
+    // Save original transform matrix to detect changes
+    float original_transform[16];
+    for (int i = 0; i < 16; ++i) original_transform[i] = transform_matrix[i];
+    
+    // Draw gizmo - always call Manipulate to ensure consistent rendering
+    bool manipulated = ImGuizmo::Manipulate(view_matrix, proj_matrix, 
                          static_cast<ImGuizmo::OPERATION>(current_operation_),
                          static_cast<ImGuizmo::MODE>(current_mode_),
-                         transform_matrix);
-
+                         transform_matrix, nullptr, nullptr);
+    
     // Apply transform if changed
-    if (ImGuizmo::IsUsing()) {
+    bool is_using = ImGuizmo::IsUsing();
+    bool is_over = ImGuizmo::IsOver();
+    
+    // Debug: log when starting/stopping gizmo usage
+    static bool was_using = false;
+    if (is_using != was_using) {
+        was_using = is_using;
+        LOG(INFO) << "[GizmoManager] usage " << (is_using ? "started" : "stopped");
+    }
+    
+    // Check if matrix actually changed
+    bool matrix_changed = false;
+    for (int i = 0; i < 16; ++i) {
+        if (std::abs(transform_matrix[i] - original_transform[i]) > 0.0001f) {
+            matrix_changed = true;
+            break;
+        }
+    }
+    
+    if (is_using && matrix_changed) {
         // Convert back from column-major
         Mat4 new_model;
         for (int i = 0; i < 4; ++i) {
@@ -110,7 +133,7 @@ void GizmoManager::draw_gizmo(CameraComponent* camera, Entity* selected_entity,
                 new_model(i, j) = transform_matrix[i + j * 4];
             }
         }
-
+        
         // Extract position, rotation, scale
         Vec3 position = new_model.block<3, 1>(0, 3);
         

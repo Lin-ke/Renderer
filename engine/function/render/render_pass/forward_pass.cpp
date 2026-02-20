@@ -1,7 +1,14 @@
 #include "engine/function/render/render_pass/forward_pass.h"
 #include "engine/main/engine_context.h"
 #include "engine/function/render/render_system/render_system.h"
+#include "engine/function/render/render_system/render_mesh_manager.h"
 #include "engine/function/render/rhi/rhi_command_list.h"
+#include "engine/function/framework/world.h"
+#include "engine/function/framework/scene.h"
+#include "engine/function/framework/entity.h"
+#include "engine/function/framework/component/transform_component.h"
+#include "engine/function/framework/component/camera_component.h"
+#include "engine/function/framework/component/directional_light_component.h"
 #include "engine/core/log/Log.h"
 
 #include <cstring>
@@ -335,8 +342,141 @@ void ForwardPass::set_per_frame_data(const Mat4& view, const Mat4& proj,
 }
 
 void ForwardPass::build(RDGBuilder& builder) {
-    // RDG integration - will be called by render graph builder
-    // Actual rendering is done in draw_batch which is called during graph execution
+    if (!initialized_ || !pipeline_) {
+        return;
+    }
+    
+    // Import swapchain texture (external resource)
+    auto render_system = EngineContext::render_system();
+    if (!render_system) return;
+    
+    auto swapchain = render_system->get_swapchain();
+    if (!swapchain) {
+        return;
+    }
+    
+    // Get current back buffer texture
+    uint32_t current_frame = swapchain->get_current_frame_index();
+    RHITextureRef back_buffer = swapchain->get_texture(current_frame);
+    if (!back_buffer) {
+        return;
+    }
+    
+    // Update per-frame data from camera and lights BEFORE creating the pass
+    auto mesh_manager = render_system->get_mesh_manager();
+    if (mesh_manager) {
+        auto* camera = mesh_manager->get_active_camera();
+        if (camera) {
+            // Get light data from world
+            Vec3 light_dir = Vec3(0.0f, -1.0f, 0.0f);
+            Vec3 light_color = Vec3(1.0f, 1.0f, 1.0f);
+            float light_intensity = 1.0f;
+            
+            auto* world = EngineContext::world();
+            if (world && world->get_active_scene()) {
+                auto* light = world->get_active_scene()->get_directional_light();
+                if (light && light->enable()) {
+                    auto* entity = light->get_owner();
+                    if (entity) {
+                        auto* transform = entity->get_component<TransformComponent>();
+                        if (transform) {
+                            light_dir = -transform->transform.front();
+                        }
+                    }
+                    light_color = light->get_color();
+                    light_intensity = light->get_intensity();
+                }
+            }
+            
+            set_per_frame_data(
+                camera->get_view_matrix(),
+                camera->get_projection_matrix(),
+                camera->get_position(),
+                light_dir,
+                light_color,
+                light_intensity
+            );
+        }
+    }
+    
+    // Create or import color target
+    RDGTextureHandle color_target = builder.create_texture("ForwardPass_Color")
+        .import(back_buffer, RESOURCE_STATE_COLOR_ATTACHMENT)
+        .finish();
+    
+    // Create render pass using RDG
+    INFO(LogForwardPass, "Building ForwardPass RDG node...");
+    builder.create_render_pass("ForwardPass_Main")
+        .color(0, color_target, ATTACHMENT_LOAD_OP_CLEAR, ATTACHMENT_STORE_OP_STORE, 
+               Color4{0.1f, 0.2f, 0.4f, 1.0f})
+        .execute([this, render_system](RDGPassContext context) {
+            ERR(LogForwardPass, "Executing ForwardPass RDG lambda!");
+            auto mesh_manager = render_system->get_mesh_manager();
+            if (!mesh_manager) {
+                ERR(LogForwardPass, "Mesh manager is null!");
+                return;
+            }
+            
+            RHICommandListRef cmd = context.command;
+            if (!cmd) {
+                ERR(LogForwardPass, "Command list is null!");
+                return;
+            }
+            
+            // Set viewport and scissor
+            Extent2D extent = render_system->get_swapchain()->get_extent();
+            cmd->set_viewport({0, 0}, {extent.width, extent.height});
+            cmd->set_scissor({0, 0}, {extent.width, extent.height});
+            cmd->set_graphics_pipeline(pipeline_);
+            
+            // Update and bind per-frame buffer
+            if (per_frame_buffer_) {
+                if (per_frame_dirty_) {
+                    void* mapped = per_frame_buffer_->map();
+                    if (mapped) {
+                        memcpy(mapped, &per_frame_data_, sizeof(per_frame_data_));
+                        per_frame_buffer_->unmap();
+                    }
+                    per_frame_dirty_ = false;
+                }
+                cmd->bind_constant_buffer(per_frame_buffer_, 0, 
+                    static_cast<ShaderFrequency>(SHADER_FREQUENCY_VERTEX | SHADER_FREQUENCY_FRAGMENT));
+            }
+            
+            // Get batches from mesh manager and draw them
+            std::vector<DrawBatch> batches;
+            mesh_manager->collect_draw_batches(batches);
+            ERR(LogForwardPass, "Collected {} draw batches in RDG lambda", batches.size());
+            for (const auto& batch : batches) {
+                // Update and bind per-object buffer
+                if (per_object_buffer_) {
+                    PerObjectData object_data;
+                    object_data.model = batch.model_matrix;
+                    object_data.inv_model = batch.inv_model_matrix;
+                    void* mapped = per_object_buffer_->map();
+                    if (mapped) {
+                        memcpy(mapped, &object_data, sizeof(object_data));
+                        per_object_buffer_->unmap();
+                    }
+                    cmd->bind_constant_buffer(per_object_buffer_, 1, SHADER_FREQUENCY_VERTEX);
+                }
+                
+                // Bind vertex buffers
+                if (batch.vertex_buffer) {
+                    cmd->bind_vertex_buffer(batch.vertex_buffer, 0, 0);
+                }
+                if (batch.normal_buffer) {
+                    cmd->bind_vertex_buffer(batch.normal_buffer, 1, 0);
+                }
+                
+                // Draw
+                if (batch.index_buffer) {
+                    cmd->bind_index_buffer(batch.index_buffer, 0);
+                    cmd->draw_indexed(batch.index_count, 1, batch.index_offset, 0, 0);
+                }
+            }
+        })
+        .finish();
 }
 
 void ForwardPass::draw_batch(RHICommandContextRef command, const DrawBatch& batch) {

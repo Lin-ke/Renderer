@@ -109,12 +109,11 @@ namespace Math
     Mat4 look_at(Vec3 eye, Vec3 center, Vec3 up)
     {
         // DX11 Left-handed coordinate system
-        // In LH system: +X right, +Y up, +Z forward (into the screen, away from camera)
-        // But we want view space +Z to point in front of camera (toward the target)
-        // So forward vector = target - eye (points toward target, which is in front of camera)
-        Vec3 f = (center - eye).normalized();  // Forward direction (eye -> center)
-        Vec3 s = up.cross(f).normalized();     // Right vector (up x forward for LH)
-        Vec3 u = f.cross(s);                   // Up vector
+        // World Space: +X Forward, +Y Up, +Z Right
+        // View Space: +X Right, +Y Up, +Z Forward
+        Vec3 f = (center - eye).normalized();  // View Forward
+        Vec3 s = up.cross(f).normalized();     // View Right (Standard LH: Up x Forward)
+        Vec3 u = f.cross(s);                   // View Up
 
         Mat4 mat = Mat4::Identity();
         // Row 0: right vector
@@ -127,7 +126,7 @@ namespace Math
         mat(1, 1) = u.y();
         mat(1, 2) = u.z();
         mat(1, 3) = -u.dot(eye);
-        // Row 2: forward vector (+Z points toward target, in front of camera)
+        // Row 2: forward vector (+Z points toward target)
         mat(2, 0) = f.x();
         mat(2, 1) = f.y();
         mat(2, 2) = f.z();

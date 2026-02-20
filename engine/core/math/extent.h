@@ -15,7 +15,7 @@ typedef struct Extent2D
 
 	const uint32_t MipSize() const 
 	{ 
-		return (uint32_t)(std::floor(std::log2(std::max(width, height)))) + 1; 
+		return (uint32_t)(std::floor(std::log2((std::max)(width, height)))) + 1; 
 	}
     
     const uint32_t mip_size() const { return MipSize(); }
@@ -37,7 +37,7 @@ typedef struct Extent3D
 	
 	const uint32_t MipSize() const 
 	{ 
-		return (uint32_t)(std::floor(std::log2(std::max(width, std::max(height, depth))))) + 1; 
+		return (uint32_t)(std::floor(std::log2((std::max)(width, (std::max)(height, depth))))) + 1; 
 	}
 
     const uint32_t mip_size() const { return MipSize(); }

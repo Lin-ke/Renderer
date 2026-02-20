@@ -10,6 +10,12 @@
 class MeshRendererComponent;
 class CameraComponent;
 
+namespace render {
+    class ForwardPass;
+    class PBRForwardPass;
+    struct DrawBatch;
+}
+
 /**
  * @brief Manages mesh rendering for the engine
  * 
@@ -43,10 +49,22 @@ public:
     std::shared_ptr<render::ForwardPass> get_forward_pass() { return forward_pass_; }
 
     /**
+     * @brief Get the PBR forward pass for configuration
+     */
+    std::shared_ptr<render::PBRForwardPass> get_pbr_forward_pass() { return pbr_forward_pass_; }
+
+    /**
      * @brief Set wireframe rendering mode
      * @param enable true for wireframe, false for solid
      */
     void set_wireframe(bool enable);
+
+    /**
+     * @brief Enable or disable PBR rendering
+     * @param enable true to use PBRForwardPass, false to use ForwardPass
+     */
+    void set_pbr_enabled(bool enable) { pbr_enabled_ = enable; }
+    bool is_pbr_enabled() const { return pbr_enabled_; }
 
     /**
      * @brief Set the active camera for rendering
@@ -78,6 +96,9 @@ private:
     std::vector<render::DrawBatch> current_batches_;
 
     std::shared_ptr<render::ForwardPass> forward_pass_;
+    std::shared_ptr<render::PBRForwardPass> pbr_forward_pass_;
+    bool pbr_enabled_ = false;
+
     std::vector<MeshRendererComponent*> mesh_renderers_;
     CameraComponent* active_camera_ = nullptr;
     

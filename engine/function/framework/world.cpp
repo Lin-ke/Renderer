@@ -45,28 +45,8 @@ void World::set_active_scene(std::shared_ptr<Scene> scene) {
 void World::tick(float delta_time) {
     if (!active_scene_) return;
 
-    // Update all components
-    for (auto& entity : active_scene_->entities_) {
-        if (!entity) continue;
-
-        // Update transform first
-        auto* transform = entity->get_component<TransformComponent>();
-        if (transform) {
-            //####TODO####: Transform animation/physics update
-        }
-
-        // Update camera components
-        auto* camera = entity->get_component<CameraComponent>();
-        if (camera) {
-            camera->on_update(delta_time);
-        }
-
-        // Update mesh renderer components
-        auto* mesh = entity->get_component<MeshRendererComponent>();
-        if (mesh) {
-            mesh->on_update(delta_time);
-        }
-    }
+    // Tick the active scene, which will tick all entities and their components
+    active_scene_->tick(delta_time);
 }
 
 std::vector<MeshRendererComponent*> World::get_mesh_renderers() const {

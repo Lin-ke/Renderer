@@ -96,6 +96,7 @@ struct ModelProcessSetting {
     bool generate_cluster = false;        // Generate mesh clusters
     bool generate_virtual_mesh = false;   // Generate virtual geometry (Nanite-like)
     bool cache_cluster = false;           // Cache cluster data to avoid regeneration
+    bool force_png_texture = false;       // Force texture to use .png extension (for unsupported formats)
     
     template<class Archive>
     void serialize(Archive& ar) {
@@ -107,6 +108,7 @@ struct ModelProcessSetting {
         ar(cereal::make_nvp("generate_cluster", generate_cluster));
         ar(cereal::make_nvp("generate_virtual_mesh", generate_virtual_mesh));
         ar(cereal::make_nvp("cache_cluster", cache_cluster));
+        ar(cereal::make_nvp("force_png_texture", force_png_texture));
     }
 };
 
@@ -188,7 +190,10 @@ public:
      * @param submesh_index Submesh index
      * @return Material reference
      */
-    MaterialRef get_material(uint32_t submesh_index) { return materials_[submesh_index]; }
+    MaterialRef get_material(uint32_t submesh_index) { 
+        if (submesh_index < materials_.size()) return materials_[submesh_index];
+        return nullptr;
+    }
 
 protected:
     /**

@@ -18,6 +18,7 @@ public:
 	virtual ~Component() = default;
 
 	virtual void on_init() {}  // Called when component is added to entity
+	virtual void on_update(float delta_time) {}  // Called every frame with delta time in seconds
 
 	virtual void traverse_deps(std::function<void(std::shared_ptr<class Asset>)> callback) const {}
 

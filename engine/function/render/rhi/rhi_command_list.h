@@ -77,6 +77,8 @@ public:
     void push_constants(void* data, uint16_t size, ShaderFrequency frequency);
     void bind_descriptor_set(RHIDescriptorSetRef descriptor, uint32_t set = 0);
     void bind_constant_buffer(RHIBufferRef buffer, uint32_t slot, ShaderFrequency frequency);
+    void bind_texture(RHITextureRef texture, uint32_t slot, ShaderFrequency frequency);
+    void bind_sampler(RHISamplerRef sampler, uint32_t slot, ShaderFrequency frequency);
     void bind_vertex_buffer(RHIBufferRef vertex_buffer, uint32_t stream_index = 0, uint32_t offset = 0);
     void bind_index_buffer(RHIBufferRef index_buffer, uint32_t offset = 0);
 
@@ -295,6 +297,22 @@ struct RHICommandBindConstantBuffer : public RHICommand {
     ShaderFrequency frequency;
     RHICommandBindConstantBuffer(RHIBufferRef b, uint32_t s, ShaderFrequency f) : buffer(b), slot(s), frequency(f) {}
     void execute(RHICommandContextRef context) override { context->bind_constant_buffer(buffer, slot, frequency); }
+};
+
+struct RHICommandBindTexture : public RHICommand {
+    RHITextureRef texture;
+    uint32_t slot;
+    ShaderFrequency frequency;
+    RHICommandBindTexture(RHITextureRef t, uint32_t s, ShaderFrequency f) : texture(t), slot(s), frequency(f) {}
+    void execute(RHICommandContextRef context) override { context->bind_texture(texture, slot, frequency); }
+};
+
+struct RHICommandBindSampler : public RHICommand {
+    RHISamplerRef sampler;
+    uint32_t slot;
+    ShaderFrequency frequency;
+    RHICommandBindSampler(RHISamplerRef s, uint32_t sl, ShaderFrequency f) : sampler(s), slot(sl), frequency(f) {}
+    void execute(RHICommandContextRef context) override { context->bind_sampler(sampler, slot, frequency); }
 };
 
 struct RHICommandBindVertexBuffer : public RHICommand {
@@ -555,6 +573,16 @@ inline void RHICommandList::bind_descriptor_set(RHIDescriptorSetRef descriptor, 
 inline void RHICommandList::bind_constant_buffer(RHIBufferRef buffer, uint32_t slot, ShaderFrequency frequency) {
     if (info_.bypass) info_.context->bind_constant_buffer(buffer, slot, frequency);
     else ADD_COMMAND(RHICommandBindConstantBuffer, buffer, slot, frequency);
+}
+
+inline void RHICommandList::bind_texture(RHITextureRef texture, uint32_t slot, ShaderFrequency frequency) {
+    if (info_.bypass) info_.context->bind_texture(texture, slot, frequency);
+    else ADD_COMMAND(RHICommandBindTexture, texture, slot, frequency);
+}
+
+inline void RHICommandList::bind_sampler(RHISamplerRef sampler, uint32_t slot, ShaderFrequency frequency) {
+    if (info_.bypass) info_.context->bind_sampler(sampler, slot, frequency);
+    else ADD_COMMAND(RHICommandBindSampler, sampler, slot, frequency);
 }
 
 inline void RHICommandList::bind_vertex_buffer(RHIBufferRef vertex_buffer, uint32_t stream_index, uint32_t offset) {

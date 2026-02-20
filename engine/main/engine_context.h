@@ -11,6 +11,7 @@
 #include "engine/function/render/render_system.h"
 #include "engine/function/render/rhi/rhi.h"
 #include "engine/function/render/render_resource/render_resource_manager.h"
+#include "engine/core/utils/timer.h"
 #include "engine/core/log/Log.h" // Include for DECLARE_LOG_TAG
 
 DECLARE_LOG_TAG(LogEngine);
@@ -63,6 +64,18 @@ public:
 
     static uint32_t current_frame_index();
 
+    /**
+     * @brief Get the delta time (time since last frame in seconds)
+     * @return Delta time in seconds
+     */
+    static float get_delta_time();
+
+    /**
+     * @brief Get the current tick count (total number of frames processed)
+     * @return Current tick count
+     */
+    static uint32_t get_current_tick();
+
 private:
 	EngineContext();
     std::bitset<8> mode_;
@@ -78,6 +91,9 @@ private:
 
     static ThreadRole thread_role_;
     uint32_t current_frame_index_ = 0;
+    uint32_t current_tick_ = 0;          // Total frame/tick count
+    float delta_time_ = 0.0f;            // Time since last frame in seconds
+    Timer timer_;                        // Timer for measuring delta time
 
     // Render Thread Synchronization
     std::mutex render_mutex_;

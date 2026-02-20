@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-这是一个基于C++20开发的实时渲染引擎项目，采用DirectX 11作为图形后端，设计目标是构建一个具有现代化渲染管线、ECS架构、反射系统和资源管理功能的游戏引擎。
+这是一个基于C++20开发的实时渲染引擎项目，采用DirectX 11作为图形后端，设计目标是构建一个具有现代化渲染管线、ECS架构、反射系统和资源管理功能的游戏引擎。在Windows系统（PowerShell）命令行下工作。
 
 ### Key Features
 - **Rendering**: DirectX 11 RHI (Render Hardware Interface) 抽象层，支持多种渲染Pass（Forward、Deferred、Post-processing等）
@@ -40,7 +40,7 @@ renderer/
 │   │   ├── os/          # 操作系统抽象（线程池）
 │   │   ├── reflect/     # 反射和序列化系统
 │   │   ├── hash/        # 哈希算法（MurmurHash）
-│   │   ├── utils/       # 工具函数
+│   │   ├── utils/       # 工具函数（Timer等）
 │   │   ├── window/      # 窗口管理（GLFW）
 │   │   └── dependency_graph/  # 依赖图
 │   ├── function/        # 功能模块
@@ -221,7 +221,10 @@ void MyComponent::update(float delta_time) {
 | **draw** | 所有绘制测试 | `xmake run utest "[draw]"` |
 | **triangle** | Triangle 绘制测试 (基础DX11、Cube) | `xmake run utest "[triangle]"` |
 | **bunny** | Bunny 模型渲染测试 | `xmake run utest "[bunny]"` |
+| **pbr** | PBR 渲染测试 (PBR Forward Pass, FBX Model) | `xmake run utest "[pbr]"` |
+| **rdg** | RDG 渲染测试 (RDG Forward Pass) | `xmake run utest "[rdg]"` |
 | **light** | 灯光系统测试 (LightManager, DirectionalLight, PointLight) | `xmake run utest "[light]"` |
+| **tick** | Tick 系统测试 (OrbitComponent, 飞船轨道运动) | `xmake run utest "[tick]"` |
 
 ### 测试目录结构
 ```
@@ -232,9 +235,12 @@ test/
 ├── test_scene.cpp             # [scene] Scene 管理
 ├── test_thread_pool.cpp       # [thread_pool] 线程池
 ├── test_light_manager.cpp     # [light] 灯光系统
+├── test_tick_system.cpp       # [tick] Tick 系统（飞船轨道运动）
 ├── draw/                      # 绘制测试
 │   ├── test_triangle.cpp      # [draw][triangle] DX11 Triangle + Cube
-│   └── test_bunny.cpp         # [draw][bunny] Bunny 渲染
+│   ├── test_bunny.cpp         # [draw][bunny] Bunny 渲染
+│   ├── test_rdg_forward.cpp   # [draw][rdg] RDG Forward Pass 渲染
+│   └── test_pbr_klee.cpp      # [draw][pbr] PBR 渲染测试
 └── render_resource/           # 渲染资源测试
     ├── test_texture.cpp       # [render_resource] Texture
     ├── test_material.cpp      # [render_resource] Material
@@ -301,7 +307,59 @@ EngineContext::render_system();    // 渲染系统
 EngineContext::world();            // 游戏世界
 EngineContext::window();           // 窗口
 EngineContext::thread_pool();      // 线程池
+
+// 时间和Tick信息
+EngineContext::get_delta_time();    // 获取上一帧耗时（秒）
+EngineContext::get_current_tick();  // 获取当前总帧数
 ```
+
+### Tick System
+引擎采用分层Tick系统，每帧按顺序更新：
+
+```cpp
+// 1. EngineContext 计算 delta_time 并更新系统
+void EngineContext::main_loop_internal() {
+    delta_time_ = timer_.get_elapsed_sec();  // 计算帧间隔
+    
+    Input::get_instance().tick();            // 输入系统tick
+    world_->tick(delta_time_);               // 世界/场景/组件tick
+    asset_manager_->tick();                  // 资源管理器tick
+    // ... 渲染系统tick
+}
+
+// 2. World 转发 tick 到 Scene
+void World::tick(float delta_time) {
+    if (active_scene_) active_scene_->tick(delta_time);
+}
+
+// 3. Scene 转发 tick 到所有 Entity
+void Scene::tick(float delta_time) {
+    for (auto& entity : entities_) {
+        entity->tick(delta_time);
+    }
+}
+
+// 4. Entity 转发 tick 到所有 Component
+void Entity::tick(float delta_time) {
+    for (auto& comp : components_) {
+        comp->on_update(delta_time);
+    }
+}
+
+// 5. Component 实现具体的更新逻辑
+class MyComponent : public Component {
+    void on_update(float delta_time) override {
+        // 每帧执行的逻辑，使用 delta_time 保证帧率无关
+        position += velocity * delta_time;
+    }
+};
+```
+
+**关键特性：**
+- **分层传播**: EngineContext → World → Scene → Entity → Component
+- **帧率无关**: 使用 `delta_time`（秒）确保动画/移动在不同帧率下表现一致
+- **Timer工具**: `engine/core/utils/timer.h` 提供高精度计时
+- **自动触发**: 无需手动调用，main_loop 自动处理所有 tick
 
 ### Asset System
 - **UID**: 使用128位UUID标识资源
@@ -318,8 +376,12 @@ EngineContext::thread_pool();      // 线程池
 ### Render System
 - **RHI**: 抽象渲染硬件接口，当前仅实现DX11
 - **RDG**: Render Dependency Graph，用于管理渲染Pass和资源依赖
+  - `RDGBuilder`: 构建渲染图，声明资源和Pass依赖
+  - `RDGTextureHandle/RDGBufferHandle`: 资源句柄
+  - `RDGRenderPassBuilder`: 渲染Pass构建器
+  - 自动资源状态管理和屏障生成
 - **Render Resources**: Buffer、Texture、Shader、Sampler、Material、Model等
-- **Render Passes**: ForwardPass、DeferredPass、Post-processing等
+- **Render Passes**: ForwardPass (使用RDG)、DeferredPass、Post-processing等
 
 ---
 

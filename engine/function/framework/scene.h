@@ -116,6 +116,18 @@ public:
     std::vector<VolumeLightComponent*> get_volume_lights() const {
         return get_components<VolumeLightComponent>();
     }
+
+    /**
+     * @brief Tick all entities in the scene
+     * @param delta_time Time since last frame in seconds
+     */
+    void tick(float delta_time) {
+        for (auto& entity : entities_) {
+            if (entity) {
+                entity->tick(delta_time);
+            }
+        }
+    }
     
 };
 

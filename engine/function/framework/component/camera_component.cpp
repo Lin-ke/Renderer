@@ -23,8 +23,8 @@ void CameraComponent::input_move(float delta_time) {
     auto transform_component = get_owner()->get_component<TransformComponent>();
     if (!transform_component) return;
 
-    float speed = 5.0f;
-    float delta = speed * delta_time; // delta_time is in seconds
+    float speed = 20.0f; // Increased from 5.0 for better navigation
+    float delta = speed * delta_time;
     float sensitivity = 0.5f;
 
     Vec3 delta_position = Vec3::Zero();
@@ -44,11 +44,13 @@ void CameraComponent::input_move(float delta_time) {
     if (input.is_mouse_button_down(MouseButton::Right)) {
         float dx, dy;
         input.get_mouse_delta(dx, dy);
+        // Corrected directions: 
+        // Mouse Right -> dx > 0 -> Decrease Yaw (rotate right)
+        // Mouse Up -> dy < 0 -> Increase Pitch (look up)
         Vec2 offset(-dx * sensitivity, -dy * sensitivity);
 
         Vec3 euler_angle = transform_component->transform.get_euler_angle();
-        // euler_angle = Math::clamp_euler_angle(euler_angle + Vec3(0.0f, offset.x(), offset.y())); //####TODO####: Math::ClampEulerAngle missing
-        euler_angle += Vec3(0.0f, offset.x(), offset.y()); 
+        euler_angle = Math::clamp_euler_angle(euler_angle + Vec3(0.0f, offset.x(), offset.y()));
         transform_component->transform.set_rotation(euler_angle);
 
         // FOV
@@ -81,8 +83,8 @@ void CameraComponent::update_matrix() {
     prev_view_ = view_;
     prev_proj_ = proj_;
 
-    // TEMP: Simple view matrix looking at origin from position
-    view_ = Math::look_at(position_, Vec3(0, 0, 0), Vec3(0, 1, 0));
+    // Use transform's orientation for view matrix instead of hardcoding look_at to origin
+    view_ = Math::look_at(position_, position_ + front_, up_);
     proj_ = Math::perspective(Math::to_radians(fovy_), aspect_, near_, far_);
     // proj_(1, 1) *= -1; // Vulkan specific? RD had it. DX11 might differ. Keeping it if project uses Vulkan conventions.
 

@@ -53,6 +53,18 @@ public:
         }
     }
 
+    /**
+     * @brief Tick all components with delta time
+     * @param delta_time Time since last frame in seconds
+     */
+    void tick(float delta_time) {
+        for (auto& comp : components_) {
+            if (comp) {
+                comp->on_update(delta_time);
+            }
+        }
+    }
+
     // Deep clone using reflection
     std::unique_ptr<Entity> clone();
 };

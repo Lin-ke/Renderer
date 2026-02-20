@@ -9,8 +9,6 @@
 #include <string>
 #include <vector>
 
-struct GLFWwindow;
-
 enum RHIBackendType {
     BACKEND_VULKAN = 0,
     BACKEND_DX11,
@@ -42,7 +40,7 @@ public:
     virtual void destroy();
 
     // ImGui
-    virtual void init_imgui(GLFWwindow* window) = 0;
+    virtual void init_imgui(void* window_handle) = 0;
     virtual void imgui_new_frame() = 0;
     virtual void imgui_render() = 0;
     virtual void imgui_shutdown() = 0;
@@ -50,7 +48,7 @@ public:
     // Basic Resources
     virtual RHIQueueRef get_queue(const RHIQueueInfo& info) = 0;
 
-    virtual RHISurfaceRef create_surface(GLFWwindow* window) = 0;
+    virtual RHISurfaceRef create_surface(void* native_window_handle) = 0;
 
     virtual RHISwapchainRef create_swapchain(const RHISwapchainInfo& info) = 0;
 
@@ -172,6 +170,10 @@ public:
     virtual void bind_descriptor_set(RHIDescriptorSetRef descriptor, uint32_t set) = 0;
 
     virtual void bind_constant_buffer(RHIBufferRef buffer, uint32_t slot, ShaderFrequency frequency) = 0;
+    
+    virtual void bind_texture(RHITextureRef texture, uint32_t slot, ShaderFrequency frequency) = 0;
+    
+    virtual void bind_sampler(RHISamplerRef sampler, uint32_t slot, ShaderFrequency frequency) = 0;
 
     virtual void bind_vertex_buffer(RHIBufferRef vertex_buffer, uint32_t stream_index, uint32_t offset) = 0;
 

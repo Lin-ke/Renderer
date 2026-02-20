@@ -92,6 +92,9 @@ public:
     inline ShaderRef get_fragment_shader() const { return shaders[2]; }
 
     inline TextureRef get_diffuse_texture() const { return texture_diffuse; }
+    inline TextureRef get_normal_texture() const { return texture_normal; }
+    inline TextureRef get_arm_texture() const { return texture_arm; }
+    inline TextureRef get_specular_texture() const { return texture_specular; }
     inline const std::vector<TextureRef>& get_texture_2d_list() const { return texture_2d; }
 
     // Pipeline States

@@ -6,6 +6,7 @@
 #include "engine/function/framework/world.h"
 #include "engine/main/engine_context.h"
 #include "engine/function/render/render_system/render_system.h"
+#include "engine/function/render/render_pass/pbr_forward_pass.h"
 #include "engine/function/render/rhi/rhi_command_list.h"
 #include "engine/core/log/Log.h"
 
@@ -17,6 +18,10 @@ void RenderMeshManager::init() {
     // Create forward pass
     forward_pass_ = std::make_shared<render::ForwardPass>();
     forward_pass_->init();
+
+    // Create PBR forward pass
+    pbr_forward_pass_ = std::make_shared<render::PBRForwardPass>();
+    pbr_forward_pass_->init();
     
     initialized_ = true;
     INFO(LogRenderMeshManager, "RenderMeshManager initialized");
@@ -27,6 +32,7 @@ void RenderMeshManager::destroy() {
     
     mesh_renderers_.clear();
     forward_pass_.reset();
+    pbr_forward_pass_.reset();
     
     initialized_ = false;
     INFO(LogRenderMeshManager, "RenderMeshManager destroyed");
@@ -74,6 +80,9 @@ void RenderMeshManager::unregister_mesh_renderer(MeshRendererComponent* componen
 void RenderMeshManager::set_wireframe(bool enable) {
     if (forward_pass_) {
         forward_pass_->set_wireframe(enable);
+    }
+    if (pbr_forward_pass_) {
+        pbr_forward_pass_->set_wireframe(enable);
     }
 }
 
@@ -132,11 +141,6 @@ void RenderMeshManager::render_batches(RHICommandContextRef context, RHITextureV
         return;  // Nothing to render
     }
     
-    if (!forward_pass_ || !forward_pass_->is_ready()) {
-        ERR(LogRenderMeshManager, "Forward pass not ready");
-        return;
-    }
-    
     // Get camera data
     if (!active_camera_) {
         WARN(LogRenderMeshManager, "No active camera, skipping render");
@@ -167,22 +171,53 @@ void RenderMeshManager::render_batches(RHICommandContextRef context, RHITextureV
         }
     }
     
-    // Set per-frame data in forward pass
-    forward_pass_->set_per_frame_data(
-        active_camera_->get_view_matrix(),
-        active_camera_->get_projection_matrix(),
-        active_camera_->get_position(),
-        light_dir,
-        light_color,
-        light_intensity
-    );
-    
     // Set viewport and scissor
     context->set_viewport({0, 0}, {extent.width, extent.height});
     context->set_scissor({0, 0}, {extent.width, extent.height});
-    
-    // Draw all batches using forward pass
-    for (const auto& batch : current_batches_) {
-        forward_pass_->draw_batch(context, batch);
+
+    if (pbr_enabled_) {
+        if (!pbr_forward_pass_ || !pbr_forward_pass_->is_ready()) {
+            ERR(LogRenderMeshManager, "PBR Forward pass not ready");
+            return;
+        }
+
+        pbr_forward_pass_->set_per_frame_data(
+            active_camera_->get_view_matrix(),
+            active_camera_->get_projection_matrix(),
+            active_camera_->get_position(),
+            light_dir,
+            light_color,
+            light_intensity
+        );
+
+        // Collect point lights if any
+        if (world && world->get_active_scene()) {
+            pbr_forward_pass_->clear_point_lights();
+            // TODO: Collect point lights from scene
+        }
+
+        for (const auto& batch : current_batches_) {
+            pbr_forward_pass_->draw_batch(context, batch);
+        }
+    } else {
+        if (!forward_pass_ || !forward_pass_->is_ready()) {
+            ERR(LogRenderMeshManager, "Forward pass not ready");
+            return;
+        }
+
+        // Set per-frame data in forward pass
+        forward_pass_->set_per_frame_data(
+            active_camera_->get_view_matrix(),
+            active_camera_->get_projection_matrix(),
+            active_camera_->get_position(),
+            light_dir,
+            light_color,
+            light_intensity
+        );
+        
+        // Draw all batches using forward pass
+        for (const auto& batch : current_batches_) {
+            forward_pass_->draw_batch(context, batch);
+        }
     }
 }

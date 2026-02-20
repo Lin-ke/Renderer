@@ -12,6 +12,7 @@
 #include <cassert>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 
 DECLARE_LOG_TAG(LogModel);
 DEFINE_LOG_TAG(LogModel, "Model");
@@ -123,11 +124,43 @@ bool Model::load_from_file(std::string path) {
     }
     
     // Get absolute file path
-    std::string absolute_path = (std::filesystem::path(ENGINE_PATH) / path).string();
+    std::filesystem::path fs_path(path);
+    if (!fs_path.is_absolute()) {
+        fs_path = std::filesystem::path(ENGINE_PATH) / path;
+    }
     
     // Import scene with Assimp
     Assimp::Importer importer;
-    const aiScene* scene = importer.ReadFile(absolute_path, process_steps);
+    const aiScene* scene = nullptr;
+    
+    // First try direct path (works for ASCII paths)
+    std::string absolute_path = fs_path.string();
+    scene = importer.ReadFile(absolute_path, process_steps);
+    
+    // If direct path failed, try reading file to memory (supports Unicode paths)
+    if (!scene) {
+        // Read file into memory using filesystem path (supports Unicode)
+        std::ifstream file(fs_path, std::ios::binary | std::ios::ate);
+        if (file.is_open()) {
+            std::streamsize size = file.tellg();
+            file.seekg(0, std::ios::beg);
+            
+            std::vector<char> buffer(size);
+            if (file.read(buffer.data(), size)) {
+                // Get file extension for format hint
+                std::string ext = fs_path.extension().string();
+                // Remove leading dot
+                if (!ext.empty() && ext[0] == '.') {
+                    ext = ext.substr(1);
+                }
+                
+                // Read from memory
+                scene = importer.ReadFileFromMemory(buffer.data(), size, process_steps, ext.c_str());
+                INFO(LogModel, "Loaded model from memory (Unicode path support): {} bytes", size);
+            }
+        }
+    }
+    
     if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
         ERR(LogModel, "Assimp load error: {}", importer.GetErrorString());
         return false;
@@ -248,13 +281,78 @@ void Model::process_mesh(aiMesh* mesh, const aiScene* scene, int index) {
         if (materials_[index] == nullptr) {
             materials_[index] = std::make_shared<Material>();
             
-            // Load textures
+            // Load PBR textures from FBX
+            // Base color / Diffuse
             TextureRef diffuse = load_material_texture(ai_mat, aiTextureType_DIFFUSE);
-            TextureRef normal = load_material_texture(ai_mat, aiTextureType_NORMALS);
-            TextureRef specular = load_material_texture(ai_mat, aiTextureType_SPECULAR);
-            
+            if (!diffuse) diffuse = load_material_texture(ai_mat, aiTextureType_BASE_COLOR);
             if (diffuse) materials_[index]->set_diffuse_texture(diffuse);
-            //####TODO#### Set normal and specular textures
+            
+            // Normal map
+            TextureRef normal = load_material_texture(ai_mat, aiTextureType_NORMALS);
+            if (!normal) normal = load_material_texture(ai_mat, aiTextureType_NORMAL_CAMERA);
+            if (!normal) normal = load_material_texture(ai_mat, aiTextureType_HEIGHT);
+            if (normal) materials_[index]->set_normal_texture(normal);
+            
+            // Metallic/Roughness/AO - try ARM combined texture first
+            TextureRef arm = load_material_texture(ai_mat, aiTextureType_SPECULAR);
+            if (!arm) arm = load_material_texture(ai_mat, aiTextureType_UNKNOWN);
+            if (arm) {
+                materials_[index]->set_arm_texture(arm);
+            } else {
+                // Try separate textures
+                TextureRef metallic = load_material_texture(ai_mat, aiTextureType_METALNESS);
+                TextureRef roughness = load_material_texture(ai_mat, aiTextureType_DIFFUSE_ROUGHNESS);
+                TextureRef ao = load_material_texture(ai_mat, aiTextureType_AMBIENT_OCCLUSION);
+                TextureRef ambient = load_material_texture(ai_mat, aiTextureType_AMBIENT);
+                
+                // Set metallic texture if found
+                if (metallic) materials_[index]->set_texture_2d(metallic, 0);
+                if (roughness) materials_[index]->set_texture_2d(roughness, 1);
+                if (ao) materials_[index]->set_texture_2d(ao, 2);
+                else if (ambient) materials_[index]->set_texture_2d(ambient, 2);
+            }
+            
+            // Emissive
+            TextureRef emissive = load_material_texture(ai_mat, aiTextureType_EMISSIVE);
+            if (!emissive) emissive = load_material_texture(ai_mat, aiTextureType_EMISSION_COLOR);
+            if (emissive) materials_[index]->set_texture_2d(emissive, 3);
+            
+            // Load PBR material properties from FBX
+            float metallic_factor = 0.0f;
+            float roughness_factor = 0.5f;
+            aiColor4D base_color;
+            aiColor4D emissive_color;
+            
+            // Get AI_MATKEY_GLTF_PBRMETALLICROUGHNESS_METALLIC_FACTOR
+            if (AI_SUCCESS == ai_mat->Get(AI_MATKEY_METALLIC_FACTOR, metallic_factor)) {
+                materials_[index]->set_metallic(metallic_factor);
+            }
+            
+            // Get AI_MATKEY_GLTF_PBRMETALLICROUGHNESS_ROUGHNESS_FACTOR
+            if (AI_SUCCESS == ai_mat->Get(AI_MATKEY_ROUGHNESS_FACTOR, roughness_factor)) {
+                materials_[index]->set_roughness(roughness_factor);
+            }
+            
+            // Get base color / diffuse color
+            if (AI_SUCCESS == ai_mat->Get(AI_MATKEY_COLOR_DIFFUSE, base_color)) {
+                Vec4 color(base_color.r, base_color.g, base_color.b, base_color.a);
+                materials_[index]->set_diffuse(color);
+            } else if (AI_SUCCESS == ai_mat->Get(AI_MATKEY_BASE_COLOR, base_color)) {
+                Vec4 color(base_color.r, base_color.g, base_color.b, base_color.a);
+                materials_[index]->set_diffuse(color);
+            }
+            
+            // Get emissive color
+            if (AI_SUCCESS == ai_mat->Get(AI_MATKEY_COLOR_EMISSIVE, emissive_color)) {
+                Vec4 emission(emissive_color.r, emissive_color.g, emissive_color.b, emissive_color.a);
+                materials_[index]->set_emission(emission);
+            }
+            
+            INFO(LogModel, "Material loaded: metallic={}, roughness={}, hasDiffuse={}, hasNormal={}, hasARM={}",
+                 metallic_factor, roughness_factor, 
+                 diffuse ? "yes" : "no",
+                 normal ? "yes" : "no", 
+                 arm ? "yes" : "no");
         }
     }
     
@@ -337,12 +435,18 @@ std::shared_ptr<Texture> Model::load_material_texture(aiMaterial* mat, aiTexture
         std::filesystem::path model_dir = std::filesystem::path(path_).parent_path();
         std::string texture_path = (model_dir / str.C_Str()).string();
         
+        // Force PNG extension if requested (for unsupported texture formats)
+        if (process_setting_.force_png_texture) {
+            texture_path = std::filesystem::path(texture_path).replace_extension(".png").string();
+        }
+        
         // Check texture cache
         auto iter = texture_map_.find(texture_path);
         if (iter != texture_map_.end()) {
             return iter->second;
         } else {
             // Load new texture
+            INFO(LogModel, "Loading texture [{}] from FBX material...", texture_path);
             auto texture = std::make_shared<Texture>(texture_path);
             texture_map_[texture_path] = texture;
             return texture;
