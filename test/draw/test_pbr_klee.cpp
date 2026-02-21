@@ -275,5 +275,8 @@ TEST_CASE("PBR Forward Pass Basic", "[draw][pbr]") {
     pbr_pass->add_point_light(Vec3(1.0f, 1.0f, 1.0f), Vec3(1.0f, 0.5f, 0.0f), 1.0f, 10.0f);
     pbr_pass->add_point_light(Vec3(-1.0f, 1.0f, -1.0f), Vec3(0.0f, 0.5f, 1.0f), 0.5f, 5.0f);
     
+    // Must destroy pass BEFORE EngineContext::exit() to avoid accessing destroyed RHI backend
+    pbr_pass.reset();
+    
     EngineContext::exit();
 }

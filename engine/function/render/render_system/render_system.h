@@ -8,6 +8,7 @@
 #include "engine/function/render/render_system/render_mesh_manager.h"
 #include "engine/function/render/render_system/gizmo_manager.h"
 #include "engine/function/render/render_pass/forward_pass.h"
+#include "engine/function/render/render_pass/depth_visualize_pass.h"
 // #include "engine/function/render/render_system/render_surface_cache_manager.h"
 #include <imgui.h>
 
@@ -99,6 +100,11 @@ private:
     RHITextureRef depth_texture_;
     RHITextureViewRef depth_texture_view_;
     RHICommandPoolRef pool_;
+    
+    // Cached swapchain back buffer views - one per frame in flight
+    std::array<RHITextureViewRef, FRAMES_IN_FLIGHT> swapchain_buffer_views_;
+    std::array<RHIRenderPassRef, FRAMES_IN_FLIGHT> swapchain_render_passes_;
+    bool swapchain_views_initialized_ = false;
 
     struct PerFrameCommonResource {
         RHICommandContextRef command; // Changed from RHICommandListRef to match my RHI
@@ -128,6 +134,12 @@ private:
     std::shared_ptr<RenderLightManager> light_manager_;
     std::shared_ptr<GizmoManager> gizmo_manager_;
     std::shared_ptr<render::ForwardPass> forward_pass_;
+    std::shared_ptr<render::DepthVisualizePass> depth_visualize_pass_;
+    
+    // Depth buffer visualization
+    RHITextureRef depth_visualize_texture_;
+    RHITextureViewRef depth_visualize_texture_view_;
+    bool depth_visualize_initialized_ = false;
 
     Entity* selected_entity_ = nullptr;
 };

@@ -168,7 +168,8 @@ public:
      * @return Shared pointer to the loaded model (cached if already loaded)
      */
     static std::shared_ptr<Model> Load(const std::string& path, 
-                                        const ModelProcessSetting& process_setting = ModelProcessSetting());
+                                        const ModelProcessSetting& process_setting = ModelProcessSetting(),
+                                        const UID& explicit_uid = UID::empty());
     
     /**
      * @brief Load a model from file path with caching via AssetManager
@@ -182,7 +183,8 @@ public:
     static std::shared_ptr<Model> Load(const std::string& path, 
                                         bool smooth_normal = true,
                                         bool load_materials = false,
-                                        bool flip_uv = false);
+                                        bool flip_uv = false,
+                                        const UID& explicit_uid = UID::empty());
 
     /**
      * @brief Get the number of submeshes
@@ -220,6 +222,12 @@ public:
         if (submesh_index < materials_.size()) return materials_[submesh_index];
         return nullptr;
     }
+
+    /**
+     * @brief Get the combined bounding box of all submeshes
+     * @return The combined bounding box
+     */
+    BoundingBox get_bounding_box() const;
 
 protected:
     /**

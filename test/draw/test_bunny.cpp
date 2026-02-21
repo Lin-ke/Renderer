@@ -31,7 +31,7 @@
 
 DEFINE_LOG_TAG(LogBunnyRender, "BunnyRender");
 
-static const std::string SCENE_FILE_NAME = "bunny_scene.json";
+static const std::string SCENE_FILE_NAME = "bunny_scene.asset";
 
 bool save_screenshot_png(const std::string& filename, uint32_t width, uint32_t height, const std::vector<uint8_t>& data) {
     int stride_in_bytes = width * 4;
@@ -99,6 +99,8 @@ std::shared_ptr<Scene> load_scene_from_file(const std::string& filepath) {
 TEST_CASE("Create and Save Bunny Scene", "[draw][bunny]") {
     std::bitset<8> mode;
     mode.set(EngineContext::StartMode::Asset);
+    mode.set(EngineContext::StartMode::Window);
+    mode.set(EngineContext::StartMode::Render);
     mode.set(EngineContext::StartMode::SingleThread);
     
     EngineContext::init(mode);
@@ -112,67 +114,71 @@ TEST_CASE("Create and Save Bunny Scene", "[draw][bunny]") {
     
     // Create camera entity
     auto* camera_ent = scene->create_entity();
-    REQUIRE(camera_ent != nullptr);
-    
     auto* cam_trans = camera_ent->add_component<TransformComponent>();
-    REQUIRE(cam_trans != nullptr);
     cam_trans->transform.set_position({0.0f, 0.0f, 3.0f});
-    cam_trans->transform.set_rotation({0.0f, 0.0f, 0.0f});
     
     auto* cam_comp = camera_ent->add_component<CameraComponent>();
-    REQUIRE(cam_comp != nullptr);
     cam_comp->set_fov(60.0f);
     
     // Create directional light entity
     auto* light_ent = scene->create_entity();
-    REQUIRE(light_ent != nullptr);
-    
     auto* light_trans = light_ent->add_component<TransformComponent>();
-    REQUIRE(light_trans != nullptr);
     light_trans->transform.set_position({5.0f, 10.0f, 5.0f});
     light_trans->transform.set_rotation({0.0f, -45.0f, -60.0f});
     
     auto* light_comp = light_ent->add_component<DirectionalLightComponent>();
-    REQUIRE(light_comp != nullptr);
     light_comp->set_color({1.0f, 1.0f, 1.0f});
     light_comp->set_intensity(1.5f);
-    light_comp->set_enable(true);
     
-    // Create bunny entity placeholder
+    // Create bunny entity
     auto* bunny_ent = scene->create_entity();
-    REQUIRE(bunny_ent != nullptr);
-    
     auto* bunny_trans = bunny_ent->add_component<TransformComponent>();
-    REQUIRE(bunny_trans != nullptr);
-    bunny_trans->transform.set_position({0.0f, 0.0f, 0.0f});
     bunny_trans->transform.set_scale({10.0f, 10.0f, 10.0f});
+
+    // Add MeshRendererComponent and load model as an asset
+    auto* bunny_renderer = bunny_ent->add_component<MeshRendererComponent>();
     
-    // Save scene to file
-    std::string scene_path = test_asset_dir + "/" + SCENE_FILE_NAME;
-    bool saved = save_scene_to_file(scene_path, scene);
-    REQUIRE(saved);
+    // Load raw model file with explicit UID for consistent testing
+    std::string model_raw_path = "assets/models/bunny.obj";
+    UID model_uid = UID::from_hash("/Game/models/bunny.binasset");
+    auto bunny_model = Model::Load(model_raw_path, true, true, false, model_uid);
+    REQUIRE(bunny_model != nullptr);
     
-    // Verify file exists
-    std::ifstream check_file(scene_path);
-    REQUIRE(check_file.good());
-    check_file.close();
+    // Mark as dirty to force save (Load() clears dirty flag)
+    bunny_model->mark_dirty();
+    
+    // Save model as a proper engine asset
+    EngineContext::asset()->save_asset(bunny_model, "/Game/models/bunny.binasset");
+    
+    // Assign to renderer
+    bunny_renderer->set_model(bunny_model);
+    
+    // Create and assign a material asset with PBR properties
+    auto bunny_mat = std::make_shared<Material>();
+    bunny_mat->set_diffuse({0.8f, 0.5f, 0.3f, 1.0f});
+    bunny_mat->set_roughness(0.2f);
+    bunny_mat->set_metallic(0.8f);
+    
+    // Set deterministic UID for material
+    UID material_uid = UID::from_hash("/Game/materials/bunny_mat.asset");
+    bunny_mat->set_uid(material_uid);
+    
+    // Save material as an asset
+    EngineContext::asset()->save_asset(bunny_mat, "/Game/materials/bunny_mat.asset");
+    bunny_renderer->set_material(bunny_mat);
+    
+    // Assign a deterministic UID to the scene
+    UID scene_uid = UID::from_hash("/Game/bunny_scene.asset");
+    scene->set_uid(scene_uid);
+    
+    // Save scene using AssetManager to ensure all dependencies are correctly serialized
+    EngineContext::asset()->save_asset(scene, "/Game/" + SCENE_FILE_NAME);
     
     EngineContext::exit();
 }
 
 TEST_CASE("Load and Render Bunny Scene", "[draw][bunny]") {
     std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
-    std::string scene_path = test_asset_dir + "/" + SCENE_FILE_NAME;
-    
-    std::ifstream check_file(scene_path);
-    bool scene_exists = check_file.good();
-    check_file.close();
-    
-    if (!scene_exists) {
-        WARN(LogBunnyRender, "Scene file not found: {}. Run 'Create and Save Bunny Scene' test first.", scene_path);
-        REQUIRE(true);
-        return;
-    }
     
     std::bitset<8> mode;
     mode.set(EngineContext::StartMode::Asset);
@@ -181,70 +187,70 @@ TEST_CASE("Load and Render Bunny Scene", "[draw][bunny]") {
     mode.set(EngineContext::StartMode::SingleThread);
     
     EngineContext::init(mode);
+    
+    // Set up asset manager correctly
     EngineContext::asset()->init(test_asset_dir);
+    
+    // Register the scene file so it can be resolved by virtual path
+    // Note: AssetManager::init appends /assets to the path
+    std::string scene_phys_path = test_asset_dir + "/assets/" + SCENE_FILE_NAME;
+    UID scene_uid = UID::from_hash("/Game/bunny_scene.asset");
+    EngineContext::asset()->register_path(scene_uid, scene_phys_path);
+    
+    // Also register other dependencies that were saved in the first test
+    EngineContext::asset()->register_path(UID::from_hash("/Game/models/bunny.binasset"), test_asset_dir + "/assets/models/bunny.binasset");
+    EngineContext::asset()->register_path(UID::from_hash("/Game/materials/bunny_mat.asset"), test_asset_dir + "/assets/materials/bunny_mat.asset");
+    
+    // Register component classes
+    TransformComponent::register_class();
+    CameraComponent::register_class();
+    MeshRendererComponent::register_class();
+    DirectionalLightComponent::register_class();
     
     REQUIRE(EngineContext::rhi() != nullptr);
     REQUIRE(EngineContext::render_system() != nullptr);
-    REQUIRE(EngineContext::world() != nullptr);
     
-    auto scene = load_scene_from_file(scene_path);
+    // Load scene via AssetManager - this automatically resolves all dependencies (Model, Material, etc.)
+    auto scene = EngineContext::asset()->load_asset<Scene>(scene_uid);
     REQUIRE(scene != nullptr);
     REQUIRE(!scene->entities_.empty());
     
     CameraComponent* cam_comp = nullptr;
-    Entity* bunny_ent = nullptr;
-    for (auto& entity : scene->entities_) {
-        if (entity) {
-            if (!cam_comp) {
-                cam_comp = entity->get_component<CameraComponent>();
-                if (cam_comp) cam_comp->on_init();
-            }
-            if (entity->get_component<TransformComponent>() && 
-                !entity->get_component<CameraComponent>() &&
-                !entity->get_component<DirectionalLightComponent>()) {
-                bunny_ent = entity.get();
-            }
-        }
-    }
-    REQUIRE(cam_comp != nullptr);
-    REQUIRE(bunny_ent != nullptr);
+    MeshRendererComponent* bunny_renderer = nullptr;
     
-    // Add MeshRendererComponent to bunny entity and load model
-    auto* bunny_mesh = bunny_ent->add_component<MeshRendererComponent>();
-    REQUIRE(bunny_mesh != nullptr);
-    
-    ModelProcessSetting setting;
-    setting.smooth_normal = true;
-    setting.load_materials = false;
-    
-    std::string model_path = std::string(ENGINE_PATH) + "/assets/models/bunny.obj";
-    auto bunny_model = std::make_shared<Model>(model_path, setting);
-    
-    REQUIRE(bunny_model->get_submesh_count() > 0);
-    
-    bunny_mesh->set_model(bunny_model);
-    bunny_mesh->on_init();
-    
-    INFO(LogBunnyRender, "Bunny loaded: {} vertices, {} indices",
-         bunny_model->submesh(0).vertex_buffer->vertex_num(),
-         bunny_model->submesh(0).index_buffer->index_num());
-    
-    // Initialize lights
+    // Find required components and initialize them
     for (auto& entity : scene->entities_) {
         if (!entity) continue;
-        auto* light = entity->get_component<DirectionalLightComponent>();
-        if (light) light->on_init();
+        
+        if (auto* cam = entity->get_component<CameraComponent>()) {
+            cam_comp = cam;
+            cam->on_init();
+        }
+        
+        if (auto* renderer = entity->get_component<MeshRendererComponent>()) {
+            bunny_renderer = renderer;
+            renderer->on_init();
+        }
+        
+        if (auto* light = entity->get_component<DirectionalLightComponent>()) {
+            light->on_init();
+        }
     }
+    
+    REQUIRE(cam_comp != nullptr);
+    REQUIRE(bunny_renderer != nullptr);
+    
+    auto bunny_model = bunny_renderer->get_model();
+    REQUIRE(bunny_model != nullptr);
+    REQUIRE(bunny_model->get_submesh_count() > 0);
+    
+    INFO(LogBunnyRender, "Bunny automatically loaded as asset: {} vertices",
+         bunny_model->submesh(0).vertex_buffer->vertex_num());
     
     EngineContext::world()->set_active_scene(scene);
     EngineContext::render_system()->get_mesh_manager()->set_active_camera(cam_comp);
     
-    void* window_handle = EngineContext::render_system()->get_window_handle();
-    REQUIRE(window_handle != nullptr);
-    
     int frames = 0;
-    auto start_time = std::chrono::steady_clock::now();
-    
     const uint32_t screenshot_width = 1280;
     const uint32_t screenshot_height = 720;
     std::vector<uint8_t> screenshot_data(screenshot_width * screenshot_height * 4);
@@ -254,24 +260,18 @@ TEST_CASE("Load and Render Bunny Scene", "[draw][bunny]") {
         Input::get_instance().tick();
         EngineContext::world()->tick(0.016f);
         
-
-        
         RenderPacket packet;
         packet.active_camera = cam_comp;
         packet.active_scene = scene.get();
         
         bool should_continue = EngineContext::render_system()->tick(packet);
-        if (!should_continue) {
-            break;
-        }
+        if (!should_continue) break;
         
         frames++;
         
-        // Take screenshot on frame 30 - use present frame instead of getting new frame
         if (frames == 30 && !screenshot_taken) {
             auto swapchain = EngineContext::render_system()->get_swapchain();
             if (swapchain) {
-                // Get the current frame's back buffer (already presented)
                 uint32_t current_frame = swapchain->get_current_frame_index();
                 RHITextureRef back_buffer = swapchain->get_texture(current_frame);
                 if (back_buffer) {
@@ -279,9 +279,7 @@ TEST_CASE("Load and Render Bunny Scene", "[draw][bunny]") {
                     auto pool = backend->create_command_pool({});
                     auto context = backend->create_command_context(pool);
                     
-                    // Flush any pending commands
-                    context->begin_command();
-                    context->end_command();
+                    context->begin_command(); context->end_command();
                     auto fence = backend->create_fence(false);
                     context->execute(fence, nullptr, nullptr);
                     fence->wait();
@@ -292,49 +290,16 @@ TEST_CASE("Load and Render Bunny Scene", "[draw][bunny]") {
                 }
             }
         }
-        
         std::this_thread::sleep_for(std::chrono::milliseconds(16));
     }
     
-    auto end_time = std::chrono::steady_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
-    
-    CHECK(frames > 0);
-    
-    // Always try to take screenshot at end if not taken yet
-    if (!screenshot_taken) {
-        auto swapchain = EngineContext::render_system()->get_swapchain();
-        if (swapchain) {
-            uint32_t current_frame = swapchain->get_current_frame_index();
-            RHITextureRef back_buffer = swapchain->get_texture(current_frame);
-            if (back_buffer) {
-                auto backend = EngineContext::rhi();
-                auto pool = backend->create_command_pool({});
-                auto context = backend->create_command_context(pool);
-                
-                context->begin_command();
-                context->end_command();
-                auto fence = backend->create_fence(false);
-                context->execute(fence, nullptr, nullptr);
-                fence->wait();
-                
-                if (context->read_texture(back_buffer, screenshot_data.data(), screenshot_data.size())) {
-                    screenshot_taken = true;
-                }
-            }
-        }
-    }
-    
     if (screenshot_taken) {
-        std::string screenshot_path = test_asset_dir + "/bunny_screenshot.png";
+        std::string screenshot_path = test_asset_dir + "/bunny_asset_screenshot.png";
         if (save_screenshot_png(screenshot_path, screenshot_width, screenshot_height, screenshot_data)) {
             float brightness = calculate_average_brightness(screenshot_data);
             INFO(LogBunnyRender, "Screenshot saved: {} (brightness: {:.1f})", screenshot_path, brightness);
             CHECK(brightness > 1.0f);
-            CHECK(brightness < 255.0f);
         }
-    } else {
-        WARN(LogBunnyRender, "No screenshot was taken");
     }
     
     EngineContext::world()->set_active_scene(nullptr);

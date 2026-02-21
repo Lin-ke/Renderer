@@ -2,6 +2,7 @@
 #include "engine/main/engine_context.h"
 #include "engine/function/render/render_system/render_system.h"
 #include "engine/function/render/render_system/render_mesh_manager.h"
+#include "engine/function/render/render_resource/shader_utils.h"
 #include "engine/function/render/rhi/rhi_command_list.h"
 #include "engine/function/framework/world.h"
 #include "engine/function/framework/scene.h"
@@ -18,121 +19,8 @@ DEFINE_LOG_TAG(LogForwardPass, "ForwardPass");
 namespace render {
 
 // Blinn-Phong vertex shader source (HLSL)
-static const char* s_vertex_shader_src = R"(
-cbuffer PerFrame : register(b0) {
-    float4x4 view;
-    float4x4 proj;
-    float3 camera_pos;
-    float _padding;
-    
-    float3 light_dir;
-    float _padding2;
-    float3 light_color;
-    float light_intensity;
-};
-
-cbuffer PerObject : register(b1) {
-    float4x4 model;
-    float4x4 inv_model;
-};
-
-struct VSInput {
-    float3 position : POSITION0;
-    float3 normal : NORMAL0;
-};
-
-struct VSOutput {
-    float4 position : SV_POSITION;
-    float3 world_pos : POSITION0;
-    float3 world_normal : NORMAL0;
-    float3 view_dir : TEXCOORD0;
-};
-
-VSOutput main(VSInput input) {
-    VSOutput output;
-    // Transform position to world space
-    float4 world_pos = mul(model, float4(input.position, 1.0));
-    output.world_pos = world_pos.xyz;
-    
-    // Transform to clip space
-    float4 view_pos = mul(view, world_pos);
-    output.position = mul(proj, view_pos);
-    
-    // Transform normal to world space (using inverse transpose)
-    float3 world_normal = mul((float3x3)inv_model, input.normal);
-    output.world_normal = normalize(world_normal);
-    
-    // View direction for specular
-    output.view_dir = normalize(camera_pos - world_pos.xyz);
-    
-    return output;
-}
-)";
-
-// Blinn-Phong fragment shader source (HLSL)
-static const char* s_fragment_shader_src = R"(
-struct PSInput {
-    float4 position : SV_POSITION;
-    float3 world_pos : POSITION0;
-    float3 world_normal : NORMAL0;
-    float3 view_dir : TEXCOORD0;
-};
-
-cbuffer PerFrame : register(b0) {
-    float4x4 view;
-    float4x4 proj;
-    float3 camera_pos;
-    float _padding;
-    
-    float3 light_dir;
-    float _padding2;
-    float3 light_color;
-    float light_intensity;
-};
-
-float4 main(PSInput input) : SV_TARGET {
-    // Normalize inputs
-    float3 N = normalize(input.world_normal);
-    float3 V = normalize(input.view_dir);
-    float3 L = normalize(-light_dir); // Light direction points FROM light TO surface
-    float3 H = normalize(L + V); // Halfway vector for Blinn-Phong
-    
-    // Material properties (hardcoded for now)
-    float3 diffuse_color = float3(0.8, 0.6, 0.5); // Bunny-like color
-    float3 specular_color = float3(0.5, 0.5, 0.5);
-    float shininess = 32.0;
-    float ambient = 0.1;
-    
-    // Ambient
-    float3 ambient_term = diffuse_color * ambient;
-    
-    // Diffuse (Lambert)
-    float NdotL = max(dot(N, L), 0.0);
-    float3 diffuse_term = diffuse_color * light_color * NdotL * light_intensity;
-    
-    // Specular (Blinn-Phong)
-    float NdotH = max(dot(N, H), 0.0);
-    float3 specular_term = specular_color * light_color * pow(NdotH, shininess) * light_intensity;
-    
-    // Final color
-    float3 final_color = ambient_term + diffuse_term + specular_term;
-    
-    // Simple gamma correction
-    final_color = pow(final_color, 1.0 / 2.2);
-    
-    return float4(final_color, 1.0);
-}
-)";
-
-static std::vector<uint8_t> compile_shader_rhi(const char* source, const char* entry, 
-                                                  const char* profile) {
-    auto backend = EngineContext::rhi();
-    if (!backend) {
-        ERR(LogForwardPass, "RHI backend not available for shader compilation");
-        return {};
-    }
-    return backend->compile_shader(source, entry, profile);
-}
+// Shader source is now in assets/shaders/forward_pass.hlsl
+// Compiled to forward_pass_vs.cso and forward_pass_ps.cso at build time
 
 ForwardPass::ForwardPass() = default;
 
@@ -175,12 +63,15 @@ void ForwardPass::create_shaders() {
     auto backend = EngineContext::rhi();
     if (!backend) return;
     
-    // Compile vertex shader using RHI backend
-    auto vs_code = compile_shader_rhi(s_vertex_shader_src, "main", "vs_5_0");
-    if (vs_code.empty()) return;
+    // Load pre-compiled shader or compile from source
+    auto vs_code = ShaderUtils::load_or_compile("forward_pass_vs.cso", nullptr, "VSMain", "vs_5_0");
+    if (vs_code.empty()) {
+        ERR(LogForwardPass, "Failed to load/compile vertex shader");
+        return;
+    }
     
     RHIShaderInfo vs_info = {};
-    vs_info.entry = "main";
+    vs_info.entry = "VSMain";
     vs_info.frequency = SHADER_FREQUENCY_VERTEX;
     vs_info.code = vs_code;
     
@@ -193,12 +84,15 @@ void ForwardPass::create_shaders() {
     vertex_shader_ = std::make_shared<Shader>();
     vertex_shader_->shader_ = vs;
     
-    // Compile fragment shader using RHI backend
-    auto fs_code = compile_shader_rhi(s_fragment_shader_src, "main", "ps_5_0");
-    if (fs_code.empty()) return;
+    // Load pre-compiled fragment shader or compile from source
+    auto fs_code = ShaderUtils::load_or_compile("forward_pass_ps.cso", nullptr, "PSMain", "ps_5_0");
+    if (fs_code.empty()) {
+        ERR(LogForwardPass, "Failed to load/compile fragment shader");
+        return;
+    }
     
     RHIShaderInfo fs_info = {};
-    fs_info.entry = "main";
+    fs_info.entry = "PSMain";
     fs_info.frequency = SHADER_FREQUENCY_FRAGMENT;
     fs_info.code = fs_code;
     
@@ -406,12 +300,12 @@ void ForwardPass::build(RDGBuilder& builder) {
         .finish();
     
     // Create render pass using RDG
-    INFO(LogForwardPass, "Building ForwardPass RDG node...");
+    // INFO(LogForwardPass, "Building ForwardPass RDG node...");
     builder.create_render_pass("ForwardPass_Main")
         .color(0, color_target, ATTACHMENT_LOAD_OP_CLEAR, ATTACHMENT_STORE_OP_STORE, 
                Color4{0.1f, 0.2f, 0.4f, 1.0f})
         .execute([this, render_system](RDGPassContext context) {
-            ERR(LogForwardPass, "Executing ForwardPass RDG lambda!");
+            // ERR(LogForwardPass, "Executing ForwardPass RDG lambda!");
             auto mesh_manager = render_system->get_mesh_manager();
             if (!mesh_manager) {
                 ERR(LogForwardPass, "Mesh manager is null!");
@@ -447,7 +341,7 @@ void ForwardPass::build(RDGBuilder& builder) {
             // Get batches from mesh manager and draw them
             std::vector<DrawBatch> batches;
             mesh_manager->collect_draw_batches(batches);
-            ERR(LogForwardPass, "Collected {} draw batches in RDG lambda", batches.size());
+            // ERR(LogForwardPass, "Collected {} draw batches in RDG lambda", batches.size());
             for (const auto& batch : batches) {
                 // Update and bind per-object buffer
                 if (per_object_buffer_) {

@@ -9,7 +9,7 @@
 class RHICommandList;
 using RHICommandListRef = std::shared_ptr<RHICommandList>;
 
-class RHIResource {
+class RHIResource : public std::enable_shared_from_this<RHIResource> {
 public:
     RHIResource() = delete;
     RHIResource(RHIResourceType resource_type) : resource_type_(resource_type){};
@@ -21,8 +21,12 @@ public:
 
     virtual void destroy(){}; // Called when destroyed
 
+    inline const std::string& get_name() const { return name_; }
+    inline void set_name(const std::string& name) { name_ = name; }
+
 private:
     RHIResourceType resource_type_;
+    std::string name_ = "";
     uint32_t last_use_tick_ = 0; // Last used frame
 
     friend class RHIBackend;
@@ -65,7 +69,7 @@ protected:
     RHISwapchainInfo info_;
 };
 
-class RHICommandPool : public RHIResource, public std::enable_shared_from_this<RHICommandPool> {
+class RHICommandPool : public RHIResource {
 public:
     RHICommandPool(const RHICommandPoolInfo& info) : RHIResource(RHI_COMMAND_POOL), info_(info) {}
 

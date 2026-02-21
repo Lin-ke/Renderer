@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/configs.h"
 #include "engine/function/render/rhi/rhi.h"
 #include <cassert>
 #include <cstring>
@@ -228,17 +229,17 @@ struct RHICommandEndRenderPass : public RHICommand {
 };
 
 struct RHICommandSetViewport : public RHICommand {
-    Offset2D min;
-    Offset2D max;
-    RHICommandSetViewport(Offset2D mi, Offset2D ma) : min(mi), max(ma) {}
-    void execute(RHICommandContextRef context) override { context->set_viewport(min, max); }
+    Offset2D min_pos;
+    Offset2D max_pos;
+    RHICommandSetViewport(Offset2D mi, Offset2D ma) : min_pos(mi), max_pos(ma) {}
+    void execute(RHICommandContextRef context) override { context->set_viewport(min_pos, max_pos); }
 };
 
 struct RHICommandSetScissor : public RHICommand {
-    Offset2D min;
-    Offset2D max;
-    RHICommandSetScissor(Offset2D mi, Offset2D ma) : min(mi), max(ma) {}
-    void execute(RHICommandContextRef context) override { context->set_scissor(min, max); }
+    Offset2D min_pos;
+    Offset2D max_pos;
+    RHICommandSetScissor(Offset2D mi, Offset2D ma) : min_pos(mi), max_pos(ma) {}
+    void execute(RHICommandContextRef context) override { context->set_scissor(min_pos, max_pos); }
 };
 
 struct RHICommandSetDepthBias : public RHICommand {

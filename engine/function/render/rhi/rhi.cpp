@@ -42,6 +42,10 @@ public:
     RHICommandContextImmediateRef get_immediate_command() override { return nullptr; }
 
     std::vector<uint8_t> compile_shader(const char* source, const char* entry, const char* profile) override { return {}; }
+
+    void set_name(RHIResourceRef resource, const std::string& name) override {
+        if (resource) resource->set_name(name);
+    }
 };
 
 RHIBackendRef RHIBackend::init(const RHIBackendInfo& info) {
@@ -56,23 +60,31 @@ RHIBackendRef RHIBackend::init(const RHIBackendInfo& info) {
 }
 
 void RHIBackend::tick() {
+    // Optimization: Only scan a portion of resources if the list is too large, 
+    // or use a more efficient removal strategy.
     for (auto& resources : resource_map_) {
-        for (RHIResourceRef& resource : resources) {
-            if (resource) {
-                // Accessing private members of RHIResource (friend class RHIBackend)
-                if(resource.use_count() == 1)   resource->last_use_tick_++;
-                else                            resource->last_use_tick_ = 0;
+        if (resources.empty()) continue;
 
-                if(resource->last_use_tick_ > 6)
-                {
+        for (size_t i = 0; i < resources.size(); ++i) {
+            RHIResourceRef& resource = resources[i];
+            if (resource) {
+                // If the only reference is held by this map, it's a candidate for deletion
+                if (resource.use_count() == 1) {
+                    resource->last_use_tick_++;
+                } else {
+                    resource->last_use_tick_ = 0;
+                }
+
+                // Delete resource after a few frames of inactivity
+                if (resource->last_use_tick_ > 6) {
                     resource->destroy();
                     resource = nullptr;
                 }
             }
         }
-        resources.erase(std::remove_if(resources.begin(), resources.end(), [](RHIResourceRef x) {
-            return x == nullptr;
-        }), resources.end());
+
+        // Efficiently remove null entries
+        resources.erase(std::remove(resources.begin(), resources.end(), nullptr), resources.end());
     }
 }
 

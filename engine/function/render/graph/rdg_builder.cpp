@@ -149,6 +149,11 @@ void RDGBuilder::execute() {
                 {descriptor.first}, pass->root_signature_, descriptor.second);
         }
     }
+    
+    // Clear passes and graph for next frame to prevent accumulation
+    passes_.clear();
+    graph_ = std::make_shared<DependencyGraph::DependencyGraph>();
+    black_board_.clear();
 }
 
 void RDGBuilder::create_input_barriers(RDGPassNodeRef pass) {
@@ -362,6 +367,11 @@ void RDGBuilder::execute_pass(RDGRenderPassNodeRef pass) {
     release_resource(pass);
 
     command_->pop_event();
+    
+    // Destroy render pass to prevent resource leak
+    if (render_pass) {
+        render_pass->destroy();
+    }
 }
 
 void RDGBuilder::execute_pass(RDGComputePassNodeRef pass) {
@@ -526,6 +536,10 @@ RHITextureRef RDGBuilder::resolve(RDGTextureNodeRef texture_node) {
         auto pooled_texture = RDGTexturePool::get()->allocate(texture_node->info_);
         texture_node->texture_ = pooled_texture.texture;
         texture_node->init_state_ = pooled_texture.state;
+        
+        if (texture_node->texture_ && EngineContext::rhi()) {
+            EngineContext::rhi()->set_name(texture_node->texture_, texture_node->name());
+        }
     }
     return texture_node->texture_;
 }
@@ -535,6 +549,10 @@ RHIBufferRef RDGBuilder::resolve(RDGBufferNodeRef buffer_node) {
         auto pooled_buffer = RDGBufferPool::get()->allocate(buffer_node->info_);
         buffer_node->buffer_ = pooled_buffer.buffer;
         buffer_node->init_state_ = pooled_buffer.state;
+
+        if (buffer_node->buffer_ && EngineContext::rhi()) {
+            EngineContext::rhi()->set_name(buffer_node->buffer_, buffer_node->name());
+        }
     }
     return buffer_node->buffer_;
 }
@@ -671,7 +689,7 @@ RDGTextureBuilder& RDGTextureBuilder::allow_render_target() {
 }
 
 RDGTextureBuilder& RDGTextureBuilder::allow_depth_stencil() {
-    texture_->info_.type |= RESOURCE_TYPE_RENDER_TARGET;
+    texture_->info_.type |= RESOURCE_TYPE_DEPTH_STENCIL;
     return *this;
 }
 

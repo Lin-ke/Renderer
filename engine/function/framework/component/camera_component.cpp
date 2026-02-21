@@ -112,3 +112,5 @@ void CameraComponent::update_matrix() {
 void CameraComponent::update_camera_info() {
     // EngineContext::render_resource()->set_camera_info(camera_info_); //####TODO####
 }
+
+REGISTER_CLASS_IMPL(CameraComponent)

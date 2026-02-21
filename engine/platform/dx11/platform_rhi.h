@@ -49,7 +49,12 @@ class DX11Swapchain : public RHISwapchain {
 public:
     DX11Swapchain(const RHISwapchainInfo& info, DX11Backend& backend);
 
-    virtual uint32_t get_current_frame_index() override final { return current_index_; }
+    virtual uint32_t get_current_frame_index() override final {
+        if (supports_frame_index_query_ && swap_chain_) {
+            return swap_chain_->GetCurrentBackBufferIndex();
+        }
+        return current_index_;
+    }
     virtual RHITextureRef get_texture(uint32_t index) override final { 
         if (index >= textures_.size()) return nullptr;
         return textures_[index]; 
@@ -57,13 +62,20 @@ public:
     virtual RHITextureRef get_new_frame(RHIFenceRef fence, RHISemaphoreRef signal_semaphore) override final;
     virtual void present(RHISemaphoreRef wait_semaphore) override final;
 
+    ID3D11RenderTargetView* get_back_buffer_rtv(uint32_t index) {
+        if (index >= back_buffer_rtvs_.size()) return nullptr;
+        return back_buffer_rtvs_[index].Get();
+    }
+
     virtual void destroy() override final;
     virtual void* raw_handle() override final { return swap_chain_.Get(); }
 
 private:
     ComPtr<IDXGISwapChain3> swap_chain_;
     std::vector<RHITextureRef> textures_;
+    std::vector<ComPtr<ID3D11RenderTargetView>> back_buffer_rtvs_;
     uint32_t current_index_ = 0;
+    bool supports_frame_index_query_ = false;
 };
 
 /**
@@ -114,6 +126,7 @@ public:
     
     ComPtr<ID3D11ShaderResourceView> get_srv() const { return srv_; }
     ComPtr<ID3D11ShaderResourceView> create_srv();
+    ComPtr<ID3D11RenderTargetView> create_rtv();
 
 private:
     ComPtr<ID3D11Texture2D> texture_;
@@ -408,6 +421,8 @@ public:
 
     virtual void tick() override final;
     virtual void destroy() override final;
+
+    virtual void set_name(RHIResourceRef resource, const std::string& name) override final;
 
     virtual void init_imgui(void* window_handle) override final;
     virtual void imgui_new_frame() override final;

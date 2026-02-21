@@ -7,6 +7,7 @@
 #include "engine/main/engine_context.h"
 #include "engine/function/render/render_system/render_system.h"
 #include "engine/function/render/render_pass/pbr_forward_pass.h"
+#include "engine/function/render/graph/rdg_builder.h"
 #include "engine/function/render/rhi/rhi_command_list.h"
 #include "engine/core/log/Log.h"
 #include <iostream>
@@ -175,7 +176,6 @@ void RenderMeshManager::render_batches(RHICommandContextRef context, RHITextureV
     //####TODO####: DEBUG only - INFO(LogRenderMeshManager, "render_batches: pbr_enabled={}, batches={}", pbr_enabled_, current_batches_.size());
     
     if (pbr_enabled_) {
-        //####TODO####: DEBUG only - std::cout << "[RenderMeshManager] PBR path selected" << std::endl;
         if (!pbr_forward_pass_) {
             ERR(LogRenderMeshManager, "PBR Forward pass is null");
             return;
@@ -184,7 +184,6 @@ void RenderMeshManager::render_batches(RHICommandContextRef context, RHITextureV
             ERR(LogRenderMeshManager, "PBR Forward pass not ready");
             return;
         }
-        //####TODO####: DEBUG only - std::cout << "[RenderMeshManager] Using PBR Forward pass" << std::endl;
 
         pbr_forward_pass_->set_per_frame_data(
             active_camera_->get_view_matrix(),
@@ -198,9 +197,9 @@ void RenderMeshManager::render_batches(RHICommandContextRef context, RHITextureV
         // Collect point lights if any
         if (world && world->get_active_scene()) {
             pbr_forward_pass_->clear_point_lights();
-            // TODO: Collect point lights from scene
         }
 
+        // Draw all batches using PBR forward pass
         for (const auto& batch : current_batches_) {
             pbr_forward_pass_->draw_batch(context, batch);
         }
@@ -224,5 +223,63 @@ void RenderMeshManager::render_batches(RHICommandContextRef context, RHITextureV
         for (const auto& batch : current_batches_) {
             forward_pass_->draw_batch(context, batch);
         }
+    }
+}
+
+void RenderMeshManager::build_rdg(RDGBuilder& builder, RDGTextureHandle color_target, 
+                                   std::optional<RDGTextureHandle> depth_target) {
+    if (!initialized_) return;
+    
+    // Get camera data
+    if (!active_camera_) {
+        WARN(LogRenderMeshManager, "No active camera, skipping RDG build");
+        return;
+    }
+    
+    // Get light data from world
+    Vec3 light_dir = Vec3(0.0f, -1.0f, 0.0f);
+    Vec3 light_color = Vec3(1.0f, 1.0f, 1.0f);
+    float light_intensity = 1.0f;
+    
+    auto* world = EngineContext::world();
+    if (world && world->get_active_scene()) {
+        for (auto& entity : world->get_active_scene()->entities_) {
+            if (!entity) continue;
+            auto* light = entity->get_component<DirectionalLightComponent>();
+            if (light && light->enable()) {
+                auto* transform = entity->get_component<TransformComponent>();
+                if (transform) {
+                    light_dir = -transform->transform.front();
+                }
+                light_color = light->get_color();
+                light_intensity = light->get_intensity();
+                break;
+            }
+        }
+    }
+    
+    if (pbr_enabled_ && pbr_forward_pass_ && pbr_forward_pass_->is_ready()) {
+        // Set per-frame data
+        pbr_forward_pass_->set_per_frame_data(
+            active_camera_->get_view_matrix(),
+            active_camera_->get_projection_matrix(),
+            active_camera_->get_position(),
+            light_dir,
+            light_color,
+            light_intensity
+        );
+        
+        // Collect point lights
+        if (world && world->get_active_scene()) {
+            pbr_forward_pass_->clear_point_lights();
+            // TODO: Collect point lights from scene
+        }
+        
+        // Build PBR pass into RDG
+        pbr_forward_pass_->build(builder, color_target, depth_target, current_batches_);
+    } else if (forward_pass_ && forward_pass_->is_ready()) {
+        // For now, fall back to legacy rendering for non-PBR path
+        // TODO: Implement ForwardPass::build for RDG
+        WARN(LogRenderMeshManager, "Non-PBR path not yet implemented in RDG mode, use render_batches instead");
     }
 }

@@ -3,6 +3,8 @@
 #include "engine/main/engine_context.h"
 #include "engine/function/render/rhi/rhi.h"
 #include "engine/core/log/Log.h"
+#include "engine/core/utils/profiler.h"
+#include "engine/core/utils/profiler_widget.h"
 #include "engine/function/framework/scene.h"
 #include "engine/function/framework/entity.h"
 #include "engine/function/framework/component/transform_component.h"
@@ -98,6 +100,29 @@ void RenderSystem::init_base_resource() {
     
     swapchain_ = backend_->create_swapchain(sw_info);
     
+    // Create cached texture views and render passes for swapchain back buffers
+    for (uint32_t i = 0; i < FRAMES_IN_FLIGHT; i++) {
+        RHITextureRef back_buffer = swapchain_->get_texture(i);
+        if (back_buffer) {
+            RHITextureViewInfo view_info = {};
+            view_info.texture = back_buffer;
+            swapchain_buffer_views_[i] = backend_->create_texture_view(view_info);
+            
+            // Create a persistent render pass for this back buffer
+            RHIRenderPassInfo rp_info = {};
+            rp_info.extent = swapchain_->get_extent();
+            rp_info.color_attachments[0].texture_view = swapchain_buffer_views_[i];
+            rp_info.color_attachments[0].load_op = ATTACHMENT_LOAD_OP_CLEAR;
+            rp_info.color_attachments[0].clear_color = {0.1f, 0.2f, 0.4f, 1.0f};
+            rp_info.color_attachments[0].store_op = ATTACHMENT_STORE_OP_STORE;
+            
+            // Note: depth_texture_view_ is common for all frames
+            // But we need to set it here if we want a static render pass
+            // For now, let's just initialize the passes later when depth is ready
+        }
+    }
+    swapchain_views_initialized_ = true;
+    
     // Create depth buffer
     RHITextureInfo depth_info = {};
     depth_info.format = DEPTH_FORMAT;
@@ -120,6 +145,26 @@ void RenderSystem::init_base_resource() {
     
     depth_texture_view_ = backend_->create_texture_view(depth_view_info);
     
+    // Now initialize render passes with depth
+    for (uint32_t i = 0; i < FRAMES_IN_FLIGHT; i++) {
+        if (swapchain_buffer_views_[i]) {
+            RHIRenderPassInfo rp_info = {};
+            rp_info.extent = swapchain_->get_extent();
+            rp_info.color_attachments[0].texture_view = swapchain_buffer_views_[i];
+            rp_info.color_attachments[0].load_op = ATTACHMENT_LOAD_OP_CLEAR;
+            rp_info.color_attachments[0].clear_color = {0.1f, 0.2f, 0.4f, 1.0f};
+            rp_info.color_attachments[0].store_op = ATTACHMENT_STORE_OP_STORE;
+            
+            rp_info.depth_stencil_attachment.texture_view = depth_texture_view_;
+            rp_info.depth_stencil_attachment.load_op = ATTACHMENT_LOAD_OP_CLEAR;
+            rp_info.depth_stencil_attachment.clear_depth = 1.0f;
+            rp_info.depth_stencil_attachment.clear_stencil = 0;
+            rp_info.depth_stencil_attachment.store_op = ATTACHMENT_STORE_OP_STORE;
+            
+            swapchain_render_passes_[i] = backend_->create_render_pass(rp_info);
+        }
+    }
+    
     pool_ = backend_->create_command_pool({ queue_ });
 
     for(uint32_t i = 0; i < FRAMES_IN_FLIGHT; i++) {
@@ -127,6 +172,45 @@ void RenderSystem::init_base_resource() {
         per_frame_common_resources_[i].start_semaphore = backend_->create_semaphore();
         per_frame_common_resources_[i].finish_semaphore = backend_->create_semaphore();
         per_frame_common_resources_[i].fence = backend_->create_fence(true);
+    }
+    
+    // Initialize depth buffer visualization
+    // Create a color texture for depth visualization output
+    RHITextureInfo viz_info = {};
+    viz_info.format = COLOR_FORMAT;
+    viz_info.extent.width = WINDOW_EXTENT.width;
+    viz_info.extent.height = WINDOW_EXTENT.height;
+    viz_info.extent.depth = 1;
+    viz_info.mip_levels = 1;
+    viz_info.array_layers = 1;
+    viz_info.memory_usage = MEMORY_USAGE_GPU_ONLY;
+    viz_info.type = RESOURCE_TYPE_RENDER_TARGET | RESOURCE_TYPE_TEXTURE;
+    
+    depth_visualize_texture_ = backend_->create_texture(viz_info);
+    
+    if (depth_visualize_texture_) {
+        RHITextureViewInfo viz_view_info = {};
+        viz_view_info.texture = depth_visualize_texture_;
+        viz_view_info.format = COLOR_FORMAT;
+        viz_view_info.view_type = VIEW_TYPE_2D;
+        viz_view_info.subresource.aspect = TEXTURE_ASPECT_COLOR;
+        viz_view_info.subresource.level_count = 1;
+        viz_view_info.subresource.layer_count = 1;
+        
+        depth_visualize_texture_view_ = backend_->create_texture_view(viz_view_info);
+        
+        // Initialize depth visualize pass
+        depth_visualize_pass_ = std::make_shared<render::DepthVisualizePass>();
+        depth_visualize_pass_->init();
+        
+        if (depth_visualize_pass_->is_initialized()) {
+            depth_visualize_initialized_ = true;
+            INFO(LogRenderSystem, "Depth buffer visualization initialized");
+        } else {
+            WARN(LogRenderSystem, "Failed to initialize depth visualize pass");
+        }
+    } else {
+        WARN(LogRenderSystem, "Failed to create depth visualize texture");
     }
 }
 
@@ -137,7 +221,7 @@ void RenderSystem::init_passes() {
 }
 
 bool RenderSystem::tick(const RenderPacket& packet) {
-    // ENGINE_TIME_SCOPE(RenderSystem::Tick);
+    PROFILE_FUNCTION();
     
     // Note: Window close check is now handled by Window::process_messages() in EngineContext
 
@@ -150,9 +234,12 @@ bool RenderSystem::tick(const RenderPacket& packet) {
     }
     
     // Tick managers (collect render data)
-    mesh_manager_->tick();
-    light_manager_->tick(frame_index);
-    update_global_setting();
+    {
+        PROFILE_SCOPE("RenderSystem_Managers");
+        mesh_manager_->tick();
+        light_manager_->tick(frame_index);
+        update_global_setting();
+    }
 
     // Execute rendering using frame_index from packet for thread safety
     auto& resource = per_frame_common_resources_[frame_index];
@@ -163,37 +250,49 @@ bool RenderSystem::tick(const RenderPacket& packet) {
     
     Extent2D extent = swapchain_->get_extent();
     
+    // Use cached render pass and views instead of re-creating them every frame
+    uint32_t current_buffer_index = swapchain_->get_current_frame_index();
+    RHITextureViewRef back_buffer_view = swapchain_buffer_views_[current_buffer_index];
+    RHIRenderPassRef render_pass = swapchain_render_passes_[current_buffer_index];
+    
     command->begin_command();
     {
-        // Create render pass that loads clear and stores
-        RHIRenderPassInfo rp_info = {};
-        rp_info.extent = extent;
-        
-        // Create texture view for back buffer
-        RHITextureViewInfo view_info = {};
-        view_info.texture = swapchain_texture;
-        RHITextureViewRef back_buffer_view = backend_->create_texture_view(view_info);
-        
-        rp_info.color_attachments[0].texture_view = back_buffer_view;
-        rp_info.color_attachments[0].load_op = ATTACHMENT_LOAD_OP_CLEAR;
-        rp_info.color_attachments[0].clear_color = {0.1f, 0.2f, 0.4f, 1.0f};  // Dark blue background
-        rp_info.color_attachments[0].store_op = ATTACHMENT_STORE_OP_STORE;
-        
-        // Depth attachment
-        rp_info.depth_stencil_attachment.texture_view = depth_texture_view_;
-        rp_info.depth_stencil_attachment.load_op = ATTACHMENT_LOAD_OP_CLEAR;
-        rp_info.depth_stencil_attachment.clear_depth = 1.0f;
-        rp_info.depth_stencil_attachment.clear_stencil = 0;
-        rp_info.depth_stencil_attachment.store_op = ATTACHMENT_STORE_OP_STORE;
-        
-        RHIRenderPassRef render_pass = backend_->create_render_pass(rp_info);
-        command->begin_render_pass(render_pass);
-        
-        // Render all mesh batches (bunny, etc.)
-        mesh_manager_->render_batches(command, back_buffer_view, extent);
-        
-        //####TODO####: Other render passes
-        // for(auto& pass : passes_) { if(pass) pass->build(...); }
+        PROFILE_SCOPE("RenderSystem_SceneRender");
+        if (render_pass) {
+            command->begin_render_pass(render_pass);
+            
+            // Render all mesh batches (bunny, etc.)
+            {
+                PROFILE_SCOPE("RenderSystem_MeshBatches");
+                mesh_manager_->render_batches(command, back_buffer_view, extent);
+            }
+            
+            //####TODO####: Other render passes
+            // for(auto& pass : passes_) { if(pass) pass->build(...); }
+            
+            // Render depth buffer visualization for ImGui display
+            if (depth_visualize_initialized_ && depth_visualize_pass_ && depth_visualize_texture_view_) {
+                PROFILE_SCOPE("RenderSystem_DepthVisualize");
+                // Get camera for near/far planes
+                CameraComponent* camera = packet.active_camera;
+                if (camera) {
+                    Extent2D viz_extent = { 
+                        depth_visualize_texture_->get_info().extent.width, 
+                        depth_visualize_texture_->get_info().extent.height 
+                    };
+                    depth_visualize_pass_->draw(
+                        command, 
+                        depth_texture_, 
+                        depth_visualize_texture_view_, 
+                        viz_extent,
+                        camera->get_near(),
+                        camera->get_far()
+                    );
+                }
+            }
+            
+            command->end_render_pass();
+        }
         
         // Render ImGui and Gizmo on top of the scene
         if (backend_ && show_ui_) {
@@ -236,21 +335,26 @@ bool RenderSystem::tick(const RenderPacket& packet) {
                         1000.0f / ImGui::GetIO().Framerate, 
                         ImGui::GetIO().Framerate);
             
+            // Profiler toggle
+            ImGui::Separator();
+            if (ImGui::Button("Toggle Profiler")) {
+                ProfilerWidget::toggle_visibility();
+            }
+            
             ImGui::End();
             
+            // Draw Profiler Window
+            if (ProfilerWidget::is_visible()) {
+                ProfilerWidget::draw_window();
+            }
+            
             // Draw gizmo LAST (on top of everything)
-            // Use a stable fullscreen window for gizmo rendering
+            // Use a fullscreen transparent window for gizmo rendering to ensure correct projection
             if (gizmo_manager_ && selected_entity_ && packet.active_camera) {
                 ImGuiIO& io = ImGui::GetIO();
                 
-                // Create a transparent window for gizmo (between hierarchy and inspector)
-                float hierarchy_width = 250.0f;
-                float inspector_width = 300.0f;
-                float gizmo_x = hierarchy_width;
-                float gizmo_width = io.DisplaySize.x - hierarchy_width - inspector_width;
-                
-                ImGui::SetNextWindowPos(ImVec2(gizmo_x, 0));
-                ImGui::SetNextWindowSize(ImVec2(gizmo_width, io.DisplaySize.y));
+                ImGui::SetNextWindowPos(ImVec2(0, 0));
+                ImGui::SetNextWindowSize(io.DisplaySize);
                 ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
                 ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
                 
@@ -259,6 +363,7 @@ bool RenderSystem::tick(const RenderPacket& packet) {
                     ImGuiWindowFlags_NoResize | 
                     ImGuiWindowFlags_NoScrollbar |
                     ImGuiWindowFlags_NoNavFocus |
+                    ImGuiWindowFlags_NoMove |
                     ImGuiWindowFlags_NoInputs);
                 
                 // Draw main transform gizmo
@@ -278,20 +383,20 @@ bool RenderSystem::tick(const RenderPacket& packet) {
                 ImGui::PopStyleColor();
                 ImGui::PopStyleVar();
             }
-            
-            // Render ImGui directly to back buffer
-            backend_->imgui_render();
         }
         
         command->end_render_pass();
-        
-        // Cleanup render pass resources
-        render_pass->destroy();
-        back_buffer_view->destroy();
     }
     command->end_command();
     
     command->execute(resource.fence, resource.start_semaphore, resource.finish_semaphore);
+    
+    // Render ImGui after scene command execution but BEFORE presentation
+    // This allows ImGui to draw directly onto the backbuffer before it's flipped
+    if (backend_ && show_ui_) {
+        backend_->imgui_render();
+    }
+
     swapchain_->present(resource.finish_semaphore);
     
     // Tick backend for resource garbage collection
@@ -332,6 +437,12 @@ void RenderSystem::destroy() {
     
     // Cleanup RHI resources in reverse order of creation
     // Important: swapchain must be destroyed before pool/surface
+    
+    // Clear cached swapchain buffer views first
+    for (auto& view : swapchain_buffer_views_) {
+        view.reset();
+    }
+    
     depth_texture_view_.reset();
     depth_texture_.reset();
     pool_.reset();
@@ -502,18 +613,30 @@ void RenderSystem::draw_buffer_debug() {
         ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "  Texture: NULL");
     }
     
-    if (depth_texture_view_) {
-        void* tex_id = depth_texture_view_->raw_handle();
-        ImGui::Text("  View raw_handle: %p", tex_id);
+    // Show depth buffer visualization (converted to color)
+    if (depth_visualize_initialized_ && depth_visualize_texture_view_) {
+        void* tex_id = depth_visualize_texture_view_->raw_handle();
+        ImGui::Text("  Visualized Depth:");
         if (tex_id) {
-            float display_width = 300.0f;
+            float display_width = 280.0f;
             float display_height = display_width * ((float)WINDOW_EXTENT.height / (float)WINDOW_EXTENT.width);
             ImGui::Image(tex_id, ImVec2(display_width, display_height));
         } else {
             ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "  Error: SRV is null");
         }
     } else {
-        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "  Warning: depth_texture_view_ is null");
+        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "  Depth visualize not initialized");
+        
+        // Fallback: try to show raw depth view if available
+        if (depth_texture_view_) {
+            void* tex_id = depth_texture_view_->raw_handle();
+            ImGui::Text("  Raw depth view (may not display correctly):");
+            if (tex_id) {
+                float display_width = 280.0f;
+                float display_height = display_width * ((float)WINDOW_EXTENT.height / (float)WINDOW_EXTENT.width);
+                ImGui::Image(tex_id, ImVec2(display_width, display_height));
+            }
+        }
     }
     
     ImGui::Separator();

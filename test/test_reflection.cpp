@@ -119,7 +119,6 @@ TEST_CASE("Simplified Serialization", "[reflection]") {
     {
         int val = 500;
         std::string serialized = ReflectScheme::serialize(val);
-        std::cout << "DEBUG: int(500) serialized to: [" << serialized << "]" << std::endl;
         CHECK(serialized == "500");
 
         int deserialized = 0;
@@ -131,7 +130,6 @@ TEST_CASE("Simplified Serialization", "[reflection]") {
     {
         std::string val = "Player";
         std::string serialized = ReflectScheme::serialize(val);
-        std::cout << "DEBUG: string(Player) serialized to: [" << serialized << "]" << std::endl;
         CHECK(serialized == "\"Player\"");
 
         std::string deserialized;
@@ -143,7 +141,6 @@ TEST_CASE("Simplified Serialization", "[reflection]") {
     {
         Vec2 val(1.5f, 2.5f);
         std::string serialized = ReflectScheme::serialize(val);
-        std::cout << "DEBUG: Vec2(1.5, 2.5) serialized to: [" << serialized << "]" << std::endl;
         CHECK(serialized == "\"1.500000 2.500000\"");
 
         Vec2 deserialized(0, 0);

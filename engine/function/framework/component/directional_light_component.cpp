@@ -13,7 +13,6 @@
 #include <memory>
 #include <cmath>
 
-REGISTER_CLASS_IMPL(DirectionalLightComponent)
 
 void DirectionalLightComponent::on_init() {
     // Component::on_init();
@@ -134,3 +133,4 @@ void DirectionalLightComponent::update_light_info() {
     update_matrix();
     update_cascades();
 }
+REGISTER_CLASS_IMPL(DirectionalLightComponent)

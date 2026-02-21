@@ -34,6 +34,8 @@ public:
     virtual void on_load_asset() override;
 
     TextureType get_texture_type() { return texture_type_; }
+    const std::string& get_name() const { return name_; }
+    void set_name(const std::string& name);
 
     RHITextureRef texture_;
     RHITextureViewRef texture_view_;
@@ -46,6 +48,7 @@ public:
     template <class Archive>
     void serialize(Archive& ar) {
         ar(cereal::base_class<Asset>(this));
+        ar(cereal::make_nvp("name", name_));
         ar(cereal::make_nvp("paths", paths_));
         ar(cereal::make_nvp("texture_type", texture_type_));
         ar(cereal::make_nvp("format", format_));
@@ -55,6 +58,7 @@ public:
     }
 
 protected:
+    std::string name_ = "";
     std::vector<std::string> paths_;
     TextureType texture_type_;
     RHIFormat format_;

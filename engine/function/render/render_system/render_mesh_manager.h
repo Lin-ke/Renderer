@@ -1,14 +1,17 @@
 #pragma once
 
 #include "engine/function/render/rhi/rhi_structs.h"
+#include "engine/function/render/graph/rdg_handle.h"
 #include "engine/function/render/render_pass/forward_pass.h"
 #include "engine/function/render/render_pass/mesh_pass.h"
 #include <memory>
 #include <vector>
+#include <optional>
 
 // Forward declarations
 class MeshRendererComponent;
 class CameraComponent;
+class RDGBuilder;
 
 namespace render {
     class ForwardPass;
@@ -84,12 +87,21 @@ public:
     void collect_draw_batches(std::vector<render::DrawBatch>& batches);
 
     /**
-     * @brief Render collected batches to the given command context
+     * @brief Render collected batches to the given command context (legacy direct rendering)
      * @param context The command context to record rendering commands
      * @param back_buffer_view The texture view of the back buffer
      * @param extent The viewport extent
      */
     void render_batches(RHICommandContextRef context, RHITextureViewRef back_buffer_view, Extent2D extent);
+    
+    /**
+     * @brief Build RDG for rendering all collected batches
+     * @param builder RDG builder
+     * @param color_target Color attachment target handle
+     * @param depth_target Depth attachment target handle (optional)
+     */
+    void build_rdg(RDGBuilder& builder, RDGTextureHandle color_target, 
+                   std::optional<RDGTextureHandle> depth_target);
 
 private:
     void prepare_mesh_pass();

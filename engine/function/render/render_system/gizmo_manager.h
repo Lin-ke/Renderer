@@ -26,6 +26,12 @@ public:
         World = ImGuizmo::WORLD
     };
 
+    enum class Anchor {
+        Pivot = 0,
+        Center,
+        Bottom
+    };
+
     GizmoManager();
     ~GizmoManager();
 
@@ -85,6 +91,16 @@ public:
     Mode get_mode() const { return current_mode_; }
 
     /**
+     * @brief Set gizmo anchor point
+     */
+    void set_anchor(Anchor anchor) { current_anchor_ = anchor; }
+
+    /**
+     * @brief Get current anchor point
+     */
+    Anchor get_anchor() const { return current_anchor_; }
+
+    /**
      * @brief Enable/disable gizmo
      */
     void set_enabled(bool enabled) { enabled_ = enabled; }
@@ -94,6 +110,7 @@ public:
 private:
     Operation current_operation_ = Operation::Translate;
     Mode current_mode_ = Mode::Local;
+    Anchor current_anchor_ = Anchor::Pivot;
     bool enabled_ = true;
     bool initialized_ = false;
 };

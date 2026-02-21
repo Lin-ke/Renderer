@@ -4,6 +4,7 @@
 #include "engine/function/render/render_system/render_mesh_manager.h"
 #include "engine/function/render/rhi/rhi_command_list.h"
 #include "engine/function/framework/component/camera_component.h"
+#include "engine/function/render/render_resource/shader_utils.h"
 #include "engine/core/log/Log.h"
 
 #include <cstring>
@@ -12,107 +13,9 @@ DEFINE_LOG_TAG(LogGBufferPass, "GBufferPass");
 
 namespace render {
 
-// G-Buffer vertex shader (HLSL)
-static const char* s_gbuffer_vs_src = R"(
-cbuffer PerFrame : register(b0) {
-    float4x4 view;
-    float4x4 proj;
-    float3 camera_pos;
-    float _padding;
-};
+// Shader source is now in assets/shaders/g_buffer.hlsl
 
-cbuffer PerObject : register(b1) {
-    float4x4 model;
-    float4x4 inv_model;
-};
 
-struct VSInput {
-    float3 position : POSITION0;
-    float3 normal : NORMAL0;
-    float2 texcoord : TEXCOORD0;
-};
-
-struct VSOutput {
-    float4 position : SV_POSITION;
-    float3 world_pos : POSITION0;
-    float3 world_normal : NORMAL0;
-    float2 texcoord : TEXCOORD0;
-};
-
-VSOutput main(VSInput input) {
-    VSOutput output;
-    
-    // Transform to world space
-    float4 world_pos = mul(model, float4(input.position, 1.0));
-    output.world_pos = world_pos.xyz;
-    
-    // Transform to clip space
-    float4 view_pos = mul(view, world_pos);
-    output.position = mul(proj, view_pos);
-    
-    // Transform normal to world space
-    float3 world_normal = mul((float3x3)inv_model, input.normal);
-    output.world_normal = normalize(world_normal);
-    
-    // Pass through texcoord
-    output.texcoord = input.texcoord;
-    
-    return output;
-}
-)";
-
-// G-Buffer fragment shader (HLSL) - outputs to MRT
-static const char* s_gbuffer_fs_src = R"(
-struct PSInput {
-    float4 position : SV_POSITION;
-    float3 world_pos : POSITION0;
-    float3 world_normal : NORMAL0;
-    float2 texcoord : TEXCOORD0;
-};
-
-struct PSOutput {
-    float4 albedo_ao : SV_TARGET0;           // RGB: Albedo, A: AO
-    float4 normal_roughness : SV_TARGET1;    // RGB: Normal (packed), A: Roughness
-    float4 material_emission : SV_TARGET2;   // R: Metallic, G: Emission intensity, B: Specular, A: unused
-    float4 position_depth : SV_TARGET3;      // RGB: World position, A: Linear depth
-};
-
-PSOutput main(PSInput input) {
-    PSOutput output;
-    
-    // Normalize normal
-    float3 N = normalize(input.world_normal);
-    
-    // Pack normal to [0,1] range for storage
-    float3 packed_normal = N * 0.5 + 0.5;
-    
-    // Material parameters (hardcoded for now, would come from material system)
-    float3 albedo = float3(0.8, 0.6, 0.5);  // Default albedo
-    float roughness = 0.5;                   // Default roughness
-    float metallic = 0.0;                    // Default metallic
-    float ao = 1.0;                          // Default AO
-    float emission = 0.0;                    // Default emission
-    float specular = 0.5;                    // Default specular
-    
-    // Output to G-Buffer targets
-    output.albedo_ao = float4(albedo, ao);
-    output.normal_roughness = float4(packed_normal, roughness);
-    output.material_emission = float4(metallic, emission, specular, 1.0);
-    output.position_depth = float4(input.world_pos, input.position.w);
-    
-    return output;
-}
-)";
-
-static std::vector<uint8_t> compile_shader_rhi(const char* source, const char* entry, 
-                                                const char* profile) {
-    auto backend = EngineContext::rhi();
-    if (!backend) {
-        ERR(LogGBufferPass, "RHI backend not available for shader compilation");
-        return {};
-    }
-    return backend->compile_shader(source, entry, profile);
-}
 
 GBufferPass::GBufferPass() = default;
 
@@ -152,12 +55,15 @@ void GBufferPass::create_shaders() {
     auto backend = EngineContext::rhi();
     if (!backend) return;
     
-    // Compile vertex shader
-    auto vs_code = compile_shader_rhi(s_gbuffer_vs_src, "main", "vs_5_0");
-    if (vs_code.empty()) return;
+    // Load pre-compiled vertex shader
+    auto vs_code = ShaderUtils::load_or_compile("g_buffer_vs.cso", nullptr, "VSMain", "vs_5_0");
+    if (vs_code.empty()) {
+        ERR(LogGBufferPass, "Failed to load/compile vertex shader");
+        return;
+    }
     
     RHIShaderInfo vs_info = {};
-    vs_info.entry = "main";
+    vs_info.entry = "VSMain";
     vs_info.frequency = SHADER_FREQUENCY_VERTEX;
     vs_info.code = vs_code;
     
@@ -170,23 +76,26 @@ void GBufferPass::create_shaders() {
     vertex_shader_ = std::make_shared<Shader>();
     vertex_shader_->shader_ = vs;
     
-    // Compile fragment shader
-    auto fs_code = compile_shader_rhi(s_gbuffer_fs_src, "main", "ps_5_0");
-    if (fs_code.empty()) return;
+    // Load pre-compiled pixel shader
+    auto ps_code = ShaderUtils::load_or_compile("g_buffer_ps.cso", nullptr, "PSMain", "ps_5_0");
+    if (ps_code.empty()) {
+        ERR(LogGBufferPass, "Failed to load/compile pixel shader");
+        return;
+    }
     
-    RHIShaderInfo fs_info = {};
-    fs_info.entry = "main";
-    fs_info.frequency = SHADER_FREQUENCY_FRAGMENT;
-    fs_info.code = fs_code;
+    RHIShaderInfo ps_info = {};
+    ps_info.entry = "PSMain";
+    ps_info.frequency = SHADER_FREQUENCY_FRAGMENT;
+    ps_info.code = ps_code;
     
-    auto fs = backend->create_shader(fs_info);
-    if (!fs) {
-        ERR(LogGBufferPass, "Failed to create fragment shader");
+    auto ps = backend->create_shader(ps_info);
+    if (!ps) {
+        ERR(LogGBufferPass, "Failed to create pixel shader");
         return;
     }
     
     fragment_shader_ = std::make_shared<Shader>();
-    fragment_shader_->shader_ = fs;
+    fragment_shader_->shader_ = ps;
     
     INFO(LogGBufferPass, "Shaders created successfully");
 }

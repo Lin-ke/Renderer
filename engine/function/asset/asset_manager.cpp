@@ -520,10 +520,22 @@ UID AssetManager::get_uid_by_path(const std::string &path_str) {
 	// Try resolve physical
 	if (auto phys = get_physical_path(generic_path)) {
 		std::string phys_str = phys->generic_string();
-		std::scoped_lock lock(asset_mutex_);
-		if (auto it = path_to_uid_.find(phys_str); it != path_to_uid_.end()) {
-			return it->second;
+		{
+			std::scoped_lock lock(asset_mutex_);
+			if (auto it = path_to_uid_.find(phys_str); it != path_to_uid_.end()) {
+				// Register the virtual path if it was used but not yet mapped
+				if (!path_to_uid_.contains(generic_path)) {
+					path_to_uid_[generic_path] = it->second;
+				}
+				return it->second;
+			}
 		}
+		
+		// If both failed but it's a valid internal path, assign deterministic UID
+		UID new_uid = UID::from_hash(phys_str);
+		register_path(new_uid, phys_str);
+		register_path(new_uid, generic_path);
+		return new_uid;
 	}
 	return UID::empty();
 }

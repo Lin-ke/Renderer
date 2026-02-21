@@ -126,6 +126,17 @@ public:
      */
     void export_graphviz(std::string path);
 
+    /**
+     * @brief Gets all passes in the graph for visualization.
+     */
+    const std::vector<RDGPassNodeRef>& get_passes() const { return passes_; }
+
+    /**
+     * @brief Gets the blackboard for accessing named resources.
+     */
+    RDGBlackBoard& get_blackboard() { return black_board_; }
+    const RDGBlackBoard& get_blackboard() const { return black_board_; }
+
 private:
     void create_input_barriers(RDGPassNodeRef pass);
     void create_output_barriers(RDGPassNodeRef pass);

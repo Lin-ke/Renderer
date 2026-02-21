@@ -22,15 +22,26 @@ TextureViewType texture_type_to_view_type(TextureType type) {
     }
 }
 
+void Texture::set_name(const std::string& name) {
+    name_ = name;
+    if (texture_ && EngineContext::rhi()) {
+        EngineContext::rhi()->set_name(texture_, name);
+    }
+}
+
 Texture::Texture(const std::string& path)
     : texture_type_(TextureType::Texture2D), format_(FORMAT_R8G8B8A8_SRGB), array_layer_(1) {
     paths_.push_back(path);
+    name_ = std::filesystem::path(path).filename().string();
     load_from_file();
 }
 
 Texture::Texture(const std::vector<std::string>& paths, TextureType type)
     : texture_type_(type), format_(FORMAT_R8G8B8A8_SRGB), array_layer_((uint32_t)paths.size()) {
     paths_ = paths;
+    if (!paths.empty()) {
+        name_ = std::filesystem::path(paths[0]).filename().string();
+    }
     load_from_file();
 }
 
@@ -87,6 +98,10 @@ void Texture::init_rhi() {
     texture_ = EngineContext::rhi()->create_texture(info);
     if (!texture_) {
         return;
+    }
+    
+    if (!name_.empty()) {
+        EngineContext::rhi()->set_name(texture_, name_);
     }
 
     RHITextureViewInfo view_info = {};

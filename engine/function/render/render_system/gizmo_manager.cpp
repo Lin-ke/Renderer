@@ -1,6 +1,7 @@
 #include "gizmo_manager.h"
 #include "engine/function/framework/component/camera_component.h"
 #include "engine/function/framework/component/transform_component.h"
+#include "engine/function/framework/component/mesh_renderer_component.h"
 #include "engine/function/framework/entity.h"
 #include "engine/core/log/Log.h"
 
@@ -78,17 +79,46 @@ void GizmoManager::draw_gizmo(CameraComponent* camera, Entity* selected_entity,
         }
     }
 
+    // Set gizmo projection mode
+    ImGuizmo::SetOrthographic(false);
+
+    // Set viewport to the current ImGui window size and position
+    // This ensures mouse interaction matches the visual gizmo exactly
+    ImGuizmo::SetRect(viewport_pos.x, viewport_pos.y, viewport_size.x, viewport_size.y);
+    
     // Get current transform matrix
     Mat4 model = transform->transform.get_matrix();
-    for (int i = 0; i < 4; ++i) {
-        for (int j = 0; j < 4; ++j) {
-            transform_matrix[i + j * 4] = model(i, j);
+    
+    // Calculate anchor offset in local space
+    Vec3 local_offset = Vec3::Zero();
+    if (current_anchor_ != Anchor::Pivot) {
+        if (auto* mesh_renderer = selected_entity->get_component<MeshRendererComponent>()) {
+            if (auto model_asset = mesh_renderer->get_model()) {
+                BoundingBox box = model_asset->get_bounding_box();
+                if (current_anchor_ == Anchor::Center) {
+                    local_offset = (box.min + box.max) * 0.5f;
+                } else if (current_anchor_ == Anchor::Bottom) {
+                    local_offset = (box.min + box.max) * 0.5f;
+                    local_offset.y() = box.min.y();
+                }
+            }
         }
     }
 
-    // Set viewport to full screen - this is crucial for correct mouse interaction!
-    ImGuizmo::SetRect(viewport_pos.x, viewport_pos.y, viewport_size.x, viewport_size.y);
-    
+    // Apply offset to matrix for ImGuizmo
+    Mat4 gizmo_matrix = model;
+    if (local_offset.norm() > 0.0001f) {
+        Mat4 offset_mat = Mat4::Identity();
+        offset_mat.block<3, 1>(0, 3) = local_offset;
+        gizmo_matrix = model * offset_mat;
+    }
+
+    for (int i = 0; i < 4; ++i) {
+        for (int j = 0; j < 4; ++j) {
+            transform_matrix[i + j * 4] = gizmo_matrix(i, j);
+        }
+    }
+
     // Enable gizmo
     ImGuizmo::Enable(true);
     
@@ -107,14 +137,6 @@ void GizmoManager::draw_gizmo(CameraComponent* camera, Entity* selected_entity,
     
     // Apply transform if changed
     bool is_using = ImGuizmo::IsUsing();
-    bool is_over = ImGuizmo::IsOver();
-    
-    // Debug: log when starting/stopping gizmo usage
-    static bool was_using = false;
-    if (is_using != was_using) {
-        was_using = is_using;
-        LOG(INFO) << "[GizmoManager] usage " << (is_using ? "started" : "stopped");
-    }
     
     // Check if matrix actually changed
     bool matrix_changed = false;
@@ -127,11 +149,19 @@ void GizmoManager::draw_gizmo(CameraComponent* camera, Entity* selected_entity,
     
     if (is_using && matrix_changed) {
         // Convert back from column-major
-        Mat4 new_model;
+        Mat4 new_gizmo_matrix;
         for (int i = 0; i < 4; ++i) {
             for (int j = 0; j < 4; ++j) {
-                new_model(i, j) = transform_matrix[i + j * 4];
+                new_gizmo_matrix(i, j) = transform_matrix[i + j * 4];
             }
+        }
+
+        // Revert offset to get the new pivot matrix
+        Mat4 new_model = new_gizmo_matrix;
+        if (local_offset.norm() > 0.0001f) {
+            Mat4 inv_offset_mat = Mat4::Identity();
+            inv_offset_mat.block<3, 1>(0, 3) = -local_offset;
+            new_model = new_gizmo_matrix * inv_offset_mat;
         }
         
         // Extract position, rotation, scale
@@ -182,6 +212,20 @@ void GizmoManager::draw_controls() {
     ImGui::SameLine();
     if (ImGui::RadioButton("World", current_mode_ == Mode::World)) {
         current_mode_ = Mode::World;
+    }
+
+    // Anchor buttons
+    ImGui::Text("Anchor:");
+    if (ImGui::RadioButton("Pivot", current_anchor_ == Anchor::Pivot)) {
+        current_anchor_ = Anchor::Pivot;
+    }
+    ImGui::SameLine();
+    if (ImGui::RadioButton("Center", current_anchor_ == Anchor::Center)) {
+        current_anchor_ = Anchor::Center;
+    }
+    ImGui::SameLine();
+    if (ImGui::RadioButton("Bottom", current_anchor_ == Anchor::Bottom)) {
+        current_anchor_ = Anchor::Bottom;
     }
 }
 

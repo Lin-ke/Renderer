@@ -7,5 +7,5 @@ logs/
 # MacOS Cache
 .DS_Store
 test/test_internal/
-
+vsxmake2026/
 RD/

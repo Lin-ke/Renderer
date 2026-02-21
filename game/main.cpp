@@ -24,7 +24,7 @@ DEFINE_LOG_TAG(LogGame, "Game");
 
 // Frame counter for debugging
 static uint32_t g_frame_count = 0;
-static const uint32_t MAX_FRAMES = 3000;  // Only render 30 frames then exit
+static const uint32_t MAX_FRAMES = 30000;  // Only render 30 frames then exit
 
 Entity* setup_bunny_scene() {
     INFO(LogGame, "Setting up bunny render scene...");
@@ -180,7 +180,7 @@ int main() {
         
         // Prepare render packet
         RenderPacket packet;
-        packet.frame_index = g_frame_count % 2;  // MAX_FRAMES_IN_FLIGHT = 2
+        packet.frame_index = g_frame_count % 3;  // MAX_FRAMES_IN_FLIGHT = 3
         
         // Fill packet with scene data
         if (EngineContext::world()) {
@@ -234,9 +234,6 @@ int main() {
         }
         
         g_frame_count++;
-        
-        // Small delay to not max out CPU
-        std::this_thread::sleep_for(std::chrono::milliseconds(16));  // ~60 FPS
     }
     
     INFO(LogGame, "========================================");

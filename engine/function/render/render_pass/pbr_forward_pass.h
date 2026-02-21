@@ -28,7 +28,7 @@ struct PBRPerFrameData {
     // Point lights (up to 4 for simple implementation)
     Vec4 point_light_pos[4];      // xyz = position, w = range
     Vec4 point_light_color[4];    // rgb = color, a = intensity
-    int point_light_count;
+    int point_light_count = 0;
     Vec3 _padding3;
 };
 
@@ -58,7 +58,6 @@ public:
     ~PBRForwardPass() override;
     
     void init() override;
-    void build(RDGBuilder& builder) override;
     
     void set_wireframe(bool enable);
     void set_per_frame_data(const Mat4& view, const Mat4& proj, 
@@ -72,12 +71,31 @@ public:
     void clear_point_lights();
     
     /**
-     * @brief Draw a single batch using PBR
+     * @brief Draw a single batch (legacy method for backward compatibility)
      * @param command Command context to record to
      * @param batch Draw batch data
      */
     void draw_batch(RHICommandContextRef command, const DrawBatch& batch);
 
+    /**
+     * @brief Execute rendering of batches directly (for non-RDG rendering path)
+     * @param command Command list to record to
+     * @param batches Draw batches to render
+     */
+    void execute_batches(RHICommandListRef command, const std::vector<DrawBatch>& batches);
+
+    /**
+     * @brief Build the render pass into the RDG
+     * @param builder RDG builder
+     * @param color_target Color attachment target
+     * @param depth_target Depth attachment target (optional)
+     * @param batches Draw batches to render
+     */
+    void build(RDGBuilder& builder, RDGTextureHandle color_target, 
+               std::optional<RDGTextureHandle> depth_target,
+               const std::vector<DrawBatch>& batches);
+
+    // Public interface for RenderMeshManager
     /**
      * @brief Check if pass is ready to render
      */

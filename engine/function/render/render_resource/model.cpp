@@ -74,7 +74,7 @@ Model::Model(std::string path, ModelProcessSetting process_setting)
     }
 }
 
-std::shared_ptr<Model> Model::Load(const std::string& path, const ModelProcessSetting& process_setting) {
+std::shared_ptr<Model> Model::Load(const std::string& path, const ModelProcessSetting& process_setting, const UID& explicit_uid) {
     // Get absolute path for consistent caching
     std::filesystem::path fs_path(path);
     std::string abs_path;
@@ -95,12 +95,17 @@ std::shared_ptr<Model> Model::Load(const std::string& path, const ModelProcessSe
         abs_path = fs_path.string();
     }
     
+    // Determine UID to use
+    UID model_uid = explicit_uid;
+    if (model_uid.is_empty() && asset_manager) {
+        model_uid = asset_manager->get_uid_by_path(abs_path);
+        if (model_uid.is_empty()) {
+            model_uid = UID::from_hash(abs_path);
+        }
+    }
+    
     // Try to get from AssetManager if available
-    if (asset_manager) {
-        // Get or create UID from path
-        UID model_uid = asset_manager->get_uid_by_path(abs_path);
-        
-        // Check if already loaded
+    if (asset_manager && !model_uid.is_empty()) {
         auto existing = asset_manager->get_asset_immediate(model_uid);
         if (existing) {
             auto model = std::dynamic_pointer_cast<Model>(existing);
@@ -115,6 +120,11 @@ std::shared_ptr<Model> Model::Load(const std::string& path, const ModelProcessSe
     INFO(LogModel, "Loading model: {}", abs_path);
     auto model = std::shared_ptr<Model>(new Model(abs_path, process_setting));
     
+    // Set UID if provided or generate from path
+    if (!model_uid.is_empty()) {
+        model->set_uid(model_uid);
+    }
+    
     // Register with AssetManager if available
     if (asset_manager) {
         asset_manager->register_asset(model, abs_path);
@@ -124,12 +134,12 @@ std::shared_ptr<Model> Model::Load(const std::string& path, const ModelProcessSe
 }
 
 std::shared_ptr<Model> Model::Load(const std::string& path, bool smooth_normal,
-                                    bool load_materials, bool flip_uv) {
+                                    bool load_materials, bool flip_uv, const UID& explicit_uid) {
     ModelProcessSetting setting;
     setting.smooth_normal = smooth_normal;
     setting.load_materials = load_materials;
     setting.flip_uv = flip_uv;
-    return Load(path, setting);
+    return Load(path, setting, explicit_uid);
 }
 
 Model::~Model() {
@@ -137,7 +147,25 @@ Model::~Model() {
     //####TODO#### Release mesh cluster IDs
 }
 
+BoundingBox Model::get_bounding_box() const {
+    BoundingBox box;
+    bool first = true;
+    for (const auto& submesh : submeshes_) {
+        if (submesh.mesh) {
+            if (first) {
+                box = submesh.mesh->box;
+                first = false;
+            } else {
+                box.min = box.min.cwiseMin(submesh.mesh->box.min);
+                box.max = box.max.cwiseMax(submesh.mesh->box.max);
+            }
+        }
+    }
+    return box;
+}
+
 void Model::on_load_asset() {
+    load_asset_deps();
     try {
     // Load cache if exists
     //####TODO#### Load cache binding
@@ -194,6 +222,7 @@ void Model::on_load_asset() {
 }
 
 void Model::on_save_asset() {
+    save_asset_deps();
     // Cache cluster data if requested
     if (process_setting_.cache_cluster) {
         if (!cache_) cache_ = std::make_shared<ModelCache>();
@@ -455,6 +484,15 @@ void Model::process_mesh(aiMesh* mesh, const aiScene* scene, int index) {
                  normal ? "yes" : "no", 
                  arm ? "yes" : "no");
         }
+    }
+    
+    // Fallback: Create default material if requested but not found
+    if (process_setting_.load_materials && materials_[index] == nullptr) {
+        materials_[index] = std::make_shared<Material>();
+        materials_[index]->set_diffuse(Vec4(0.8f, 0.8f, 0.8f, 1.0f)); // Default grey
+        materials_[index]->set_roughness(0.5f);
+        materials_[index]->set_metallic(0.0f);
+        INFO(LogModel, "Created default fallback material for submesh {}", index);
     }
     
     // Process bone weights

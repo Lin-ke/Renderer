@@ -1,5 +1,11 @@
 #include "platform_rhi.h"
 #include "engine/core/log/Log.h"
+#include "engine/function/render/render_system/render_system.h"
+#include "engine/main/engine_context.h"
+#include <d3d11_1.h>
+#include <dxgi1_6.h>
+#include <imgui_impl_dx11.h>
+#include <imgui_impl_win32.h>
 #include <d3dcompiler.h>
 
 #include <imgui.h>
@@ -53,7 +59,7 @@ public:
         if (type & RESOURCE_TYPE_UNIFORM_BUFFER) flags |= D3D11_BIND_CONSTANT_BUFFER;
         if (type & RESOURCE_TYPE_TEXTURE) flags |= D3D11_BIND_SHADER_RESOURCE;
         if (type & RESOURCE_TYPE_RENDER_TARGET) flags |= D3D11_BIND_RENDER_TARGET;
-        if (type & (RESOURCE_TYPE_DEPTH_STENCIL | RESOURCE_STATE_DEPTH_STENCIL_ATTACHMENT)) {
+        if (type & RESOURCE_TYPE_DEPTH_STENCIL) {
             flags |= D3D11_BIND_DEPTH_STENCIL;
             // Also add SRV bind flag so depth buffer can be sampled/shown in ImGui
             flags |= D3D11_BIND_SHADER_RESOURCE;
@@ -125,6 +131,11 @@ bool DX11Buffer::init() {
         ERR(LogRHI, "Failed to create DX11 Buffer (HRESULT: 0x{:08X})", (uint32_t)hr);
         return false;
     }
+
+    if (!get_name().empty()) {
+        backend_.set_name(shared_from_this(), get_name());
+    }
+
     return true;
 }
 
@@ -201,10 +212,16 @@ bool DX11Texture::init() {
 
         HRESULT hr = backend_.get_device()->CreateTexture2D(&desc, nullptr, texture_.GetAddressOf());
         if (FAILED(hr)) {
-            ERR(LogRHI, "Failed to create DX11 Texture2D (HRESULT: 0x{:08X})", (uint32_t)hr);
+            ERR(LogRHI, "Failed to create DX11 Texture2D ({}x{}, format: {}, bind: 0x{:X}, type: 0x{:X}, HRESULT: 0x{:08X})", 
+                desc.Width, desc.Height, (uint32_t)desc.Format, (uint32_t)desc.BindFlags, (uint32_t)info_.type, (uint32_t)hr);
             return false;
         }
     }
+    
+    if (!get_name().empty()) {
+        backend_.set_name(shared_from_this(), get_name());
+    }
+    
     return true;
 }
 
@@ -238,6 +255,17 @@ ComPtr<ID3D11ShaderResourceView> DX11Texture::create_srv() {
     return srv_;
 }
 
+ComPtr<ID3D11RenderTargetView> DX11Texture::create_rtv() {
+    if (!texture_) return nullptr;
+    ComPtr<ID3D11RenderTargetView> rtv;
+    D3D11_RENDER_TARGET_VIEW_DESC rtv_desc = {};
+    rtv_desc.Format = DX11Util::rhi_format_to_dxgi(info_.format);
+    rtv_desc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+    rtv_desc.Texture2D.MipSlice = 0;
+    backend_.get_device()->CreateRenderTargetView(texture_.Get(), &rtv_desc, rtv.GetAddressOf());
+    return rtv;
+}
+
 // --- DX11TextureView ---
 DX11TextureView::DX11TextureView(const RHITextureViewInfo& info, DX11Backend& backend)
     : RHITextureView(info) {
@@ -246,29 +274,59 @@ DX11TextureView::DX11TextureView(const RHITextureViewInfo& info, DX11Backend& ba
 
     const auto& tex_info = info.texture->get_info();
     DXGI_FORMAT base_format = DX11Util::rhi_format_to_dxgi(tex_info.format);
-    DXGI_FORMAT view_format = (info.format != FORMAT_UKNOWN) ? DX11Util::rhi_format_to_dxgi(info.format) : base_format;
+    
+    // Get the actual DXGI format used when creating the texture
+    // For depth-stencil textures, this might be a typeless format (R32_TYPELESS, R24G8_TYPELESS)
+    D3D11_TEXTURE2D_DESC tex_desc = {};
+    dx_tex->get_handle()->GetDesc(&tex_desc);
+    DXGI_FORMAT actual_tex_format = tex_desc.Format;
+    
+    // Determine view format:
+    // - For depth-stencil textures, we must use a format compatible with the actual texture format
+    // - If info.format is specified but incompatible with depth-stencil texture, fall back to base_format
+    DXGI_FORMAT view_format;
+    if (info.format != FORMAT_UKNOWN) {
+        view_format = DX11Util::rhi_format_to_dxgi(info.format);
+        // If texture is depth-stencil but view_format is not depth-compatible, use base_format
+        if ((tex_info.type & RESOURCE_TYPE_DEPTH_STENCIL) && 
+            !(view_format == DXGI_FORMAT_D32_FLOAT || view_format == DXGI_FORMAT_R32_TYPELESS ||
+              view_format == DXGI_FORMAT_R32_FLOAT || view_format == DXGI_FORMAT_D24_UNORM_S8_UINT ||
+              view_format == DXGI_FORMAT_R24G8_TYPELESS || view_format == DXGI_FORMAT_R24_UNORM_X8_TYPELESS)) {
+            view_format = base_format;
+        }
+    } else {
+        view_format = base_format;
+    }
 
     // Create SRV for texture types
     if (tex_info.type & RESOURCE_TYPE_TEXTURE) {
-        D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
-        DXGI_FORMAT srv_format = view_format;
-        
-        // Handle depth format mapping for SRV (depth formats cannot be directly sampled)
-        // view_format might be the original depth format (e.g., DXGI_FORMAT_D32_FLOAT)
-        // or the typeless format from texture creation (e.g., DXGI_FORMAT_R32_TYPELESS)
-        if (srv_format == DXGI_FORMAT_D32_FLOAT || srv_format == DXGI_FORMAT_R32_TYPELESS) {
-            srv_format = DXGI_FORMAT_R32_FLOAT;
-        } else if (srv_format == DXGI_FORMAT_D24_UNORM_S8_UINT || srv_format == DXGI_FORMAT_R24G8_TYPELESS) {
-            srv_format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
-        }
-        
-        srv_desc.Format = srv_format;
-        srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-        srv_desc.Texture2D.MipLevels = tex_info.mip_levels;
-        srv_desc.Texture2D.MostDetailedMip = info.subresource.base_mip_level;
-        HRESULT hr = backend.get_device()->CreateShaderResourceView(dx_tex->get_handle().Get(), &srv_desc, srv_.GetAddressOf());
-        if (FAILED(hr)) {
-            ERR(LogRHI, "Failed to create texture SRV (format: {}, HRESULT: 0x{:08X})", (uint32_t)srv_format, (uint32_t)hr);
+        // Check if texture was created with D3D11_BIND_SHADER_RESOURCE flag
+        // Swapchain back buffers may not have this flag, so we skip SRV creation for them
+        if ((tex_desc.BindFlags & D3D11_BIND_SHADER_RESOURCE) == 0) {
+            // Texture doesn't support SRV, skip creation silently
+            // (This is normal for swapchain back buffers)
+        } else {
+            D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
+            DXGI_FORMAT srv_format = view_format;
+            
+            // Handle depth format mapping for SRV (depth formats cannot be directly sampled)
+            // view_format might be the original depth format (e.g., DXGI_FORMAT_D32_FLOAT)
+            // or the typeless format from texture creation (e.g., DXGI_FORMAT_R32_TYPELESS)
+            if (srv_format == DXGI_FORMAT_D32_FLOAT || srv_format == DXGI_FORMAT_R32_TYPELESS) {
+                srv_format = DXGI_FORMAT_R32_FLOAT;
+            } else if (srv_format == DXGI_FORMAT_D24_UNORM_S8_UINT || srv_format == DXGI_FORMAT_R24G8_TYPELESS) {
+                srv_format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+            }
+            
+            srv_desc.Format = srv_format;
+            srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+            srv_desc.Texture2D.MipLevels = tex_info.mip_levels > 0 ? tex_info.mip_levels : 1;
+            srv_desc.Texture2D.MostDetailedMip = info.subresource.base_mip_level;
+            HRESULT hr = backend.get_device()->CreateShaderResourceView(dx_tex->get_handle().Get(), &srv_desc, srv_.GetAddressOf());
+            if (FAILED(hr)) {
+                ERR(LogRHI, "Failed to create texture SRV (format: {}, HRESULT: 0x{:08X})", 
+                    (uint32_t)srv_format, (uint32_t)hr);
+            }
         }
     }
 
@@ -367,6 +425,11 @@ DX11Swapchain::DX11Swapchain(const RHISwapchainInfo& info, DX11Backend& backend)
         ERR(LogRHI, "Failed to create DX11 SwapChain. Format: {}, HRESULT: 0x{:08X}", (uint32_t)desc.BufferDesc.Format, (uint32_t)hr);
         return;
     }
+    
+    // Check if swap effect supports GetCurrentBackBufferIndex()
+    // FLIP_* effects support it, DISCARD/SEQUENTIAL do not
+    supports_frame_index_query_ = (desc.SwapEffect == DXGI_SWAP_EFFECT_FLIP_DISCARD || 
+                                   desc.SwapEffect == DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL);
 
     // Query actual buffer count from swapchain (for some swap effects, actual count may differ from requested)
     DXGI_SWAP_CHAIN_DESC actual_desc = {};
@@ -384,10 +447,15 @@ DX11Swapchain::DX11Swapchain(const RHISwapchainInfo& info, DX11Backend& backend)
         RHITextureInfo tex_info = {};
         tex_info.format = info.format;
         tex_info.extent = { info.extent.width, info.extent.height, 1 };
+        tex_info.mip_levels = 1;
         tex_info.type = RESOURCE_TYPE_RENDER_TARGET | RESOURCE_TYPE_TEXTURE;
         auto texture = std::make_shared<DX11Texture>(tex_info, backend, back_buffer);
         texture->init();
         textures_.push_back(texture);
+
+        ComPtr<ID3D11RenderTargetView> rtv;
+        backend.get_device()->CreateRenderTargetView(back_buffer.Get(), nullptr, rtv.GetAddressOf());
+        back_buffer_rtvs_.push_back(rtv);
     }
 }
 
@@ -396,22 +464,30 @@ RHITextureRef DX11Swapchain::get_new_frame(RHIFenceRef fence, RHISemaphoreRef si
         return nullptr;
     }
     
-    // Get current back buffer index from swapchain
-    current_index_ = swap_chain_->GetCurrentBackBufferIndex();
-    
-    // Validate index is within bounds
-    if (current_index_ >= textures_.size()) {
-        current_index_ = 0;
+    // Get current back buffer index from swapchain (only if supported)
+    if (supports_frame_index_query_) {
+        current_index_ = swap_chain_->GetCurrentBackBufferIndex();
+        
+        // Validate index is within bounds
+        if (current_index_ >= textures_.size()) {
+            current_index_ = 0;
+        }
     }
+    // If not supported, current_index_ is managed manually in present()
     
     return textures_[current_index_];
 }
 
 void DX11Swapchain::present(RHISemaphoreRef wait_semaphore) {
     if (swap_chain_) {
-        HRESULT hr = swap_chain_->Present(1, 0);
+        HRESULT hr = swap_chain_->Present(0, 0);  // Disable VSync for testing
         if (FAILED(hr)) {
             ERR(LogRHI, "Present failed with HRESULT: 0x{:08X}", (uint32_t)hr);
+        }
+        
+        // If frame index query is not supported, manually advance to next frame
+        if (!supports_frame_index_query_) {
+            current_index_ = (current_index_ + 1) % textures_.size();
         }
     }
 }
@@ -641,6 +717,16 @@ void DX11Backend::destroy() {
     device_.Reset(); 
     factory_.Reset(); 
 }
+
+void DX11Backend::set_name(RHIResourceRef resource, const std::string& name) {
+    if (!resource) return;
+    resource->set_name(name);
+    
+    ID3D11DeviceChild* child = static_cast<ID3D11DeviceChild*>(resource->raw_handle());
+    if (child) {
+        child->SetPrivateData(WKPDID_D3DDebugObjectName, (UINT)name.size(), name.c_str());
+    }
+}
 void DX11Backend::init_imgui(void* window_handle) {
     // Setup ImGui context
     IMGUI_CHECKVERSION();
@@ -669,6 +755,27 @@ void DX11Backend::imgui_render() {
     ImGui::Render();
     ImDrawData* draw_data = ImGui::GetDrawData();
     if (draw_data && draw_data->CmdListsCount > 0) {
+        // Set back buffer as render target for ImGui
+        auto swapchain = EngineContext::render_system()->get_swapchain();
+        if (swapchain) {
+            auto dx_swapchain = std::static_pointer_cast<DX11Swapchain>(swapchain);
+            // Before present(), the current index is the one we just rendered to
+            ID3D11RenderTargetView* rtv = dx_swapchain->get_back_buffer_rtv(dx_swapchain->get_current_frame_index());
+            if (rtv) {
+                context_->OMSetRenderTargets(1, &rtv, nullptr);
+                
+                // Set viewport to full screen
+                D3D11_VIEWPORT vp;
+                vp.TopLeftX = 0;
+                vp.TopLeftY = 0;
+                vp.Width = (float)swapchain->get_extent().width;
+                vp.Height = (float)swapchain->get_extent().height;
+                vp.MinDepth = 0.0f;
+                vp.MaxDepth = 1.0f;
+                context_->RSSetViewports(1, &vp);
+            }
+        }
+        
         ImGui_ImplDX11_RenderDrawData(draw_data);
     }
 }
@@ -809,6 +916,7 @@ void DX11CommandContext::execute(RHIFenceRef fence, RHISemaphoreRef ws, RHISemap
         auto dx_fence = resource_cast(fence);
         context_->End(dx_fence->raw_handle_as<ID3D11Query>());
     }
+    context_->Flush();
 }
 void DX11CommandContext::texture_barrier(const RHITextureBarrier& b) {}
 void DX11CommandContext::buffer_barrier(const RHIBufferBarrier& b) {}
@@ -817,8 +925,19 @@ void DX11CommandContext::copy_buffer_to_texture(RHIBufferRef s, uint64_t soff, R
 void DX11CommandContext::copy_buffer(RHIBufferRef s, uint64_t soff, RHIBufferRef d, uint64_t doff, uint64_t sz) { D3D11_BOX box = { (UINT)soff, 0, 0, (UINT)(soff + sz), 1, 1 }; context_->CopySubresourceRegion((ID3D11Resource*)d->raw_handle(), 0, (UINT)doff, 0, 0, (ID3D11Resource*)s->raw_handle(), 0, &box); }
 void DX11CommandContext::copy_texture(RHITextureRef s, TextureSubresourceLayers ss, RHITextureRef d, TextureSubresourceLayers ds) { context_->CopyResource((ID3D11Resource*)d->raw_handle(), (ID3D11Resource*)s->raw_handle()); }
 void DX11CommandContext::generate_mips(RHITextureRef s) {}
-void DX11CommandContext::push_event(const std::string& n, Color3 c) {}
-void DX11CommandContext::pop_event() {}
+void DX11CommandContext::push_event(const std::string& name, Color3 color) {
+    Microsoft::WRL::ComPtr<ID3DUserDefinedAnnotation> annotation;
+    if (SUCCEEDED(context_.As(&annotation))) {
+        std::wstring wname(name.begin(), name.end());
+        annotation->BeginEvent(wname.c_str());
+    }
+}
+void DX11CommandContext::pop_event() {
+    Microsoft::WRL::ComPtr<ID3DUserDefinedAnnotation> annotation;
+    if (SUCCEEDED(context_.As(&annotation))) {
+        annotation->EndEvent();
+    }
+}
 void DX11CommandContext::begin_render_pass(RHIRenderPassRef rp) {
     if (!rp) return;
     const auto& info = rp->get_info();

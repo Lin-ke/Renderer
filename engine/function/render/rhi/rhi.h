@@ -39,6 +39,8 @@ public:
 
     virtual void destroy();
 
+    virtual void set_name(RHIResourceRef resource, const std::string& name) = 0;
+
     // ImGui
     virtual void init_imgui(void* window_handle) = 0;
     virtual void imgui_new_frame() = 0;

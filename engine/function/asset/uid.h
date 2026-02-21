@@ -9,6 +9,7 @@ public:
 	UID();
 	explicit UID(const std::string &str);
 	static UID empty();
+	static UID from_hash(const std::string &str);
 	const std::string &to_string() const { return str; }
 	const uuids::uuid &get_raw() const { return id; }
 	bool operator==(const UID &other) const { return id == other.id; }

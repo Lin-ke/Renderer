@@ -2,6 +2,7 @@
 #include "engine/core/log/Log.h"
 #include "engine/core/os/thread_pool.h"
 #include "engine/core/window/window.h"
+#include "engine/core/utils/profiler.h"
 #include "engine/function/asset/asset_manager.h"
 #include "engine/function/input/input.h"
 #include "engine/function/render/render_system.h"
@@ -143,6 +144,8 @@ void EngineContext::main_loop_internal() {
 	instance_->timer_.reset();
 	
 	while (true) {
+		PROFILE_SCOPE("MainLoop_Frame");
+		
 		// Calculate delta time (time since last frame)
 		instance_->delta_time_ = instance_->timer_.get_elapsed_sec();
 		
@@ -152,13 +155,18 @@ void EngineContext::main_loop_internal() {
 		}
 
 		// System Ticks
-		Input::get_instance().tick();
+		{
+			PROFILE_SCOPE("MainLoop_Input");
+			Input::get_instance().tick();
+		}
 		
 		if (instance_->world_) {
+			PROFILE_SCOPE("MainLoop_World");
 			instance_->world_->tick(instance_->delta_time_);
 		}
 		
 		if (instance_->asset_manager_) {
+			PROFILE_SCOPE("MainLoop_AssetManager");
 			instance_->asset_manager_->tick();
 		}
 
@@ -172,6 +180,7 @@ void EngineContext::main_loop_internal() {
 			
 			// Find active camera in scene
 			if (active_scene) {
+				PROFILE_SCOPE("MainLoop_FindCamera");
 				for (const auto& entity : active_scene->entities_) {
 					if (auto* camera = entity->get_component<CameraComponent>()) {
 						packet.active_camera = camera;
@@ -182,11 +191,13 @@ void EngineContext::main_loop_internal() {
 		}
 		
 		if (instance_->mode_.test(StartMode::SingleThread) && instance_->render_system_) {
+			PROFILE_SCOPE("MainLoop_Render");
 			// Single-threaded: set frame index before tick
 			packet.frame_index = instance_->current_frame_index_;
 			instance_->render_system_->tick(packet);
             instance_->current_frame_index_ = (instance_->current_frame_index_ + 1) % instance_->MAX_FRAMES_IN_FLIGHT;
 		} else if (instance_->render_system_) {
+			PROFILE_SCOPE("MainLoop_QueueRender");
 			// Multi-threaded submission
 			std::unique_lock lock(instance_->render_mutex_);
 			instance_->render_cv_.wait(lock, [this]() {
@@ -200,6 +211,9 @@ void EngineContext::main_loop_internal() {
 			lock.unlock();
 			instance_->render_cv_.notify_one();
 		}
+		
+		// End frame for profiler (prepares for next frame)
+		Profiler::get().end_frame();
 		
 		// Increment tick counter
 		instance_->current_tick_++;

@@ -99,7 +99,7 @@ private:
     std::mutex render_mutex_;
     std::condition_variable render_cv_;
     std::queue<RenderPacket> render_queue_;
-    const size_t MAX_FRAMES_IN_FLIGHT = 2;
+    const size_t MAX_FRAMES_IN_FLIGHT = 3;
 };
 
 #endif

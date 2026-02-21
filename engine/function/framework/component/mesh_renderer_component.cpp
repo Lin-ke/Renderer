@@ -84,6 +84,7 @@ void MeshRendererComponent::release_object_ids() {
 }
 
 void MeshRendererComponent::update_object_info() {
+    if (!get_owner()) return;
     auto transform = get_owner()->get_component<TransformComponent>();
     if (!transform) return;
     
@@ -154,7 +155,7 @@ MaterialRef MeshRendererComponent::get_material(uint32_t index) const {
 }
 
 void MeshRendererComponent::collect_draw_batch(std::vector<render::DrawBatch>& batches) {
-    if (!model_) return;
+    if (!model_ || !get_owner()) return;
     
     auto transform = get_owner()->get_component<TransformComponent>();
     if (!transform) return;
@@ -207,3 +208,5 @@ uint32_t MeshRendererComponent::get_submesh_count() const {
 void MeshRendererComponent::register_class() {
     Registry::add<MeshRendererComponent>("MeshRendererComponent");
 }
+
+REGISTER_CLASS_IMPL(MeshRendererComponent)

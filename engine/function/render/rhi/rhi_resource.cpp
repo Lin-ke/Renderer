@@ -25,12 +25,12 @@ RHICommandListRef RHICommandPool::create_command_list(bool bypass) {
     }
 
     if (!context) {
-        context = RHIBackend::get()->create_command_context(shared_from_this());
+        context = RHIBackend::get()->create_command_context(std::static_pointer_cast<RHICommandPool>(shared_from_this()));
         contexts_.push_back(context);
     }
 
     CommandListInfo info;
-    info.pool = shared_from_this();
+    info.pool = std::static_pointer_cast<RHICommandPool>(shared_from_this());
     info.context = context;
     info.bypass = bypass;
 
