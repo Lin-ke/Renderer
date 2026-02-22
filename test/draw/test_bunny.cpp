@@ -113,9 +113,12 @@ TEST_CASE("Create and Save Bunny Scene", "[draw][bunny]") {
     auto scene = std::make_shared<Scene>();
     
     // Create camera entity
+    // Note: World Space is +X Forward, +Y Up, +Z Right
     auto* camera_ent = scene->create_entity();
     auto* cam_trans = camera_ent->add_component<TransformComponent>();
-    cam_trans->transform.set_position({0.0f, 0.0f, 3.0f});
+    // Place camera at (-3, 0, 0) so it's looking toward origin (where bunny is)
+    // With default rotation, front is +X, so at (-3, 0, 0) camera looks toward +X (toward origin)
+    cam_trans->transform.set_position({-3.0f, 0.0f, 0.0f});
     
     auto* cam_comp = camera_ent->add_component<CameraComponent>();
     cam_comp->set_fov(60.0f);
@@ -197,9 +200,9 @@ TEST_CASE("Load and Render Bunny Scene", "[draw][bunny]") {
     UID scene_uid = UID::from_hash("/Game/bunny_scene.asset");
     EngineContext::asset()->register_path(scene_uid, scene_phys_path);
     
-    // Also register other dependencies that were saved in the first test
-    EngineContext::asset()->register_path(UID::from_hash("/Game/models/bunny.binasset"), test_asset_dir + "/assets/models/bunny.binasset");
-    EngineContext::asset()->register_path(UID::from_hash("/Game/materials/bunny_mat.asset"), test_asset_dir + "/assets/materials/bunny_mat.asset");
+    // Note: Dependencies (Model, Material) are automatically discovered by scan_directory()
+    // during AssetManager::init(). The asset files (bunny.binasset, bunny_mat.asset) contain
+    // their UIDs in the header, which are registered automatically.
     
     // Register component classes
     TransformComponent::register_class();
@@ -219,21 +222,25 @@ TEST_CASE("Load and Render Bunny Scene", "[draw][bunny]") {
     MeshRendererComponent* bunny_renderer = nullptr;
     
     // Find required components and initialize them
+    // Note: Components loaded from deserialization don't have on_init() called automatically,
+    // so we need to call it manually
     for (auto& entity : scene->entities_) {
         if (!entity) continue;
         
+        // Initialize all components (not just the ones we need)
+        // Note: Components loaded from deserialization don't have on_init() called automatically
+        for (auto& comp : entity->get_components()) {
+            if (comp) {
+                comp->on_init();
+            }
+        }
+        
         if (auto* cam = entity->get_component<CameraComponent>()) {
             cam_comp = cam;
-            cam->on_init();
         }
         
         if (auto* renderer = entity->get_component<MeshRendererComponent>()) {
             bunny_renderer = renderer;
-            renderer->on_init();
-        }
-        
-        if (auto* light = entity->get_component<DirectionalLightComponent>()) {
-            light->on_init();
         }
     }
     
@@ -244,11 +251,25 @@ TEST_CASE("Load and Render Bunny Scene", "[draw][bunny]") {
     REQUIRE(bunny_model != nullptr);
     REQUIRE(bunny_model->get_submesh_count() > 0);
     
+    // Verify material is loaded
+    auto bunny_mat = bunny_renderer->get_material(0);
+    CHECK(bunny_mat != nullptr);
+    
     INFO(LogBunnyRender, "Bunny automatically loaded as asset: {} vertices",
          bunny_model->submesh(0).vertex_buffer->vertex_num());
     
     EngineContext::world()->set_active_scene(scene);
     EngineContext::render_system()->get_mesh_manager()->set_active_camera(cam_comp);
+    
+    // Debug: Check batch collection through mesh manager
+    std::vector<render::DrawBatch> manager_batches;
+    for (auto& entity : scene->entities_) {
+        if (!entity) continue;
+        if (auto* renderer = entity->get_component<MeshRendererComponent>()) {
+            renderer->collect_draw_batch(manager_batches);
+        }
+    }
+    INFO(LogBunnyRender, "Total batches from scene: {}", manager_batches.size());
     
     int frames = 0;
     const uint32_t screenshot_width = 1280;
