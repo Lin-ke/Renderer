@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
+#include "test/test_utils.h"
 #include "engine/main/engine_context.h"
 #include "engine/function/framework/world.h"
 #include "engine/function/framework/scene.h"
@@ -226,6 +227,12 @@ TEST_CASE("Scene Dependency System with Model", "[scene][deps]") {
             
             INFO(LogKleeSceneDeps, "Scene verification completed: {} entities, model with {} submeshes",
                  loaded_scene->entities_.size(), loaded_model->get_submesh_count());
+        }
+        
+        // Clean up auto-generated UUID-named dependency files
+        size_t cleaned = test_utils::cleanup_uuid_named_assets(test_asset_dir + "/assets");
+        if (cleaned > 0) {
+            INFO(LogKleeSceneDeps, "Cleaned up {} auto-generated UUID-named asset files", cleaned);
         }
         
         EngineContext::exit();

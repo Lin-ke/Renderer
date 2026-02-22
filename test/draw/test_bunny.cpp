@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
+#include "test/test_utils.h"
 #include "engine/main/engine_context.h"
 #include "engine/function/framework/world.h"
 #include "engine/function/framework/scene.h"
@@ -176,6 +177,13 @@ TEST_CASE("Create and Save Bunny Scene", "[draw][bunny]") {
     
     // Save scene using AssetManager to ensure all dependencies are correctly serialized
     EngineContext::asset()->save_asset(scene, "/Game/" + SCENE_FILE_NAME);
+    
+    // Clean up auto-generated UUID-named dependency files
+    // Keep only human-readable named files (bunny_scene.asset, bunny.binasset, bunny_mat.asset)
+    size_t cleaned = test_utils::cleanup_uuid_named_assets(test_asset_dir + "/assets");
+    if (cleaned > 0) {
+        INFO(LogBunnyRender, "Cleaned up {} auto-generated UUID-named asset files", cleaned);
+    }
     
     EngineContext::exit();
 }

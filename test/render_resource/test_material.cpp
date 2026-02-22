@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
+#include "test/test_utils.h"
 #include "engine/main/engine_context.h"
 #include "engine/function/render/render_resource/texture.h"
 #include "engine/function/render/render_resource/material.h"
