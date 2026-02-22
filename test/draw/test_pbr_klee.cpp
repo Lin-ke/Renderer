@@ -84,6 +84,19 @@ TEST_CASE("Load PBR FBX Model", "[draw][pbr]") {
     
     INFO(LogPBRKlee, "PBR model loaded: {} submeshes", pbr_model->get_submesh_count());
     
+    // Debug: Check materials
+    for (uint32_t i = 0; i < pbr_model->get_submesh_count(); i++) {
+        auto mat = pbr_model->get_material(i);
+        if (mat) {
+            auto diffuse = mat->get_diffuse();
+            INFO(LogPBRKlee, "Submesh[{}] material: diffuse=({},{},{},{}), roughness={}, metallic={}",
+                 i, diffuse.x(), diffuse.y(), diffuse.z(), diffuse.w(),
+                 mat->get_roughness(), mat->get_metallic());
+        } else {
+            INFO(LogPBRKlee, "Submesh[{}] has no material", i);
+        }
+    }
+    
     EngineContext::exit();
 }
 
