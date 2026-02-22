@@ -7,6 +7,7 @@
 #include "engine/main/engine_context.h"
 #include "engine/function/render/render_system/render_system.h"
 #include "engine/function/render/render_pass/pbr_forward_pass.h"
+#include "engine/function/render/render_pass/npr_forward_pass.h"
 #include "engine/function/render/graph/rdg_builder.h"
 #include "engine/function/render/rhi/rhi_command_list.h"
 #include "engine/core/log/Log.h"
@@ -24,6 +25,10 @@ void RenderMeshManager::init() {
     // Create PBR forward pass
     pbr_forward_pass_ = std::make_shared<render::PBRForwardPass>();
     pbr_forward_pass_->init();
+
+    // Create NPR forward pass
+    npr_forward_pass_ = std::make_shared<render::NPRForwardPass>();
+    npr_forward_pass_->init();
     
     initialized_ = true;
     INFO(LogRenderMeshManager, "RenderMeshManager initialized");
@@ -35,6 +40,7 @@ void RenderMeshManager::destroy() {
     mesh_renderers_.clear();
     forward_pass_.reset();
     pbr_forward_pass_.reset();
+    npr_forward_pass_.reset();
     
     initialized_ = false;
     INFO(LogRenderMeshManager, "RenderMeshManager destroyed");
@@ -85,6 +91,9 @@ void RenderMeshManager::set_wireframe(bool enable) {
     }
     if (pbr_forward_pass_) {
         pbr_forward_pass_->set_wireframe(enable);
+    }
+    if (npr_forward_pass_) {
+        npr_forward_pass_->set_wireframe(enable);
     }
 }
 
@@ -173,9 +182,32 @@ void RenderMeshManager::render_batches(RHICommandContextRef context, RHITextureV
     context->set_viewport({0, 0}, {extent.width, extent.height});
     context->set_scissor({0, 0}, {extent.width, extent.height});
 
-    //####TODO####: DEBUG only - INFO(LogRenderMeshManager, "render_batches: pbr_enabled={}, batches={}", pbr_enabled_, current_batches_.size());
+    //####TODO####: DEBUG only - INFO(LogRenderMeshManager, "render_batches: pbr_enabled={}, npr_enabled={}, batches={}", pbr_enabled_, npr_enabled_, current_batches_.size());
     
-    if (pbr_enabled_) {
+    if (npr_enabled_) {
+        if (!npr_forward_pass_) {
+            ERR(LogRenderMeshManager, "NPR Forward pass is null");
+            return;
+        }
+        if (!npr_forward_pass_->is_ready()) {
+            ERR(LogRenderMeshManager, "NPR Forward pass not ready");
+            return;
+        }
+
+        npr_forward_pass_->set_per_frame_data(
+            active_camera_->get_view_matrix(),
+            active_camera_->get_projection_matrix(),
+            active_camera_->get_position(),
+            light_dir,
+            light_color,
+            light_intensity
+        );
+
+        // Draw all batches using NPR forward pass
+        for (const auto& batch : current_batches_) {
+            npr_forward_pass_->draw_batch(context, batch);
+        }
+    } else if (pbr_enabled_) {
         if (!pbr_forward_pass_) {
             ERR(LogRenderMeshManager, "PBR Forward pass is null");
             return;
@@ -258,7 +290,20 @@ void RenderMeshManager::build_rdg(RDGBuilder& builder, RDGTextureHandle color_ta
         }
     }
     
-    if (pbr_enabled_ && pbr_forward_pass_ && pbr_forward_pass_->is_ready()) {
+    if (npr_enabled_ && npr_forward_pass_ && npr_forward_pass_->is_ready()) {
+        // Set per-frame data
+        npr_forward_pass_->set_per_frame_data(
+            active_camera_->get_view_matrix(),
+            active_camera_->get_projection_matrix(),
+            active_camera_->get_position(),
+            light_dir,
+            light_color,
+            light_intensity
+        );
+        
+        // Build NPR pass into RDG
+        npr_forward_pass_->build(builder, color_target, depth_target.value(), current_batches_);
+    } else if (pbr_enabled_ && pbr_forward_pass_ && pbr_forward_pass_->is_ready()) {
         // Set per-frame data
         pbr_forward_pass_->set_per_frame_data(
             active_camera_->get_view_matrix(),

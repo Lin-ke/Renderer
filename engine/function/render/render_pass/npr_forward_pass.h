@@ -12,8 +12,8 @@ namespace render {
 // Forward declarations
 struct DrawBatch;
 
-// PBR Per-frame data structure (matches HLSL cbuffer)
-struct PBRPerFrameData {
+// NPR Per-frame data structure (matches HLSL cbuffer)
+struct NPRPerFrameData {
     Mat4 view;
     Mat4 proj;
     Vec3 camera_pos;
@@ -24,39 +24,37 @@ struct PBRPerFrameData {
     float _padding2;
     Vec3 light_color;
     float light_intensity;
-    
-    // Point lights (up to 4 for simple implementation)
-    Vec4 point_light_pos[4];      // xyz = position, w = range
-    Vec4 point_light_color[4];    // rgb = color, a = intensity
-    int point_light_count = 0;
-    Vec3 _padding3;
 };
 
-// PBR Per-object data structure (matches HLSL cbuffer)
-struct PBRPerObjectData {
+// NPR Per-object data structure (matches HLSL cbuffer)
+struct NPRPerObjectData {
     Mat4 model;
     Mat4 inv_model;
 };
 
-// PBR Material data structure (matches HLSL cbuffer)
-// Use float for boolean flags to match HLSL alignment
-struct PBRMaterialData {
+// NPR Material data structure (matches HLSL cbuffer)
+struct NPRMaterialData {
     Vec4 albedo;           // base color
     Vec4 emission;
-    float roughness;
-    float metallic;
-    float alpha_cutoff;
-    float use_albedo_map;
+    
+    // NPR specific parameters
+    float lambert_clamp;   // Half lambert clamp threshold
+    float ramp_tex_offset; // Ramp texture vertical offset (for material type)
+    float rim_threshold;   // Rim light depth threshold
+    float rim_strength;    // Rim light intensity
+    float rim_width;       // Rim light screen space width
+    float use_albedo_map;  // Use float for boolean flags
     float use_normal_map;
-    float use_arm_map;     // AO/Roughness/Metallic map
-    float use_emission_map;
-    Vec2 _padding;
+    float use_light_map;   // LightMap (metallic, ao, specular, materialType)
+    float use_ramp_map;    // Ramp texture for toon shading
+    Vec3 rim_color;        // Rim light color
+    float _padding;
 };
 
-class PBRForwardPass : public RenderPass {
+class NPRForwardPass : public RenderPass {
 public:
-    PBRForwardPass();
-    ~PBRForwardPass() override;
+    NPRForwardPass();
+    ~NPRForwardPass() override;
     
     void init() override;
     
@@ -67,46 +65,29 @@ public:
                             const Vec3& light_color,
                             float light_intensity);
     
-    // Point lights
-    void add_point_light(const Vec3& pos, const Vec3& color, float intensity, float range);
-    void clear_point_lights();
-    
     /**
-     * @brief Draw a single batch (legacy method for backward compatibility)
-     * @param command Command context to record to
-     * @param batch Draw batch data
+     * @brief Draw a single batch
      */
     void draw_batch(RHICommandContextRef command, const DrawBatch& batch);
 
     /**
-     * @brief Execute rendering of batches directly (for non-RDG rendering path)
-     * @param command Command list to record to
-     * @param batches Draw batches to render
+     * @brief Execute rendering of batches directly
      */
     void execute_batches(RHICommandListRef command, const std::vector<DrawBatch>& batches);
 
     /**
      * @brief Build the render pass into the RDG
-     * @param builder RDG builder
-     * @param color_target Color attachment target
-     * @param depth_target Depth attachment target (optional)
-     * @param batches Draw batches to render
      */
     void build(RDGBuilder& builder, RDGTextureHandle color_target, 
-               std::optional<RDGTextureHandle> depth_target,
+               RDGTextureHandle depth_target,
                const std::vector<DrawBatch>& batches);
 
-    // Public interface for RenderMeshManager
-    /**
-     * @brief Check if pass is ready to render
-     */
     bool is_ready() const { return initialized_ && pipeline_ != nullptr; }
-
     bool is_initialized() const { return initialized_; }
     
     RHIGraphicsPipelineRef get_pipeline() const { return pipeline_; }
     
-    std::string_view get_name() const override { return "PBRForwardPass"; }
+    std::string_view get_name() const override { return "NPRForwardPass"; }
     PassType get_type() const override { return PassType::Forward; }
     
 private:
@@ -135,13 +116,13 @@ private:
     RHISamplerRef default_sampler_;
     
     // Default vertex buffers for meshes missing attributes
-    RHIBufferRef default_normal_buffer_;  // Default normal (0,1,0)
+    RHIBufferRef default_normal_buffer_;
     RHIBufferRef default_tangent_buffer_;
     RHIBufferRef default_texcoord_buffer_;
-    static constexpr uint32_t DEFAULT_VERTEX_COUNT = 65536; // Max vertices for default buffers
+    static constexpr uint32_t DEFAULT_VERTEX_COUNT = 65536;
     
     // Data
-    PBRPerFrameData per_frame_data_;
+    NPRPerFrameData per_frame_data_;
     bool per_frame_dirty_ = true;
     bool wireframe_mode_ = false;
     bool initialized_ = false;

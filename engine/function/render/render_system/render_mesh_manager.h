@@ -16,6 +16,7 @@ class RDGBuilder;
 namespace render {
     class ForwardPass;
     class PBRForwardPass;
+    class NPRForwardPass;
     struct DrawBatch;
 }
 
@@ -57,6 +58,11 @@ public:
     std::shared_ptr<render::PBRForwardPass> get_pbr_forward_pass() { return pbr_forward_pass_; }
 
     /**
+     * @brief Get the NPR forward pass for configuration
+     */
+    std::shared_ptr<render::NPRForwardPass> get_npr_forward_pass() { return npr_forward_pass_; }
+
+    /**
      * @brief Set wireframe rendering mode
      * @param enable true for wireframe, false for solid
      */
@@ -68,6 +74,13 @@ public:
      */
     void set_pbr_enabled(bool enable) { pbr_enabled_ = enable; }
     bool is_pbr_enabled() const { return pbr_enabled_; }
+
+    /**
+     * @brief Enable or disable NPR rendering
+     * @param enable true to use NPRForwardPass
+     */
+    void set_npr_enabled(bool enable) { npr_enabled_ = enable; }
+    bool is_npr_enabled() const { return npr_enabled_; }
 
     /**
      * @brief Set the active camera for rendering
@@ -109,7 +122,9 @@ private:
 
     std::shared_ptr<render::ForwardPass> forward_pass_;
     std::shared_ptr<render::PBRForwardPass> pbr_forward_pass_;
+    std::shared_ptr<render::NPRForwardPass> npr_forward_pass_;
     bool pbr_enabled_ = false;
+    bool npr_enabled_ = false;
 
     std::vector<MeshRendererComponent*> mesh_renderers_;
     CameraComponent* active_camera_ = nullptr;

@@ -158,7 +158,7 @@ TEST_CASE("Create and Save Bunny Scene", "[draw][bunny]") {
     bunny_renderer->set_model(bunny_model);
     
     // Create and assign a material asset with PBR properties
-    auto bunny_mat = std::make_shared<Material>();
+    auto bunny_mat = std::make_shared<PBRMaterial>();
     bunny_mat->set_diffuse({0.8f, 0.5f, 0.3f, 1.0f});
     bunny_mat->set_roughness(0.2f);
     bunny_mat->set_metallic(0.8f);
@@ -263,8 +263,10 @@ TEST_CASE("Load and Render Bunny Scene", "[draw][bunny]") {
     auto bunny_mat = bunny_renderer->get_material(0);
     CHECK(bunny_mat != nullptr);
     
-    INFO(LogBunnyRender, "Bunny automatically loaded as asset: {} vertices",
-         bunny_model->submesh(0).vertex_buffer->vertex_num());
+    if (auto mesh0 = bunny_model->get_mesh(0)) {
+        INFO(LogBunnyRender, "Bunny automatically loaded as asset: {} vertices",
+             mesh0->get_vertex_count());
+    }
     
     EngineContext::world()->set_active_scene(scene);
     EngineContext::render_system()->get_mesh_manager()->set_active_camera(cam_comp);

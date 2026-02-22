@@ -78,6 +78,7 @@ TEST_CASE("Load PBR FBX Model", "[draw][pbr]") {
     // Load model with materials (using AssetManager for caching)
     INFO(LogPBRKlee, "Loading PBR model from: {}", PBR_MODEL_PATH);
     
+    // Note: load_materials=true to load textures from MTL/FBX
     auto pbr_model = Model::Load(PBR_MODEL_PATH, true, true, true);
     
     REQUIRE(pbr_model->get_submesh_count() > 0);
@@ -89,9 +90,18 @@ TEST_CASE("Load PBR FBX Model", "[draw][pbr]") {
         auto mat = pbr_model->get_material(i);
         if (mat) {
             auto diffuse = mat->get_diffuse();
-            INFO(LogPBRKlee, "Submesh[{}] material: diffuse=({},{},{},{}), roughness={}, metallic={}",
+            uint32_t tex_id = mat->get_diffuse_texture() ? mat->get_diffuse_texture()->texture_id_ : 0;
+            
+            float roughness = 0.5f;
+            float metallic = 0.0f;
+            if (auto pbr_mat = std::dynamic_pointer_cast<PBRMaterial>(mat)) {
+                roughness = pbr_mat->get_roughness();
+                metallic = pbr_mat->get_metallic();
+            }
+            
+            INFO(LogPBRKlee, "Submesh[{}] material: diffuse=({},{},{},{}), roughness={}, metallic={}, texture_id={}",
                  i, diffuse.x(), diffuse.y(), diffuse.z(), diffuse.w(),
-                 mat->get_roughness(), mat->get_metallic());
+                 roughness, metallic, tex_id);
         } else {
             INFO(LogPBRKlee, "Submesh[{}] has no material", i);
         }
@@ -128,15 +138,14 @@ TEST_CASE("Render PBR Model", "[draw][pbr]") {
     
     auto* cam_trans = camera_ent->add_component<TransformComponent>();
     REQUIRE(cam_trans != nullptr);
-    // Place camera at (-3, 0, 0) looking along +X axis toward origin
-    cam_trans->transform.set_position({-3.0f, 0.0f, 0.0f});
-    // Default rotation (0,0,0) looks along +X axis
-    // Model at origin will be visible
+    // Place camera further away in case model is large
+    cam_trans->transform.set_position({-30.0f, 10.0f, 0.0f});
+    cam_trans->transform.set_rotation({0.0f, -15.0f, 0.0f});
     
     auto* cam_comp = camera_ent->add_component<CameraComponent>();
     REQUIRE(cam_comp != nullptr);
     cam_comp->set_fov(60.0f);
-    cam_comp->set_far(100.0f);
+    cam_comp->set_far(1000.0f);
     cam_comp->on_init();
     
     // Create directional light entity
@@ -151,7 +160,7 @@ TEST_CASE("Render PBR Model", "[draw][pbr]") {
     auto* light_comp = light_ent->add_component<DirectionalLightComponent>();
     REQUIRE(light_comp != nullptr);
     light_comp->set_color({1.0f, 1.0f, 1.0f});
-    light_comp->set_intensity(5.0f); // Increase intensity for PBR
+    light_comp->set_intensity(100.0f); // Massive intensity for debug
     light_comp->set_enable(true);
     light_comp->on_init();
     
@@ -168,6 +177,7 @@ TEST_CASE("Render PBR Model", "[draw][pbr]") {
     // Load PBR model with AssetManager caching
     INFO(LogPBRKlee, "Loading PBR model from: {}", PBR_MODEL_PATH);
     
+    // Note: load_materials=true to load textures from MTL/FBX
     auto pbr_model = Model::Load(PBR_MODEL_PATH, true, true, true);
     
     REQUIRE(pbr_model->get_submesh_count() > 0);
@@ -179,6 +189,26 @@ TEST_CASE("Render PBR Model", "[draw][pbr]") {
     REQUIRE(model_mesh != nullptr);
     model_mesh->set_model(pbr_model);
     model_mesh->on_init();
+    
+    // Auto-adjust camera to model bounding box
+    auto box = pbr_model->get_bounding_box();
+    Vec3 center = (box.min + box.max) * 0.5f;
+    float size = (box.max - box.min).norm();
+    
+    // Position camera so the model fits in view
+    float dist = size * 1.5f; // Heuristic
+    if (dist < 1.0f) dist = 5.0f; // Minimal distance
+    
+    cam_trans->transform.set_position(center + Vec3(-dist, size * 0.5f, 0.0f));
+    // Simple look-at (assuming camera looks along +X by default)
+    // For now just manually set a reasonable position relative to center
+    INFO(LogPBRKlee, "Model bounds: min=({},{},{}), max=({},{},{}), size={}",
+         box.min.x(), box.min.y(), box.min.z(), 
+         box.max.x(), box.max.y(), box.max.z(), size);
+    INFO(LogPBRKlee, "Adjusted camera to: ({},{},{})", 
+         cam_trans->transform.get_position().x(),
+         cam_trans->transform.get_position().y(),
+         cam_trans->transform.get_position().z());
     
     // Set active scene
     EngineContext::world()->set_active_scene(scene);
@@ -192,7 +222,7 @@ TEST_CASE("Render PBR Model", "[draw][pbr]") {
     std::vector<uint8_t> screenshot_data(screenshot_width * screenshot_height * 4);
     bool screenshot_taken = false;
     
-    while (frames < 60) {
+    while (frames < 60000) {
         Input::get_instance().tick();
         EngineContext::world()->tick(0.016f);
         

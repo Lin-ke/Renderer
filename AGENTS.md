@@ -93,6 +93,11 @@ class Scene : public Asset {
 };
 ```
 
+**Model序列化优化**：Model不再嵌入Mesh几何数据，而是通过UID引用Mesh和Material。
+- 序列化：保存 `mesh_uid` 和 `material_uid`。
+- 反序列化：自动调用 `AssetManager::load_asset` 恢复引用。
+- 注意：手动创建的Mesh如果未注册到AssetManager，在Model保存时将无法正确持久化引用。
+
 ### Reflection System
 
 **实现**：基于cereal的序列化 + 自定义Registry运行时反射。

@@ -123,7 +123,7 @@ TEST_CASE("Scene Dependency System with Model", "[scene][deps]") {
             // For Klee model, manually create materials
             if (is_klee) {
                 for (uint32_t i = 0; i < test_model->get_submesh_count(); i++) {
-                    auto material = std::make_shared<Material>();
+                    auto material = std::make_shared<PBRMaterial>();
                     material->set_diffuse({1.0f, 1.0f, 1.0f, 1.0f});
                     material->set_roughness(0.5f);
                     material->set_metallic(0.0f);

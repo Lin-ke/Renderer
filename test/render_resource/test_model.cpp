@@ -36,13 +36,13 @@ TEST_CASE("Model Loading with bunny.obj", "[render_resource]") {
     REQUIRE(model != nullptr);
     REQUIRE(model->get_submesh_count() > 0);
     
-    const SubmeshData& submesh = model->submesh(0);
-    REQUIRE(submesh.mesh != nullptr);
-    REQUIRE(submesh.mesh->position.size() > 0);
-    REQUIRE(submesh.mesh->index.size() > 0);
+    auto mesh = model->get_mesh(0);
+    REQUIRE(mesh != nullptr);
+    REQUIRE(mesh->get_positions().size() > 0);
+    REQUIRE(mesh->get_indices().size() > 0);
     
-    REQUIRE(submesh.vertex_buffer != nullptr);
-    REQUIRE(submesh.index_buffer != nullptr);
+    REQUIRE(mesh->get_vertex_buffer() != nullptr);
+    REQUIRE(mesh->get_index_buffer() != nullptr);
     
     model.reset();
     EngineContext::exit();
@@ -68,10 +68,10 @@ TEST_CASE("Model Multiple Submeshes", "[render_resource]") {
     REQUIRE(model->get_submesh_count() >= 1);
     
     for (uint32_t i = 0; i < model->get_submesh_count(); i++) {
-        const SubmeshData& submesh = model->submesh(i);
-        REQUIRE(submesh.mesh != nullptr);
-        REQUIRE(submesh.vertex_buffer != nullptr);
-        REQUIRE(submesh.index_buffer != nullptr);
+        auto mesh = model->get_mesh(i);
+        REQUIRE(mesh != nullptr);
+        REQUIRE(mesh->get_vertex_buffer() != nullptr);
+        REQUIRE(mesh->get_index_buffer() != nullptr);
     }
     
     model.reset();
@@ -79,26 +79,26 @@ TEST_CASE("Model Multiple Submeshes", "[render_resource]") {
 }
 
 TEST_CASE("Mesh Data Structure", "[render_resource]") {
-    Mesh mesh;
+    std::vector<Vec3> positions = { Vec3(0, 0, 0), Vec3(1, 0, 0), Vec3(0, 1, 0) };
+    std::vector<Vec3> normals = { Vec3(0, 0, 1), Vec3(0, 0, 1), Vec3(0, 0, 1) };
+    std::vector<Vec2> tex_coords = { Vec2(0, 0), Vec2(1, 0), Vec2(0, 1) };
+    std::vector<uint32_t> indices = { 0, 1, 2 };
     
-    mesh.position = { Vec3(0, 0, 0), Vec3(1, 0, 0), Vec3(0, 1, 0) };
-    mesh.normal = { Vec3(0, 0, 1), Vec3(0, 0, 1), Vec3(0, 0, 1) };
-    mesh.tex_coord = { Vec2(0, 0), Vec2(1, 0), Vec2(0, 1) };
-    mesh.index = { 0, 1, 2 };
+    auto mesh = Mesh::Create(positions, normals, {}, tex_coords, indices, "mesh1");
     
-    CHECK(mesh.triangle_num() == 1);
+    CHECK(mesh->get_index_count() / 3 == 1); // 1 triangle
     
-    Mesh mesh2;
-    mesh2.position = { Vec3(0, 0, 0), Vec3(1, 0, 0), Vec3(0, 0, 1) };
-    mesh2.normal = { Vec3(0, 1, 0), Vec3(0, 1, 0), Vec3(0, 1, 0) };
-    mesh2.tex_coord = { Vec2(0, 0), Vec2(1, 0), Vec2(0, 1) };
-    mesh2.index = { 0, 1, 2 };
+    std::vector<Vec3> positions2 = { Vec3(0, 0, 0), Vec3(1, 0, 0), Vec3(0, 0, 1) };
+    std::vector<Vec3> normals2 = { Vec3(0, 1, 0), Vec3(0, 1, 0), Vec3(0, 1, 0) };
+    std::vector<uint32_t> indices2 = { 0, 1, 2 };
     
-    mesh.merge(mesh2);
+    auto mesh2 = Mesh::Create(positions2, normals2, {}, {}, indices2, "mesh2");
     
-    CHECK(mesh.position.size() == 6);
-    CHECK(mesh.index.size() == 6);
-    CHECK(mesh.triangle_num() == 2);
+    mesh->merge(*mesh2);
+    
+    CHECK(mesh->get_vertex_count() == 6);
+    CHECK(mesh->get_index_count() == 6);
+    CHECK(mesh->get_index_count() / 3 == 2); // 2 triangles
 }
 
 TEST_CASE("Model Process Settings", "[render_resource]") {

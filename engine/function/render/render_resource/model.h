@@ -3,86 +3,14 @@
 #include "engine/function/render/render_resource/buffer.h"
 #include "engine/function/render/render_resource/texture.h"
 #include "engine/function/render/render_resource/material.h"
+#include "engine/function/render/render_resource/mesh.h"
 #include "engine/function/asset/asset.h"
-#include "engine/function/render/data/render_structs.h"
 
 #include <vector>
 #include <string>
 #include <memory>
 #include <unordered_map>
-
-// Forward declarations for Assimp
-struct aiNode;
-struct aiScene;
-struct aiMesh;
-struct aiMaterial;
-enum aiTextureType;
-
-/**
- * @brief CPU-side mesh data structure containing vertex attributes and bone information
- */
-struct Mesh {
-    std::vector<Vec3> position;
-    std::vector<Vec3> normal;
-    std::vector<Vec4> tangent;
-    std::vector<Vec2> tex_coord;
-    std::vector<Vec3> color;
-    std::vector<IVec4> bone_index;
-    std::vector<Vec4> bone_weight;
-    std::vector<uint32_t> index;
-    
-    // Bounding volumes
-    BoundingBox box;
-    BoundingSphere sphere;
-    
-    // Bone information for skeletal animation
-    struct BoneInfo {
-        int index;
-        std::string name;
-        Mat4 offset;
-    };
-    std::vector<BoneInfo> bone;
-    
-    std::string name;
-    
-    /**
-     * @brief Merge another mesh into this one
-     * @param other The mesh to merge from
-     */
-    void merge(const Mesh& other);
-    
-    /**
-     * @brief Get the number of triangles in the mesh
-     * @return Number of triangles
-     */
-    inline uint32_t triangle_num() const { return static_cast<uint32_t>(index.size() / 3); }
-};
-
-// Forward declaration
-struct MeshCluster;
-using MeshClusterRef = std::shared_ptr<MeshCluster>;
-struct VirtualMesh;
-using VirtualMeshRef = std::shared_ptr<VirtualMesh>;
-
-/**
- * @brief Model cache asset for storing generated cluster data
- * ####TODO#### Full implementation with VirtualMesh serialization
- */
-class ModelCache : public Asset {
-public:
-    virtual std::string_view get_asset_type_name() const override { return "ModelCache Asset"; }
-    virtual AssetType get_asset_type() const override { return AssetType::ModelCache; }
-    
-    ModelCache() = default;
-    
-private:
-    template<class Archive>
-    void serialize(Archive& ar) {
-        //####TODO#### Implement cache serialization when VirtualMesh is available
-    }
-    
-    friend class cereal::access;
-};
+#include <functional>
 
 /**
  * @brief Settings for model import processing
@@ -121,38 +49,34 @@ struct IndexRange {
 };
 
 /**
- * @brief Submesh data containing CPU mesh data and GPU buffers
+ * @brief Material slot that binds a Material to a Mesh
  */
-struct SubmeshData {
-    std::shared_ptr<Mesh> mesh;                          // CPU mesh data
-    std::vector<MeshClusterRef> clusters;                // Clusters for clustered rendering
-    VirtualMeshRef virtual_mesh;                         // Virtual mesh data
+struct MaterialSlot {
+    MeshRef mesh;           // The mesh geometry (can be shared)
+    UID mesh_uid;           // UID for serialization
+    MaterialRef material;   // The material to render with (can be shared)
+    UID material_uid;       // UID for serialization
+    uint32_t mesh_index = 0; // Original index for tracking
     
-    VertexBufferRef vertex_buffer;                       // GPU vertex buffer
-    IndexBufferRef index_buffer;                         // GPU index buffer
-    
-    IndexRange mesh_cluster_id = { 0, 0 };               // Allocated cluster ID range
-    IndexRange mesh_cluster_group_id = { 0, 0 };         // Allocated cluster group ID range
-    
-    // Ray tracing BLAS
-    //####TODO#### RHIBottomLevelAccelerationStructureRef blas;
+    template<class Archive>
+    void serialize(Archive& ar) {
+        ar(cereal::make_nvp("mesh_uid", mesh_uid));
+        ar(cereal::make_nvp("material_uid", material_uid));
+        ar(cereal::make_nvp("mesh_index", mesh_index));
+    }
 };
 
 /**
- * @brief Model asset class representing a 3D model with multiple submeshes
+ * @brief Model asset - a collection of Mesh + Material bindings
  * 
- * Model is managed by AssetManager for caching and lifecycle management.
- * Use Model::Load() to load/create models with automatic caching.
+ * Model is a lightweight container that references:
+ * - Mesh assets (geometry data, GPU buffers)
+ * - Material assets (shaders, textures, parameters)
  */
 class Model : public Asset {
 public:
-    /**
-     * @brief Construct a model from file path with processing settings
-     * @param path Path to the model file
-     * @param process_setting Processing settings for import
-     */
+    Model() = default;
     Model(std::string path, ModelProcessSetting process_setting);
-    
     ~Model();
 
     virtual std::string_view get_asset_type_name() const override { return "Model Asset"; }
@@ -160,25 +84,22 @@ public:
 
     virtual void on_load_asset() override;
     virtual void on_save_asset() override;
+
+    // Asset Dependencies
+    virtual void load_asset_deps() override;
+    virtual void save_asset_deps() override;
+    virtual void traverse_deps(std::function<void(std::shared_ptr<Asset>)> callback) const override;
     
     /**
      * @brief Load a model from file path with caching via AssetManager
-     * @param path Path to the model file (relative to ENGINE_PATH or absolute)
-     * @param process_setting Processing settings for import
-     * @return Shared pointer to the loaded model (cached if already loaded)
+     * Uses ModelImporter internally for non-native formats.
      */
-    static std::shared_ptr<Model> Load(const std::string& path, 
+    static std::shared_ptr<Model> Load(const std::string& virtual_path, 
                                         const ModelProcessSetting& process_setting = ModelProcessSetting(),
                                         const UID& explicit_uid = UID::empty());
     
     /**
-     * @brief Load a model from file path with caching via AssetManager
-     * Convenience overload that takes path and individual settings
-     * @param path Path to the model file
-     * @param smooth_normal Generate smooth normals
-     * @param load_materials Load materials from file
-     * @param flip_uv Flip UV coordinates
-     * @return Shared pointer to the loaded model
+     * @brief Convenience overload
      */
     static std::shared_ptr<Model> Load(const std::string& path, 
                                         bool smooth_normal = true,
@@ -187,118 +108,60 @@ public:
                                         const UID& explicit_uid = UID::empty());
 
     /**
-     * @brief Get the number of submeshes
-     * @return Number of submeshes
+     * @brief Create a model from existing mesh and material assets
      */
-    inline uint32_t get_submesh_count() const { return static_cast<uint32_t>(submeshes_.size()); }
-    
-    /**
-     * @brief Get submesh data by index
-     * @param index Submesh index
-     * @return Const reference to submesh data
-     */
-    const SubmeshData& submesh(uint32_t index) const { return submeshes_[index]; }
-    
-    /**
-     * @brief Get vertex buffer for a submesh
-     * @param submesh_index Submesh index
-     * @return Vertex buffer reference
-     */
-    VertexBufferRef get_vertex_buffer(uint32_t submesh_index) { return submeshes_[submesh_index].vertex_buffer; }
-    
-    /**
-     * @brief Get index buffer for a submesh
-     * @param submesh_index Submesh index
-     * @return Index buffer reference
-     */
-    IndexBufferRef get_index_buffer(uint32_t submesh_index) { return submeshes_[submesh_index].index_buffer; }
-    
-    /**
-     * @brief Get material for a submesh
-     * @param submesh_index Submesh index
-     * @return Material reference
-     */
-    MaterialRef get_material(uint32_t submesh_index) { 
-        if (submesh_index < materials_.size()) return materials_[submesh_index];
-        return nullptr;
-    }
+    static std::shared_ptr<Model> Create(MeshRef mesh, MaterialRef material);
 
     /**
-     * @brief Get the combined bounding box of all submeshes
-     * @return The combined bounding box
+     * @brief Create a model from multiple mesh-material pairs
      */
+    static std::shared_ptr<Model> Create(const std::vector<std::pair<MeshRef, MaterialRef>>& slots);
+
+    // Material slot access
+    inline uint32_t get_slot_count() const { return static_cast<uint32_t>(material_slots_.size()); }
+    inline const MaterialSlot& get_slot(uint32_t index) const { return material_slots_[index]; }
+    inline MaterialSlot& get_slot(uint32_t index) { return material_slots_[index]; }
+    
+    void add_slot(MeshRef mesh, MaterialRef material);
+    void set_material(uint32_t slot_index, MaterialRef material);
+    
+    MaterialRef get_material(uint32_t slot_index) const;
+    MeshRef get_mesh(uint32_t slot_index) const;
+
+    // Backwards compatibility helpers
+    inline uint32_t get_submesh_count() const { return get_slot_count(); }
+    MaterialRef get_material_compat(uint32_t index) const { return get_material(index); }
+    VertexBufferRef get_vertex_buffer(uint32_t index) const;
+    IndexBufferRef get_index_buffer(uint32_t index) const;
+
     BoundingBox get_bounding_box() const;
 
-protected:
-    /**
-     * @brief Load model data from file using Assimp
-     * @param path File path
-     * @return true if successful
-     */
-    bool load_from_file(std::string path);
-    
-    /**
-     * @brief Process a node in the Assimp scene graph
-     * @param node Assimp node
-     * @param scene Assimp scene
-     * @param process_meshes Output list of meshes to process
-     */
-    void process_node(aiNode* node, const aiScene* scene, std::vector<aiMesh*>& process_meshes);
-    
-    /**
-     * @brief Process a single mesh
-     * @param mesh Assimp mesh
-     * @param scene Assimp scene
-     * @param index Submesh index
-     */
-    void process_mesh(aiMesh* mesh, const aiScene* scene, int index);
-    
-    /**
-     * @brief Extract bone weights from Assimp mesh
-     * @param submesh Output mesh structure
-     * @param mesh Assimp mesh
-     * @param scene Assimp scene
-     */
-    void extract_bone_weights(Mesh* submesh, aiMesh* mesh, const aiScene* scene);
-    
-    /**
-     * @brief Load material texture from Assimp material
-     * @param mat Assimp material
-     * @param type Texture type
-     * @return Loaded texture or nullptr
-     */
-    std::shared_ptr<Texture> load_material_texture(aiMaterial* mat, aiTextureType type);
+    // Statistics
+    inline uint64_t get_total_vertex_count() const { return total_vertex_; }
+    inline uint64_t get_total_index_count() const { return total_index_; }
+    inline const std::string& get_source_path() const { return path_; }
 
 protected:
-    std::vector<SubmeshData> submeshes_;
-    std::shared_ptr<ModelCache> cache_;
-
-    // Asset dependency management - declares materials_ and materials_uid_
-    ASSET_DEPS((std::vector<MaterialRef>, materials_))
+    // Core data - just references to other assets
+    std::vector<MaterialSlot> material_slots_;
     
+    // Source file info
     std::string path_;
     ModelProcessSetting process_setting_;
     
-    // Statistics
+    // Statistics (transient)
     uint64_t total_index_ = 0;
     uint64_t total_vertex_ = 0;
-    uint32_t total_cluster_count_ = 0;
-    uint32_t total_cluster_max_mip_ = 0;
-    
-    // Texture cache to avoid duplicate loading
-    std::unordered_map<std::string, TextureRef> texture_map_;
-
-private:
-    Model() = default;
     
     template<class Archive>
     void serialize(Archive& ar) {
         ar(cereal::base_class<Asset>(this));
+        ar(cereal::make_nvp("material_slots", material_slots_));
         ar(cereal::make_nvp("path", path_));
         ar(cereal::make_nvp("process_setting", process_setting_));
-        serialize_deps(ar);
     }
     
     friend class cereal::access;
 };
+
 using ModelRef = std::shared_ptr<Model>;

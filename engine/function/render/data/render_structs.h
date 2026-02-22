@@ -2,6 +2,7 @@
 
 #include "engine/core/math/math.h"
 #include "engine/function/render/rhi/rhi_structs.h"
+#include <cereal/cereal.hpp>
 #include <array>
 #include <cstdint>
 
@@ -21,11 +22,23 @@
 struct BoundingBox {
     Vec3 min = Vec3::Zero();
     Vec3 max = Vec3::Zero();
+    
+    template<class Archive>
+    void serialize(Archive& ar) {
+        ar(cereal::make_nvp("min", min));
+        ar(cereal::make_nvp("max", max));
+    }
 };
 
 struct BoundingSphere {
     Vec3 center = Vec3::Zero();
     float radius = 0.0f;
+    
+    template<class Archive>
+    void serialize(Archive& ar) {
+        ar(cereal::make_nvp("center", center));
+        ar(cereal::make_nvp("radius", radius));
+    }
 };
 
 struct Frustum {

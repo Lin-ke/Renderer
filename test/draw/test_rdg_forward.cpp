@@ -84,9 +84,12 @@ TEST_CASE("RDG Forward Pass - Bunny Rendering", "[draw][rdg]") {
     bunny_mesh->set_model(bunny_model);
     bunny_mesh->on_init();
     
-    INFO(LogRDGForward, "Bunny loaded: {} vertices, {} indices",
-         bunny_model->submesh(0).vertex_buffer->vertex_num(),
-         bunny_model->submesh(0).index_buffer->index_num());
+    auto mesh0 = bunny_model->get_mesh(0);
+    if (mesh0) {
+        INFO(LogRDGForward, "Bunny loaded: {} vertices, {} indices",
+             mesh0->get_vertex_count(),
+             mesh0->get_index_count());
+    }
     
     // Set active scene
     EngineContext::world()->set_active_scene(scene);

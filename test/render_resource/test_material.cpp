@@ -23,7 +23,8 @@ TEST_CASE("Material Parameters and Serialization", "[render_resource]") {
     EngineContext::init(mode);
     EngineContext::asset()->init(test_asset_dir);
 
-    auto material = std::make_shared<Material>();
+    // Use PBRMaterial for specific properties
+    auto material = std::make_shared<PBRMaterial>();
     
     Vec4 diffuse_color = { 1.0f, 0.5f, 0.2f, 1.0f };
     material->set_diffuse(diffuse_color);
@@ -36,12 +37,56 @@ TEST_CASE("Material Parameters and Serialization", "[render_resource]") {
     std::string material_path = "/Game/test_material.asset";
     EngineContext::asset()->save_asset(material, material_path);
     
-    auto loaded_material = EngineContext::asset()->load_asset<Material>(material_path);
-    REQUIRE(loaded_material != nullptr);
-    REQUIRE(loaded_material->get_diffuse().y() == Catch::Approx(0.5f));
-    REQUIRE(loaded_material->get_metallic() == Catch::Approx(0.1f));
+    // Load back as Material, then cast
+    auto loaded_asset = EngineContext::asset()->load_asset<Material>(material_path);
+    REQUIRE(loaded_asset != nullptr);
+    REQUIRE(loaded_asset->get_diffuse().y() == Catch::Approx(0.5f));
+    
+    auto loaded_pbr = std::dynamic_pointer_cast<PBRMaterial>(loaded_asset);
+    REQUIRE(loaded_pbr != nullptr);
+    REQUIRE(loaded_pbr->get_metallic() == Catch::Approx(0.1f));
 
-    loaded_material.reset();
+    loaded_asset.reset();
+    loaded_pbr.reset();
+    material.reset();
+    
+    EngineContext::exit();
+}
+
+TEST_CASE("NPR Material Parameters and Serialization", "[render_resource]") {
+    std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
+    
+    std::bitset<8> mode;
+    mode.set(EngineContext::StartMode::Asset);
+    mode.set(EngineContext::StartMode::SingleThread);
+    EngineContext::init(mode);
+    EngineContext::asset()->init(test_asset_dir);
+
+    // Use NPRMaterial
+    auto material = std::make_shared<NPRMaterial>();
+    
+    material->set_rim_strength(0.8f);
+    material->set_rim_width(0.4f);
+    Vec3 rim_color = { 0.1f, 0.2f, 0.9f };
+    material->set_rim_color(rim_color);
+    
+    REQUIRE(material->get_rim_strength() == Catch::Approx(0.8f));
+    
+    std::string material_path = "/Game/test_npr_material.asset";
+    EngineContext::asset()->save_asset(material, material_path);
+    
+    // Load back as Material, then cast
+    auto loaded_asset = EngineContext::asset()->load_asset<Material>(material_path);
+    REQUIRE(loaded_asset != nullptr);
+    REQUIRE(loaded_asset->get_material_type() == MaterialType::NPR);
+    
+    auto loaded_npr = std::dynamic_pointer_cast<NPRMaterial>(loaded_asset);
+    REQUIRE(loaded_npr != nullptr);
+    REQUIRE(loaded_npr->get_rim_width() == Catch::Approx(0.4f));
+    REQUIRE(loaded_npr->get_rim_color().z() == Catch::Approx(0.9f));
+
+    loaded_asset.reset();
+    loaded_npr.reset();
     material.reset();
     
     EngineContext::exit();

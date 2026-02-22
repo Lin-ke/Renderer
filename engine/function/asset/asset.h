@@ -14,6 +14,7 @@ enum class AssetType : uint8_t {
     Unknown = 0,
     Model,
     ModelCache,
+    Mesh,
     Texture,
     Shader,
     Material,

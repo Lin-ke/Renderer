@@ -44,6 +44,7 @@ Entity* setup_bunny_scene() {
     
     auto* cam_comp = camera_ent->add_component<CameraComponent>();
     cam_comp->set_fov(60.0f);
+    cam_comp->on_init();
     // near/far use default values (0.1f / 1000.0f)
     
     // Create directional light entity
@@ -58,6 +59,7 @@ Entity* setup_bunny_scene() {
     light_comp->set_intensity(1.5f);
     light_comp->set_enable(true);
     light_comp->set_cast_shadow(true);
+    light_comp->on_init();
     
     INFO(LogGame, "Directional light created with intensity {}", light_comp->get_intensity());
     
@@ -71,38 +73,28 @@ Entity* setup_bunny_scene() {
     
     // Try to load bunny model from raw .obj file
     // Model class expects path relative to ENGINE_PATH
-    std::string model_rel_path = "assets/models/bunny.obj";
-    std::string model_full_path = std::string(ENGINE_PATH) + "/" + model_rel_path;
-    INFO(LogGame, "Attempting to load bunny from: {}", model_full_path);
+    INFO(LogGame, "Bunny.obj file found, loading...");
     
-    // Check if file exists
-    std::ifstream file_check(model_full_path);
-    if (file_check.good()) {
-        file_check.close();
-        INFO(LogGame, "Bunny.obj file found, loading...");
+    // Create model and load - Model constructor takes relative path
+    auto model = Model::Load("/Engine/models/bunny.obj", ModelProcessSetting());
+    if (model && model->get_submesh_count() > 0) {
+        INFO(LogGame, "Bunny model loaded with {} submeshes", model->get_submesh_count());
         
-        // Create model and load - Model constructor takes relative path
-        auto model = std::make_shared<Model>(model_rel_path, ModelProcessSetting());
-        if (model->get_submesh_count() > 0) {
-            INFO(LogGame, "Bunny model loaded with {} submeshes", model->get_submesh_count());
-            
-            auto* mesh_renderer = bunny_ent->add_component<MeshRendererComponent>();
-            mesh_renderer->set_model(model);
-            
-            // Create default material
-            auto material = std::make_shared<Material>();
-            material->set_diffuse({0.8f, 0.5f, 0.3f, 1.0f});
-            material->set_roughness(0.5f);
-            material->set_metallic(0.1f);
-            mesh_renderer->set_material(material);
-            
-            INFO(LogGame, "Bunny mesh renderer created successfully");
-        } else {
-            WARN(LogGame, "Bunny model loaded but has no submeshes");
-        }
+        auto* mesh_renderer = bunny_ent->add_component<MeshRendererComponent>();
+        mesh_renderer->set_model(model);
+        
+        // Create default material
+        auto material = std::make_shared<PBRMaterial>();
+        material->set_diffuse({0.8f, 0.5f, 0.3f, 1.0f});
+        material->set_roughness(0.5f);
+        material->set_metallic(0.1f);
+        mesh_renderer->set_material(material);
+        
+        mesh_renderer->on_init();
+        
+        INFO(LogGame, "Bunny mesh renderer created successfully");
     } else {
-        WARN(LogGame, "Bunny.obj not found at: {}", model_full_path);
-        WARN(LogGame, "Scene will render without bunny mesh (background only)");
+        WARN(LogGame, "Bunny model loaded but has no submeshes");
     }
     
     // Set as active scene

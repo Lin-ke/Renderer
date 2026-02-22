@@ -102,12 +102,16 @@ void MeshRendererComponent::update_object_info() {
         
         // Set vertex/index IDs from model
         if (model_ && i < model_->get_submesh_count()) {
-            const auto& submesh = model_->submesh(i);
-            if (submesh.vertex_buffer) {
-                object_infos_[i].vertex_id = submesh.vertex_buffer->vertex_id_;
-            }
-            if (submesh.index_buffer) {
-                object_infos_[i].index_id = submesh.index_buffer->index_id_;
+            auto mesh = model_->get_mesh(i);
+            if (mesh) {
+                auto vb = mesh->get_vertex_buffer();
+                auto ib = mesh->get_index_buffer();
+                if (vb) {
+                    object_infos_[i].vertex_id = vb->vertex_id_;
+                }
+                if (ib) {
+                    object_infos_[i].index_id = ib->index_id_;
+                }
             }
         }
         
@@ -163,21 +167,24 @@ void MeshRendererComponent::collect_draw_batch(std::vector<render::DrawBatch>& b
     Mat4 model_mat = transform->transform.get_matrix();
     
     for (uint32_t i = 0; i < model_->get_submesh_count(); i++) {
-        const auto& submesh = model_->submesh(i);
+        auto mesh = model_->get_mesh(i);
+        if (!mesh) continue;
         
         render::DrawBatch batch;
         batch.object_id = (i < object_ids_.size()) ? object_ids_[i] : 0;
         
-        // Get GPU buffers from model submesh
-        if (submesh.vertex_buffer) {
-            batch.vertex_buffer = submesh.vertex_buffer->position_buffer_;
-            batch.normal_buffer = submesh.vertex_buffer->normal_buffer_;
-            batch.tangent_buffer = submesh.vertex_buffer->tangent_buffer_;
-            batch.texcoord_buffer = submesh.vertex_buffer->tex_coord_buffer_;
+        // Get GPU buffers from mesh
+        auto vb = mesh->get_vertex_buffer();
+        auto ib = mesh->get_index_buffer();
+        if (vb) {
+            batch.vertex_buffer = vb->position_buffer_;
+            batch.normal_buffer = vb->normal_buffer_;
+            batch.tangent_buffer = vb->tangent_buffer_;
+            batch.texcoord_buffer = vb->tex_coord_buffer_;
         }
-        if (submesh.index_buffer) {
-            batch.index_buffer = submesh.index_buffer->buffer_;
-            batch.index_count = submesh.index_buffer->index_num();
+        if (ib) {
+            batch.index_buffer = ib->buffer_;
+            batch.index_count = ib->index_num();
         }
         
         batch.model_matrix = model_mat;

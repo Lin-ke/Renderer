@@ -29,10 +29,10 @@ cbuffer Material : register(b2) {
     float roughness;
     float metallic;
     float alpha_cutoff;
-    int use_albedo_map;
-    int use_normal_map;
-    int use_arm_map;
-    int use_emission_map;
+    float use_albedo_map;      // Use float instead of int for alignment
+    float use_normal_map;
+    float use_arm_map;
+    float use_emission_map;
     float2 _padding_mat;
 };
 
@@ -207,7 +207,7 @@ float PointLightFalloff(float dist, float radius) {
 float4 PSMain(PSInput input) : SV_TARGET {
     // Get base color
     float3 albedo_color = albedo.rgb;
-    if (use_albedo_map) {
+    if (use_albedo_map > 0.5) {
         float4 sampled = albedo_map.Sample(default_sampler, input.texcoord);
         albedo_color *= sampled.rgb;
         if (alpha_cutoff > 0.0 && sampled.a < alpha_cutoff) {

@@ -39,10 +39,10 @@ TEST_CASE("FBX Model Loading with Materials", "[render_resource][fbx]") {
     
     // Verify each submesh has valid data
     for (uint32_t i = 0; i < model->get_submesh_count(); i++) {
-        const auto& submesh = model->submesh(i);
-        REQUIRE(submesh.mesh != nullptr);
-        REQUIRE(submesh.vertex_buffer != nullptr);
-        REQUIRE(submesh.index_buffer != nullptr);
+        auto mesh = model->get_mesh(i);
+        REQUIRE(mesh != nullptr);
+        REQUIRE(mesh->get_vertex_buffer() != nullptr);
+        REQUIRE(mesh->get_index_buffer() != nullptr);
     }
     
     EngineContext::exit();
@@ -102,7 +102,9 @@ TEST_CASE("FBX Model Processing Options", "[render_resource][fbx]") {
         
         // Verify normals exist
         for (uint32_t i = 0; i < model->get_submesh_count(); i++) {
-            REQUIRE(!model->submesh(i).mesh->normal.empty());
+            auto mesh = model->get_mesh(i);
+            REQUIRE(mesh != nullptr);
+            REQUIRE(!mesh->get_normals().empty());
         }
     }
     

@@ -111,6 +111,14 @@ void Texture::init_rhi() {
     view_info.subresource = { aspects, 0, mip_levels_, 0, array_layer_ };
     
     texture_view_ = EngineContext::rhi()->create_texture_view(view_info);
+
+    // Register with RenderResourceManager for bindless ID if available
+    if (EngineContext::render_resource()) {
+        BindlessResourceInfo res_info = {};
+        res_info.texture_view = texture_view_;
+        texture_id_ = EngineContext::render_resource()->allocate_bindless_id(res_info, BINDLESS_SLOT_TEXTURE_2D);
+        INFO(LogRenderResource, "Allocated texture ID: {} for {}", texture_id_, name_);
+    }
 }
 
 void Texture::load_from_file() {
@@ -157,6 +165,7 @@ void Texture::load_from_file() {
         if (!rhi_initialized) {
             extent_ = {(uint32_t)width, (uint32_t)height, 1};
             mip_levels_ = extent_.mip_size();
+            INFO(LogRenderResource, "Texture init: {}x{}, mip_levels={}", width, height, mip_levels_);
             init_rhi();
             rhi_initialized = true;
         }
