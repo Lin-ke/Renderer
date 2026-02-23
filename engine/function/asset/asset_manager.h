@@ -1,5 +1,4 @@
-#ifndef ASSET_MANAGER_H
-#define ASSET_MANAGER_H
+#pragma once
 
 #include "engine/function/asset/asset.h"
 #include "engine/function/asset/uid.h"
@@ -26,7 +25,7 @@ DECLARE_LOG_TAG(LogAsset);
 class AssetManager {
 public:
     AssetManager() = default;
-    ~AssetManager(); // Need to handle unfinished futures
+    ~AssetManager();
 
     /**
      * @brief Initializes the asset manager with the project's root content directory.
@@ -172,5 +171,3 @@ public:
     const std::filesystem::path virtual_game_path_ = "/Game/";
     const std::filesystem::path virtual_engine_path_ = "/Engine/";
 };
-
-#endif

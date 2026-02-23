@@ -8,7 +8,7 @@
 #include <string>
 #include <iomanip>
 
-// 辅助函数：将流式数据转为字符串或从字符串解析
+
 namespace Utils {
     template<typename T>
     std::string to_compact_string(const T& v, int components) {
@@ -32,9 +32,7 @@ namespace Utils {
 
 namespace cereal {
 
-    // =============================================================
-    // Extent (2D/3D) - 紧凑化为 "width height [depth]"
-    // =============================================================
+    // Extent (2D/3D) - compact as "width height [depth]"
     template <class Archive>
     std::string save_minimal(const Archive&, const Extent2D& e) {
         std::stringstream ss;
@@ -94,13 +92,10 @@ namespace cereal {
         std::stringstream ss(s);
         float x, y, z, w;
         ss >> x >> y >> z >> w;
-        q = Quaternion(w, x, y, z); // 注意 Eigen 构造顺序通常是 w, x, y, z
+        q = Quaternion(w, x, y, z); // Eigen constructor order: w, x, y, z
     }
 
-    // =============================================================
-    // Matrices - 每一列序列化为一个字符串
-    // =============================================================
-    // 矩阵保持结构，但内部的 Vector 紧凑化
+    // Matrices - each column as separate string
     template <class Archive>
     void serialize(Archive &ar, Mat2 &m) {
         Vec2 c0 = m.col(0); Vec2 c1 = m.col(1);
@@ -129,13 +124,10 @@ namespace cereal {
         }
     }
 
-    // =============================================================
-    // Transform - 拆分 Save/Load 以正确处理 Getters/Setters
-    // =============================================================
+    // Transform - split Save/Load for Getters/Setters
     template<class Archive>
     void save(Archive &ar, const Transform &t) {
-        // 保存时，获取值并委托给上面的 Vec3/Quat 序列化函数
-        // 它们会自动转为字符串
+        
         ar(cereal::make_nvp("position", t.get_position()),
            cereal::make_nvp("scale",    t.get_scale()),
            cereal::make_nvp("rotation", t.get_rotation()));
@@ -145,12 +137,12 @@ namespace cereal {
     void load(Archive &ar, Transform &t) {
         Vec3 p, s;
         Quaternion q;
-        // 加载到临时变量
+        
         ar(cereal::make_nvp("position", p),
            cereal::make_nvp("scale",    s),
            cereal::make_nvp("rotation", q));
         
-        // 通过 Setter 设置回去
+        
         t.set_position(p);
         t.set_scale(s);
         t.set_rotation(q);

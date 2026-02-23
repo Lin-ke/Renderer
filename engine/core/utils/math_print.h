@@ -1,9 +1,11 @@
-#ifndef ENGINE_CORE_MATH_MATH_PRINT_H
-#define ENGINE_CORE_MATH_MATH_PRINT_H
+#pragma once
+
 #include <string>
 #include <cereal/cereal.hpp>
 #include <cereal/archives/json.hpp>
-namespace cereal{
+
+namespace cereal {
+
 template <typename T>
 std::string to_json_string(const T& obj, const std::string& root_name = "value") {
     std::stringstream ss;
@@ -13,6 +15,5 @@ std::string to_json_string(const T& obj, const std::string& root_name = "value")
     } 
     return ss.str();
 }
-};
 
-#endif
+} // namespace cereal

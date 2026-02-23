@@ -22,12 +22,6 @@ DEFINE_LOG_TAG(LogPBRForwardPass, "PBRForwardPass");
 
 namespace render {
 
-// PBR Vertex shader source (HLSL)
-// Shader source is now in assets/shaders/pbr_forward.hlsl
-
-
-
-// Load pre-compiled shader or compile from source file
 static std::vector<uint8_t> load_shader(const std::string& cso_name, const char* entry, const char* profile) {
     return render::ShaderUtils::load_or_compile(cso_name, nullptr, entry, profile);
 }
@@ -42,6 +36,7 @@ PBRForwardPass::~PBRForwardPass() {
     if (per_object_buffer_) per_object_buffer_->destroy();
     if (material_buffer_) material_buffer_->destroy();
     if (default_sampler_) default_sampler_->destroy();
+    if (default_normal_buffer_) default_normal_buffer_->destroy();
     if (default_tangent_buffer_) default_tangent_buffer_->destroy();
     if (default_texcoord_buffer_) default_texcoord_buffer_->destroy();
 }
@@ -200,7 +195,6 @@ void PBRForwardPass::create_default_vertex_buffers() {
     auto backend = EngineContext::rhi();
     if (!backend) return;
     
-    // Create default normal buffer (all pointing up)
     std::vector<Vec3> default_normals(DEFAULT_VERTEX_COUNT, Vec3(0, 1, 0));
     RHIBufferInfo normal_info = {};
     normal_info.size = default_normals.size() * sizeof(Vec3);
@@ -218,7 +212,6 @@ void PBRForwardPass::create_default_vertex_buffers() {
         }
     }
     
-    // Create default tangent buffer (all zeros = will trigger default generation in shader)
     std::vector<Vec4> default_tangents(DEFAULT_VERTEX_COUNT, Vec4(0, 0, 0, 1));
     RHIBufferInfo tangent_info = {};
     tangent_info.size = default_tangents.size() * sizeof(Vec4);
@@ -236,7 +229,6 @@ void PBRForwardPass::create_default_vertex_buffers() {
         }
     }
     
-    // Create default texcoord buffer (all zeros)
     std::vector<Vec2> default_texcoords(DEFAULT_VERTEX_COUNT, Vec2(0, 0));
     RHIBufferInfo texcoord_info = {};
     texcoord_info.size = default_texcoords.size() * sizeof(Vec2);
@@ -261,53 +253,42 @@ void PBRForwardPass::create_pipeline() {
     auto backend = EngineContext::rhi();
     if (!backend || !vertex_shader_ || !fragment_shader_) return;
     
-    // Create root signature
     RHIRootSignatureInfo root_info = {};
     root_signature_ = backend->create_root_signature(root_info);
     if (!root_signature_) return;
     
-    // Common pipeline configuration
     RHIGraphicsPipelineInfo pipe_info = {};
     pipe_info.vertex_shader = vertex_shader_->shader_;
     pipe_info.fragment_shader = fragment_shader_->shader_;
     pipe_info.root_signature = root_signature_;
     pipe_info.primitive_type = PRIMITIVE_TYPE_TRIANGLE_LIST;
     
-    // Vertex input layout: position + normal + tangent + texcoord
-    // NOTE: attribute_index mapping in DX11 RHI:
-    // 0 = POSITION, 1 = NORMAL, 2 = TEXCOORD, 3 = COLOR, 4 = TANGENT
     pipe_info.vertex_input_state.vertex_elements.resize(4);
-    // Position - stream 0
     pipe_info.vertex_input_state.vertex_elements[0].stream_index = 0;
-    pipe_info.vertex_input_state.vertex_elements[0].attribute_index = 0;  // POSITION
+    pipe_info.vertex_input_state.vertex_elements[0].attribute_index = 0;
     pipe_info.vertex_input_state.vertex_elements[0].format = FORMAT_R32G32B32_SFLOAT;
     pipe_info.vertex_input_state.vertex_elements[0].offset = 0;
-    // Normal - stream 1
     pipe_info.vertex_input_state.vertex_elements[1].stream_index = 1;
-    pipe_info.vertex_input_state.vertex_elements[1].attribute_index = 1;  // NORMAL
+    pipe_info.vertex_input_state.vertex_elements[1].attribute_index = 1;
     pipe_info.vertex_input_state.vertex_elements[1].format = FORMAT_R32G32B32_SFLOAT;
     pipe_info.vertex_input_state.vertex_elements[1].offset = 0;
-    // Tangent - stream 2
     pipe_info.vertex_input_state.vertex_elements[2].stream_index = 2;
-    pipe_info.vertex_input_state.vertex_elements[2].attribute_index = 4;  // TANGENT
+    pipe_info.vertex_input_state.vertex_elements[2].attribute_index = 4;
     pipe_info.vertex_input_state.vertex_elements[2].format = FORMAT_R32G32B32A32_SFLOAT;
     pipe_info.vertex_input_state.vertex_elements[2].offset = 0;
-    // TexCoord - stream 3
     pipe_info.vertex_input_state.vertex_elements[3].stream_index = 3;
-    pipe_info.vertex_input_state.vertex_elements[3].attribute_index = 2;  // TEXCOORD
+    pipe_info.vertex_input_state.vertex_elements[3].attribute_index = 2;
     pipe_info.vertex_input_state.vertex_elements[3].format = FORMAT_R32G32_SFLOAT;
     pipe_info.vertex_input_state.vertex_elements[3].offset = 0;
     
-    pipe_info.rasterizer_state.cull_mode = CULL_MODE_NONE;  // Disable culling like ForwardPass
+    pipe_info.rasterizer_state.cull_mode = CULL_MODE_NONE;
     pipe_info.rasterizer_state.fill_mode = FILL_MODE_SOLID;
     pipe_info.rasterizer_state.depth_clip_mode = DEPTH_CLIP;
     
-    // Enable depth testing
     pipe_info.depth_stencil_state.enable_depth_test = true;
     pipe_info.depth_stencil_state.enable_depth_write = true;
     pipe_info.depth_stencil_state.depth_test = COMPARE_FUNCTION_LESS_EQUAL;
     
-    // Render targets
     auto render_system = EngineContext::render_system();
     if (render_system) {
         pipe_info.color_attachment_formats[0] = render_system->get_color_format();
@@ -317,14 +298,12 @@ void PBRForwardPass::create_pipeline() {
         pipe_info.depth_stencil_attachment_format = FORMAT_D32_SFLOAT;
     }
     
-    // Create solid pipeline
     solid_pipeline_ = backend->create_graphics_pipeline(pipe_info);
     if (!solid_pipeline_) {
         ERR(LogPBRForwardPass, "Failed to create solid graphics pipeline");
         return;
     }
     
-    // Create wireframe pipeline
     pipe_info.rasterizer_state.fill_mode = FILL_MODE_WIREFRAME;
     wireframe_pipeline_ = backend->create_graphics_pipeline(pipe_info);
     if (!wireframe_pipeline_) {
@@ -332,7 +311,6 @@ void PBRForwardPass::create_pipeline() {
         return;
     }
     
-    // Start with solid pipeline
     pipeline_ = solid_pipeline_;
     
     INFO(LogPBRForwardPass, "PBR pipelines created successfully");
@@ -384,8 +362,6 @@ void PBRForwardPass::draw_batch(RHICommandContextRef cmd, const DrawBatch& batch
         return;
     }
 
-
-    // Update and bind per-frame buffer
     if (per_frame_buffer_) {
         if (per_frame_dirty_) {
             void* mapped = per_frame_buffer_->map();
@@ -399,12 +375,10 @@ void PBRForwardPass::draw_batch(RHICommandContextRef cmd, const DrawBatch& batch
             static_cast<ShaderFrequency>(SHADER_FREQUENCY_VERTEX | SHADER_FREQUENCY_FRAGMENT));
     }
 
-    // Bind common resources
     cmd->set_graphics_pipeline(pipeline_);
     cmd->bind_constant_buffer(material_buffer_, 2, SHADER_FREQUENCY_FRAGMENT);
     cmd->bind_sampler(default_sampler_, 0, SHADER_FREQUENCY_FRAGMENT);
 
-    // Update per-object buffer
     if (per_object_buffer_) {
         PBRPerObjectData object_data;
         object_data.model = batch.model_matrix;
@@ -417,32 +391,17 @@ void PBRForwardPass::draw_batch(RHICommandContextRef cmd, const DrawBatch& batch
         cmd->bind_constant_buffer(per_object_buffer_, 1, SHADER_FREQUENCY_VERTEX);
     }
 
-    // Update material buffer
-    if (material_buffer_ && batch.material) {
+    auto pbr_mat = std::dynamic_pointer_cast<PBRMaterial>(batch.material);
+    if (material_buffer_ && pbr_mat) {
         PBRMaterialData mat_data;
-        mat_data.albedo = batch.material->get_diffuse();
-        mat_data.emission = batch.material->get_emission();
-        mat_data.alpha_cutoff = batch.material->get_alpha_clip();
-        
-        // Get PBR-specific parameters if this is a PBR material
-        auto pbr_mat = std::dynamic_pointer_cast<PBRMaterial>(batch.material);
-        if (pbr_mat) {
-            mat_data.roughness = pbr_mat->get_roughness();
-            mat_data.metallic = pbr_mat->get_metallic();
-            mat_data.use_arm_map = pbr_mat->get_arm_texture() ? 1 : 0;
-        } else {
-            mat_data.roughness = 0.5f;
-            mat_data.metallic = 0.0f;
-            mat_data.use_arm_map = 0;
-        }
-        
-        auto diffuse_tex = batch.material->get_diffuse_texture();
-        mat_data.use_albedo_map = diffuse_tex ? 1 : 0;
-        
-        INFO(LogPBRForwardPass, "Material: use_albedo_map={}, diffuse_tex={}", 
-             mat_data.use_albedo_map, diffuse_tex ? "yes" : "no");
-        
-        mat_data.use_normal_map = batch.material->get_normal_texture() ? 1 : 0;
+        mat_data.albedo = pbr_mat->get_diffuse();
+        mat_data.emission = pbr_mat->get_emission();
+        mat_data.alpha_cutoff = pbr_mat->get_alpha_clip();
+        mat_data.roughness = pbr_mat->get_roughness();
+        mat_data.metallic = pbr_mat->get_metallic();
+        mat_data.use_arm_map = pbr_mat->get_arm_texture() ? 1 : 0;
+        mat_data.use_albedo_map = pbr_mat->get_diffuse_texture() ? 1 : 0;
+        mat_data.use_normal_map = pbr_mat->get_normal_texture() ? 1 : 0;
         mat_data.use_emission_map = 0;
         
         void* mapped = material_buffer_->map();
@@ -452,62 +411,69 @@ void PBRForwardPass::draw_batch(RHICommandContextRef cmd, const DrawBatch& batch
         }
     }
 
-    // Bind textures
-    if (batch.material) {
-        auto albedo_tex = batch.material->get_diffuse_texture();
-        if (albedo_tex) {
-            INFO(LogPBRForwardPass, "Texture: id={}, name={}, texture_={}, view_={}", 
-                 albedo_tex->texture_id_, albedo_tex->get_name(),
-                 (bool)albedo_tex->texture_, (bool)albedo_tex->texture_view_);
-            if (albedo_tex->texture_) {
-                cmd->bind_texture(albedo_tex->texture_, 0, SHADER_FREQUENCY_FRAGMENT);
-            }
+    // Bind textures with fallback
+    auto* render_system = EngineContext::render_system();
+    RHITextureRef fallback_white = render_system ? render_system->get_fallback_white_texture() : nullptr;
+    RHITextureRef fallback_black = render_system ? render_system->get_fallback_black_texture() : nullptr;
+    RHITextureRef fallback_normal = render_system ? render_system->get_fallback_normal_texture() : nullptr;
+    
+    if (pbr_mat) {
+        auto albedo_tex = pbr_mat->get_diffuse_texture();
+        if (albedo_tex && albedo_tex->texture_) {
+            cmd->bind_texture(albedo_tex->texture_, 0, SHADER_FREQUENCY_FRAGMENT);
+        } else if (fallback_white) {
+            cmd->bind_texture(fallback_white, 0, SHADER_FREQUENCY_FRAGMENT);
         }
         
-        auto normal_tex = batch.material->get_normal_texture();
+        auto normal_tex = pbr_mat->get_normal_texture();
         if (normal_tex && normal_tex->texture_) {
             cmd->bind_texture(normal_tex->texture_, 1, SHADER_FREQUENCY_FRAGMENT);
+        } else if (fallback_normal) {
+            cmd->bind_texture(fallback_normal, 1, SHADER_FREQUENCY_FRAGMENT);
         }
         
-        // Bind ARM texture if this is a PBR material
-        auto pbr_mat = std::dynamic_pointer_cast<PBRMaterial>(batch.material);
-        if (pbr_mat) {
-            auto arm_tex = pbr_mat->get_arm_texture();
-            if (arm_tex && arm_tex->texture_) {
-                cmd->bind_texture(arm_tex->texture_, 2, SHADER_FREQUENCY_FRAGMENT);
-            }
+        auto arm_tex = pbr_mat->get_arm_texture();
+        if (arm_tex && arm_tex->texture_) {
+            cmd->bind_texture(arm_tex->texture_, 2, SHADER_FREQUENCY_FRAGMENT);
+        } else if (fallback_black) {
+            // ARM: Black = AO=0, Roughness=0, Metallic=0 (default non-metal, smooth)
+            cmd->bind_texture(fallback_black, 2, SHADER_FREQUENCY_FRAGMENT);
+        }
+    } else {
+        // No material, bind all fallbacks
+        if (fallback_white) {
+            cmd->bind_texture(fallback_white, 0, SHADER_FREQUENCY_FRAGMENT);
+        }
+        if (fallback_normal) {
+            cmd->bind_texture(fallback_normal, 1, SHADER_FREQUENCY_FRAGMENT);
+        }
+        if (fallback_black) {
+            cmd->bind_texture(fallback_black, 2, SHADER_FREQUENCY_FRAGMENT);
         }
     }
 
-    // Bind vertex buffers - use defaults if not provided
     if (batch.vertex_buffer) {
         cmd->bind_vertex_buffer(batch.vertex_buffer, 0, 0);
     }
-    // Always bind normal buffer (use default up vector if mesh doesn't have one)
     if (batch.normal_buffer) {
         cmd->bind_vertex_buffer(batch.normal_buffer, 1, 0);
     } else if (default_normal_buffer_) {
         cmd->bind_vertex_buffer(default_normal_buffer_, 1, 0);
     }
-    // Always bind tangent buffer (use default if mesh doesn't have one)
     if (batch.tangent_buffer) {
         cmd->bind_vertex_buffer(batch.tangent_buffer, 2, 0);
     } else if (default_tangent_buffer_) {
         cmd->bind_vertex_buffer(default_tangent_buffer_, 2, 0);
     }
-    // Always bind texcoord buffer (use default if mesh doesn't have one)
     if (batch.texcoord_buffer) {
         cmd->bind_vertex_buffer(batch.texcoord_buffer, 3, 0);
     } else if (default_texcoord_buffer_) {
         cmd->bind_vertex_buffer(default_texcoord_buffer_, 3, 0);
     }
 
-    // Draw
     if (batch.index_buffer) {
         cmd->bind_index_buffer(batch.index_buffer, 0);
         cmd->draw_indexed(batch.index_count, 1, batch.index_offset, 0, 0);
-    } else {
-        WARN(LogPBRForwardPass, "No index buffer, skipping draw");
     }
 }
 
@@ -518,10 +484,8 @@ void PBRForwardPass::execute_batches(RHICommandListRef cmd, const std::vector<Dr
         return;
     }
 
-    // Set pipeline and common bindings
     cmd->set_graphics_pipeline(pipeline_);
     
-    // Update and bind per-frame buffer
     if (per_frame_buffer_) {
         if (per_frame_dirty_) {
             void* mapped = per_frame_buffer_->map();
@@ -535,22 +499,10 @@ void PBRForwardPass::execute_batches(RHICommandListRef cmd, const std::vector<Dr
             static_cast<ShaderFrequency>(SHADER_FREQUENCY_VERTEX | SHADER_FREQUENCY_FRAGMENT));
     }
 
-    // Bind common resources
     cmd->bind_constant_buffer(material_buffer_, 2, SHADER_FREQUENCY_FRAGMENT);
     cmd->bind_sampler(default_sampler_, 0, SHADER_FREQUENCY_FRAGMENT);
 
-    // Draw all batches
     for (const auto& batch : batches) {
-        // Log batch info for the first few frames
-        if (EngineContext::current_frame_index() < 2) {
-            INFO(LogPBRForwardPass, "Draw call: mesh={}, material_id={}, has_albedo={}, pos=({},{},{})",
-                 (batch.vertex_buffer != nullptr),
-                 (batch.material ? batch.material->get_material_id() : 0),
-                 (batch.material && batch.material->get_diffuse_texture() ? 1 : 0),
-                 batch.model_matrix(0,3), batch.model_matrix(1,3), batch.model_matrix(2,3));
-        }
-
-        // Update per-object buffer
         if (per_object_buffer_) {
             PBRPerObjectData object_data;
             object_data.model = batch.model_matrix;
@@ -563,27 +515,17 @@ void PBRForwardPass::execute_batches(RHICommandListRef cmd, const std::vector<Dr
             cmd->bind_constant_buffer(per_object_buffer_, 1, SHADER_FREQUENCY_VERTEX);
         }
 
-        // Update material buffer
-        if (material_buffer_ && batch.material) {
+        auto pbr_mat = std::dynamic_pointer_cast<PBRMaterial>(batch.material);
+        if (material_buffer_ && pbr_mat) {
             PBRMaterialData mat_data;
-            mat_data.albedo = batch.material->get_diffuse();
-            mat_data.emission = batch.material->get_emission();
-            mat_data.alpha_cutoff = batch.material->get_alpha_clip();
-            
-            // Get PBR-specific parameters if this is a PBR material
-            auto pbr_mat = std::dynamic_pointer_cast<PBRMaterial>(batch.material);
-            if (pbr_mat) {
-                mat_data.roughness = pbr_mat->get_roughness();
-                mat_data.metallic = pbr_mat->get_metallic();
-                mat_data.use_arm_map = pbr_mat->get_arm_texture() ? 1 : 0;
-            } else {
-                mat_data.roughness = 0.5f;
-                mat_data.metallic = 0.0f;
-                mat_data.use_arm_map = 0;
-            }
-            
-            mat_data.use_albedo_map = batch.material->get_diffuse_texture() ? 1 : 0;
-            mat_data.use_normal_map = batch.material->get_normal_texture() ? 1 : 0;
+            mat_data.albedo = pbr_mat->get_diffuse();
+            mat_data.emission = pbr_mat->get_emission();
+            mat_data.alpha_cutoff = pbr_mat->get_alpha_clip();
+            mat_data.roughness = pbr_mat->get_roughness();
+            mat_data.metallic = pbr_mat->get_metallic();
+            mat_data.use_arm_map = pbr_mat->get_arm_texture() ? 1 : 0;
+            mat_data.use_albedo_map = pbr_mat->get_diffuse_texture() ? 1 : 0;
+            mat_data.use_normal_map = pbr_mat->get_normal_texture() ? 1 : 0;
             mat_data.use_emission_map = 0;
             
             void* mapped = material_buffer_->map();
@@ -593,29 +535,23 @@ void PBRForwardPass::execute_batches(RHICommandListRef cmd, const std::vector<Dr
             }
         }
 
-        // Bind textures
-        if (batch.material) {
-            auto albedo_tex = batch.material->get_diffuse_texture();
+        if (pbr_mat) {
+            auto albedo_tex = pbr_mat->get_diffuse_texture();
             if (albedo_tex && albedo_tex->texture_) {
                 cmd->bind_texture(albedo_tex->texture_, 0, SHADER_FREQUENCY_FRAGMENT);
             }
             
-            auto normal_tex = batch.material->get_normal_texture();
+            auto normal_tex = pbr_mat->get_normal_texture();
             if (normal_tex && normal_tex->texture_) {
                 cmd->bind_texture(normal_tex->texture_, 1, SHADER_FREQUENCY_FRAGMENT);
             }
             
-            // Bind ARM texture if this is a PBR material
-            auto pbr_mat = std::dynamic_pointer_cast<PBRMaterial>(batch.material);
-            if (pbr_mat) {
-                auto arm_tex = pbr_mat->get_arm_texture();
-                if (arm_tex && arm_tex->texture_) {
-                    cmd->bind_texture(arm_tex->texture_, 2, SHADER_FREQUENCY_FRAGMENT);
-                }
+            auto arm_tex = pbr_mat->get_arm_texture();
+            if (arm_tex && arm_tex->texture_) {
+                cmd->bind_texture(arm_tex->texture_, 2, SHADER_FREQUENCY_FRAGMENT);
             }
         }
 
-        // Bind vertex buffers
         if (batch.vertex_buffer) {
             cmd->bind_vertex_buffer(batch.vertex_buffer, 0, 0);
         }
@@ -635,7 +571,6 @@ void PBRForwardPass::execute_batches(RHICommandListRef cmd, const std::vector<Dr
             cmd->bind_vertex_buffer(default_texcoord_buffer_, 3, 0);
         }
 
-        // Draw
         if (batch.index_buffer) {
             cmd->bind_index_buffer(batch.index_buffer, 0);
             cmd->draw_indexed(batch.index_count, 1, batch.index_offset, 0, 0);
@@ -657,9 +592,14 @@ void PBRForwardPass::build(RDGBuilder& builder, RDGTextureHandle color_target,
                Color4{0.1f, 0.1f, 0.2f, 1.0f});
     
     // Add depth attachment if available
+    // Use LOAD to read depth prepass results, depth write is still enabled for early-z
     if (depth_target.has_value()) {
-        rp_builder.depth_stencil(depth_target.value(), ATTACHMENT_LOAD_OP_CLEAR, 
+        rp_builder.depth_stencil(depth_target.value(), ATTACHMENT_LOAD_OP_LOAD, 
                                  ATTACHMENT_STORE_OP_DONT_CARE, 1.0f, 0);
+        
+        // Declare dependency on depth texture (as input attachment)
+        rp_builder.read(0, 0, 0, depth_target.value(), VIEW_TYPE_2D, 
+                        TextureSubresourceRange{TEXTURE_ASPECT_DEPTH, 0, 1, 0, 1});
     }
     
     // Capture batches and this pointer for execute lambda

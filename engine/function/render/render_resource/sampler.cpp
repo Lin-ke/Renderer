@@ -1,7 +1,11 @@
 #include "engine/function/render/render_resource/sampler.h"
 #include "engine/main/engine_context.h"
+#include <cassert>
 
 Sampler::Sampler() {
+    auto rhi = EngineContext::rhi();
+    assert(rhi && "RHI not initialized when creating Sampler");
+    
     RHISamplerInfo info = {};
     info.min_filter = FILTER_TYPE_LINEAR;
     info.mag_filter = FILTER_TYPE_LINEAR;
@@ -13,10 +17,13 @@ Sampler::Sampler() {
     info.mip_lod_bias = 0.0f;
     info.max_anisotropy = 0.0f;
 
-    sampler_ = EngineContext::rhi()->create_sampler(info);
+    sampler_ = rhi->create_sampler(info);
 }
 
 Sampler::Sampler(AddressMode address_mode, FilterType filter_type, MipMapMode mipmap_mode, float max_anisotropy, SamplerReductionMode reduction_mode) {
+    auto rhi = EngineContext::rhi();
+    assert(rhi && "RHI not initialized when creating Sampler");
+    
     RHISamplerInfo info = {};
     info.min_filter = filter_type;
     info.mag_filter = filter_type;
@@ -29,5 +36,5 @@ Sampler::Sampler(AddressMode address_mode, FilterType filter_type, MipMapMode mi
     info.mip_lod_bias = 0.0f;
     info.max_anisotropy = max_anisotropy;
 
-    sampler_ = EngineContext::rhi()->create_sampler(info);
+    sampler_ = rhi->create_sampler(info);
 }

@@ -1,727 +1,1431 @@
 #include "engine/function/render/render_system/render_system.h"
-#include "engine/function/render/render_system/reflect_inspector.h"
-#include "engine/main/engine_context.h"
-#include "engine/function/render/rhi/rhi.h"
 #include "engine/core/log/Log.h"
 #include "engine/core/utils/profiler.h"
 #include "engine/core/utils/profiler_widget.h"
-#include "engine/function/framework/scene.h"
-#include "engine/function/framework/entity.h"
-#include "engine/function/framework/component/transform_component.h"
 #include "engine/function/framework/component/camera_component.h"
 #include "engine/function/framework/component/directional_light_component.h"
-#include "engine/function/framework/component/point_light_component.h"
 #include "engine/function/framework/component/mesh_renderer_component.h"
+#include "engine/function/framework/component/point_light_component.h"
+#include "engine/function/framework/component/transform_component.h"
+#include "engine/function/framework/entity.h"
+#include "engine/function/framework/scene.h"
+#include "engine/function/render/graph/rdg_builder.h"
+#include "engine/function/render/graph/rdg_edge.h"
+#include "engine/function/render/graph/rdg_node.h"
+#include "engine/function/render/render_system/reflect_inspector.h"
+#include "engine/function/render/rhi/rhi.h"
+#include "engine/function/render/rhi/rhi_structs.h"
+#include "engine/main/engine_context.h"
 
-#include <imgui.h>
+
+#include <algorithm>
+#include <mutex>
+#include <unordered_map>
+
+
 #include <ImGuizmo.h>
+#include <imgui.h>
 
-//####TODO####: Render Passes
-// #include "engine/function/render/render_pass/gpu_culling_pass.h"
-// ...
 
 DECLARE_LOG_TAG(LogRenderSystem);
 DEFINE_LOG_TAG(LogRenderSystem, "RenderSystem");
 
-// Helper to get entity type icon based on components
-static std::string get_entity_icon(Entity* entity) {
-    if (!entity) return "?";
-    if (entity->get_component<DirectionalLightComponent>()) return "[D]"; // Directional light
-    if (entity->get_component<PointLightComponent>()) return "[P]";       // Point light
-    if (entity->get_component<MeshRendererComponent>()) return "[M]";     // Mesh
-    if (entity->get_component<CameraComponent>()) return "[C]";           // Camera
-    return "[E]"; // Generic Entity
+static std::string get_entity_icon(Entity *entity) {
+	if (!entity) {
+		return "?";
+	}
+	if (entity->get_component<DirectionalLightComponent>()) {
+		return "[D]"; // Directional light
+	}
+	if (entity->get_component<PointLightComponent>()) {
+		return "[P]"; // Point light
+	}
+	if (entity->get_component<MeshRendererComponent>()) {
+		return "[M]"; // Mesh
+	}
+	if (entity->get_component<CameraComponent>()) {
+		return "[C]"; // Camera
+	}
+	return "[E]"; // Generic Entity
 }
 
-// Helper to get entity display name
-static std::string get_entity_name(Entity* entity) {
-    if (!entity) return "Unknown";
-    
-    if (entity->get_component<DirectionalLightComponent>()) return "Directional Light";
-    if (entity->get_component<PointLightComponent>()) return "Point Light";
-    if (entity->get_component<MeshRendererComponent>()) return "Mesh";
-    if (entity->get_component<CameraComponent>()) return "Camera";
-    return "Entity";
+static std::string get_entity_name(Entity *entity) {
+	if (!entity) {
+		return "Unknown";
+	}
+
+	if (entity->get_component<DirectionalLightComponent>()) {
+		return "Directional Light";
+	}
+	if (entity->get_component<PointLightComponent>()) {
+		return "Point Light";
+	}
+	if (entity->get_component<MeshRendererComponent>()) {
+		return "Mesh";
+	}
+	if (entity->get_component<CameraComponent>()) {
+		return "Camera";
+	}
+	return "Entity";
 }
 
-// Note: GLFW has been removed. Window creation is now handled by the Window class.
-// RenderSystem receives a native window handle (HWND) via init().
+void RenderSystem::init(void *window_handle) {
+	INFO(LogRenderSystem, "RenderSystem Initialized");
 
-void RenderSystem::init(void* window_handle) {
-    INFO(LogRenderSystem, "RenderSystem Initialized");
+	native_window_handle_ = window_handle;
 
-    // Store native window handle (HWND)
-    native_window_handle_ = window_handle;
-    
-    if (!native_window_handle_) {
-        ERR(LogRenderSystem, "Window handle is null!");
-        return;
-    }
+	if (!native_window_handle_) {
+		ERR(LogRenderSystem, "Window handle is null!");
+		return;
+	}
 
-    // Initialize RHI backend first so it's available for managers
-    init_base_resource();
-    
-    // Initialize ImGui with native window handle (Win32)
-    if (backend_ && native_window_handle_) {
-        backend_->init_imgui(native_window_handle_);
-    }
+	init_base_resource();
+	create_fallback_resources();
 
-    light_manager_ = std::make_shared<RenderLightManager>();
-    mesh_manager_ = std::make_shared<RenderMeshManager>();
-    gizmo_manager_ = std::make_shared<GizmoManager>();
-    
-    light_manager_->init();
-    mesh_manager_->init();
-    gizmo_manager_->init();
+	if (backend_ && native_window_handle_) {
+		backend_->init_imgui(native_window_handle_);
+	}
 
-    init_passes();
+	light_manager_ = std::make_shared<RenderLightManager>();
+	mesh_manager_ = std::make_shared<RenderMeshManager>();
+	gizmo_manager_ = std::make_shared<GizmoManager>();
+
+	light_manager_->init();
+	mesh_manager_->init();
+	gizmo_manager_->init();
+
+	init_passes();
 }
 
 void RenderSystem::init_base_resource() {
-    RHIBackendInfo info = {};
-    info.type = BACKEND_DX11;
-    info.enable_debug = true;
-    backend_ = RHIBackend::init(info); 
-    
-    if (!backend_) {
-        WARN(LogRenderSystem, "RHI Backend not initialized!");
-        return;
-    }
+	RHIBackendInfo info = {};
+	info.type = BACKEND_DX11;
+	info.enable_debug = true;
+	backend_ = RHIBackend::init(info);
 
-    surface_ = backend_->create_surface(native_window_handle_);
-    queue_ = backend_->get_queue({ QUEUE_TYPE_GRAPHICS, 0 });
-    
-    RHISwapchainInfo sw_info = {};
-    sw_info.surface = surface_;
-    sw_info.present_queue = queue_;
-    sw_info.image_count = FRAMES_IN_FLIGHT;
-    sw_info.extent = WINDOW_EXTENT;
-    sw_info.format = COLOR_FORMAT;
-    
-    swapchain_ = backend_->create_swapchain(sw_info);
-    
-    // Create cached texture views and render passes for swapchain back buffers
-    for (uint32_t i = 0; i < FRAMES_IN_FLIGHT; i++) {
-        RHITextureRef back_buffer = swapchain_->get_texture(i);
-        if (back_buffer) {
-            RHITextureViewInfo view_info = {};
-            view_info.texture = back_buffer;
-            swapchain_buffer_views_[i] = backend_->create_texture_view(view_info);
-            
-            // Create a persistent render pass for this back buffer
-            RHIRenderPassInfo rp_info = {};
-            rp_info.extent = swapchain_->get_extent();
-            rp_info.color_attachments[0].texture_view = swapchain_buffer_views_[i];
-            rp_info.color_attachments[0].load_op = ATTACHMENT_LOAD_OP_CLEAR;
-            rp_info.color_attachments[0].clear_color = {0.1f, 0.2f, 0.4f, 1.0f};
-            rp_info.color_attachments[0].store_op = ATTACHMENT_STORE_OP_STORE;
-            
-            // Note: depth_texture_view_ is common for all frames
-            // But we need to set it here if we want a static render pass
-            // For now, let's just initialize the passes later when depth is ready
-        }
-    }
-    swapchain_views_initialized_ = true;
-    
-    // Create depth buffer
-    RHITextureInfo depth_info = {};
-    depth_info.format = DEPTH_FORMAT;
-    depth_info.extent = { WINDOW_EXTENT.width, WINDOW_EXTENT.height, 1 };
-    depth_info.mip_levels = 1;
-    depth_info.array_layers = 1;
-    depth_info.memory_usage = MEMORY_USAGE_GPU_ONLY;
-    // Add TEXTURE type so SRV can be created for ImGui visualization
-    depth_info.type = RESOURCE_TYPE_DEPTH_STENCIL | RESOURCE_TYPE_TEXTURE;
-    
-    depth_texture_ = backend_->create_texture(depth_info);
-    
-    RHITextureViewInfo depth_view_info = {};
-    depth_view_info.texture = depth_texture_;
-    depth_view_info.format = DEPTH_FORMAT;
-    depth_view_info.view_type = VIEW_TYPE_2D;
-    depth_view_info.subresource.aspect = TEXTURE_ASPECT_DEPTH;
-    depth_view_info.subresource.level_count = 1;
-    depth_view_info.subresource.layer_count = 1;
-    
-    depth_texture_view_ = backend_->create_texture_view(depth_view_info);
-    
-    // Now initialize render passes with depth
-    for (uint32_t i = 0; i < FRAMES_IN_FLIGHT; i++) {
-        if (swapchain_buffer_views_[i]) {
-            RHIRenderPassInfo rp_info = {};
-            rp_info.extent = swapchain_->get_extent();
-            rp_info.color_attachments[0].texture_view = swapchain_buffer_views_[i];
-            rp_info.color_attachments[0].load_op = ATTACHMENT_LOAD_OP_CLEAR;
-            rp_info.color_attachments[0].clear_color = {0.1f, 0.2f, 0.4f, 1.0f};
-            rp_info.color_attachments[0].store_op = ATTACHMENT_STORE_OP_STORE;
-            
-            rp_info.depth_stencil_attachment.texture_view = depth_texture_view_;
-            rp_info.depth_stencil_attachment.load_op = ATTACHMENT_LOAD_OP_CLEAR;
-            rp_info.depth_stencil_attachment.clear_depth = 1.0f;
-            rp_info.depth_stencil_attachment.clear_stencil = 0;
-            rp_info.depth_stencil_attachment.store_op = ATTACHMENT_STORE_OP_STORE;
-            
-            swapchain_render_passes_[i] = backend_->create_render_pass(rp_info);
-        }
-    }
-    
-    pool_ = backend_->create_command_pool({ queue_ });
+	if (!backend_) {
+		WARN(LogRenderSystem, "RHI Backend not initialized!");
+		return;
+	}
 
-    for(uint32_t i = 0; i < FRAMES_IN_FLIGHT; i++) {
-        per_frame_common_resources_[i].command = backend_->create_command_context(pool_);
-        per_frame_common_resources_[i].start_semaphore = backend_->create_semaphore();
-        per_frame_common_resources_[i].finish_semaphore = backend_->create_semaphore();
-        per_frame_common_resources_[i].fence = backend_->create_fence(true);
-    }
-    
-    // Initialize depth buffer visualization
-    // Create a color texture for depth visualization output
-    RHITextureInfo viz_info = {};
-    viz_info.format = COLOR_FORMAT;
-    viz_info.extent.width = WINDOW_EXTENT.width;
-    viz_info.extent.height = WINDOW_EXTENT.height;
-    viz_info.extent.depth = 1;
-    viz_info.mip_levels = 1;
-    viz_info.array_layers = 1;
-    viz_info.memory_usage = MEMORY_USAGE_GPU_ONLY;
-    viz_info.type = RESOURCE_TYPE_RENDER_TARGET | RESOURCE_TYPE_TEXTURE;
-    
-    depth_visualize_texture_ = backend_->create_texture(viz_info);
-    
-    if (depth_visualize_texture_) {
-        RHITextureViewInfo viz_view_info = {};
-        viz_view_info.texture = depth_visualize_texture_;
-        viz_view_info.format = COLOR_FORMAT;
-        viz_view_info.view_type = VIEW_TYPE_2D;
-        viz_view_info.subresource.aspect = TEXTURE_ASPECT_COLOR;
-        viz_view_info.subresource.level_count = 1;
-        viz_view_info.subresource.layer_count = 1;
-        
-        depth_visualize_texture_view_ = backend_->create_texture_view(viz_view_info);
-        
-        // Initialize depth visualize pass
-        depth_visualize_pass_ = std::make_shared<render::DepthVisualizePass>();
-        depth_visualize_pass_->init();
-        
-        if (depth_visualize_pass_->is_initialized()) {
-            depth_visualize_initialized_ = true;
-            INFO(LogRenderSystem, "Depth buffer visualization initialized");
-        } else {
-            WARN(LogRenderSystem, "Failed to initialize depth visualize pass");
-        }
-    } else {
-        WARN(LogRenderSystem, "Failed to create depth visualize texture");
-    }
+	surface_ = backend_->create_surface(native_window_handle_);
+	queue_ = backend_->get_queue({ QUEUE_TYPE_GRAPHICS, 0 });
+
+	RHISwapchainInfo sw_info = {};
+	sw_info.surface = surface_;
+	sw_info.present_queue = queue_;
+	sw_info.image_count = FRAMES_IN_FLIGHT;
+	sw_info.extent = WINDOW_EXTENT;
+	sw_info.format = COLOR_FORMAT;
+
+	swapchain_ = backend_->create_swapchain(sw_info);
+
+	// Create cached texture views and render passes for swapchain back buffers
+	for (uint32_t i = 0; i < FRAMES_IN_FLIGHT; i++) {
+		RHITextureRef back_buffer = swapchain_->get_texture(i);
+		if (back_buffer) {
+			RHITextureViewInfo view_info = {};
+			view_info.texture = back_buffer;
+			swapchain_buffer_views_[i] = backend_->create_texture_view(view_info);
+
+			// Create a persistent render pass for this back buffer
+			RHIRenderPassInfo rp_info = {};
+			rp_info.extent = swapchain_->get_extent();
+			rp_info.color_attachments[0].texture_view = swapchain_buffer_views_[i];
+			rp_info.color_attachments[0].load_op = ATTACHMENT_LOAD_OP_CLEAR;
+			rp_info.color_attachments[0].clear_color = { 0.1f, 0.2f, 0.4f, 1.0f };
+			rp_info.color_attachments[0].store_op = ATTACHMENT_STORE_OP_STORE;
+
+			// Note: depth_texture_view_ is common for all frames
+			// But we need to set it here if we want a static render pass
+			// For now, let's just initialize the passes later when depth is ready
+		}
+	}
+	swapchain_views_initialized_ = true;
+
+	RHITextureInfo depth_info = {};
+	depth_info.format = DEPTH_FORMAT;
+	depth_info.extent = { WINDOW_EXTENT.width, WINDOW_EXTENT.height, 1 };
+	depth_info.mip_levels = 1;
+	depth_info.array_layers = 1;
+	depth_info.memory_usage = MEMORY_USAGE_GPU_ONLY;
+	depth_info.type = RESOURCE_TYPE_DEPTH_STENCIL | RESOURCE_TYPE_TEXTURE;
+
+	depth_texture_ = backend_->create_texture(depth_info);
+
+	RHITextureViewInfo depth_view_info = {};
+	depth_view_info.texture = depth_texture_;
+	depth_view_info.format = DEPTH_FORMAT;
+	depth_view_info.view_type = VIEW_TYPE_2D;
+	depth_view_info.subresource.aspect = TEXTURE_ASPECT_DEPTH;
+	depth_view_info.subresource.level_count = 1;
+	depth_view_info.subresource.layer_count = 1;
+
+	depth_texture_view_ = backend_->create_texture_view(depth_view_info);
+	for (uint32_t i = 0; i < FRAMES_IN_FLIGHT; i++) {
+		if (swapchain_buffer_views_[i]) {
+			RHIRenderPassInfo rp_info = {};
+			rp_info.extent = swapchain_->get_extent();
+			rp_info.color_attachments[0].texture_view = swapchain_buffer_views_[i];
+			rp_info.color_attachments[0].load_op = ATTACHMENT_LOAD_OP_CLEAR;
+			rp_info.color_attachments[0].clear_color = { 0.1f, 0.2f, 0.4f, 1.0f };
+			rp_info.color_attachments[0].store_op = ATTACHMENT_STORE_OP_STORE;
+
+			rp_info.depth_stencil_attachment.texture_view = depth_texture_view_;
+			rp_info.depth_stencil_attachment.load_op = ATTACHMENT_LOAD_OP_CLEAR;
+			rp_info.depth_stencil_attachment.clear_depth = 1.0f;
+			rp_info.depth_stencil_attachment.clear_stencil = 0;
+			rp_info.depth_stencil_attachment.store_op = ATTACHMENT_STORE_OP_STORE;
+
+			swapchain_render_passes_[i] = backend_->create_render_pass(rp_info);
+		}
+	}
+
+	pool_ = backend_->create_command_pool({ queue_ });
+
+	for (uint32_t i = 0; i < FRAMES_IN_FLIGHT; i++) {
+		per_frame_common_resources_[i].command = backend_->create_command_context(pool_);
+		per_frame_common_resources_[i].start_semaphore = backend_->create_semaphore();
+		per_frame_common_resources_[i].finish_semaphore = backend_->create_semaphore();
+		per_frame_common_resources_[i].fence = backend_->create_fence(true);
+	}
+
+	// Depth buffer visualization
+	RHITextureInfo viz_info = {};
+	viz_info.format = COLOR_FORMAT;
+	viz_info.extent.width = WINDOW_EXTENT.width;
+	viz_info.extent.height = WINDOW_EXTENT.height;
+	viz_info.extent.depth = 1;
+	viz_info.mip_levels = 1;
+	viz_info.array_layers = 1;
+	viz_info.memory_usage = MEMORY_USAGE_GPU_ONLY;
+	viz_info.type = RESOURCE_TYPE_RENDER_TARGET | RESOURCE_TYPE_TEXTURE;
+
+	depth_visualize_texture_ = backend_->create_texture(viz_info);
+
+	if (depth_visualize_texture_) {
+		RHITextureViewInfo viz_view_info = {};
+		viz_view_info.texture = depth_visualize_texture_;
+		viz_view_info.format = COLOR_FORMAT;
+		viz_view_info.view_type = VIEW_TYPE_2D;
+		viz_view_info.subresource.aspect = TEXTURE_ASPECT_COLOR;
+		viz_view_info.subresource.level_count = 1;
+		viz_view_info.subresource.layer_count = 1;
+
+		depth_visualize_texture_view_ = backend_->create_texture_view(viz_view_info);
+
+		// Initialize depth visualize pass
+		depth_visualize_pass_ = std::make_shared<render::DepthVisualizePass>();
+		depth_visualize_pass_->init();
+
+		if (depth_visualize_pass_->is_initialized()) {
+			depth_visualize_initialized_ = true;
+			INFO(LogRenderSystem, "Depth buffer visualization initialized");
+		} else {
+			WARN(LogRenderSystem, "Failed to initialize depth visualize pass");
+		}
+	} else {
+		WARN(LogRenderSystem, "Failed to create depth visualize texture");
+	}
+}
+
+void RenderSystem::create_fallback_resources() {
+	if (!backend_) {
+		return;
+	}
+
+	fallback_resources_.init(backend_);
+
+	INFO(LogRenderSystem, "Fallback resources created");
 }
 
 void RenderSystem::init_passes() {
-    // passes_[MESH_DEPTH_PASS] = std::make_shared<DepthPass>();
-    // ...
-    // for(auto& pass : passes_) { if(pass) pass->init(); }
+	// Initialize depth prepass
+	depth_prepass_ = std::make_shared<render::DepthPrePass>();
+	depth_prepass_->init();
+
+	if (depth_prepass_->get_type() == render::PassType::Depth) {
+		INFO(LogRenderSystem, "DepthPrePass initialized successfully");
+	}
+
+	// Initialize depth prepass resources
+	init_depth_prepass_resource();
 }
 
-bool RenderSystem::tick(const RenderPacket& packet) {
-    PROFILE_FUNCTION();
-    
-    // Note: Window close check is now handled by Window::process_messages() in EngineContext
+void RenderSystem::init_depth_prepass_resource() {
+	if (!backend_) {
+		return;
+	}
 
-    // Use frame_index from packet for multi-threaded safety
-    uint32_t frame_index = packet.frame_index;
-    
-    // Update active camera in mesh manager if provided
-    if (packet.active_camera) {
-        mesh_manager_->set_active_camera(packet.active_camera);
-    }
-    
-    // Tick managers (collect render data)
-    {
-        PROFILE_SCOPE("RenderSystem_Managers");
-        mesh_manager_->tick();
-        light_manager_->tick(frame_index);
-        update_global_setting();
-    }
+	// Create depth texture for prepass (separate from main depth texture)
+	// This allows the prepass to write depth, and forward passes to read it
+	RHITextureInfo depth_info = {};
+	depth_info.format = DEPTH_FORMAT;
+	depth_info.extent = { WINDOW_EXTENT.width, WINDOW_EXTENT.height, 1 };
+	depth_info.mip_levels = 1;
+	depth_info.array_layers = 1;
+	depth_info.memory_usage = MEMORY_USAGE_GPU_ONLY;
+	depth_info.type = RESOURCE_TYPE_DEPTH_STENCIL | RESOURCE_TYPE_TEXTURE;
 
-    // Execute rendering using frame_index from packet for thread safety
-    auto& resource = per_frame_common_resources_[frame_index];
-    resource.fence->wait();
-    
-    RHITextureRef swapchain_texture = swapchain_->get_new_frame(nullptr, resource.start_semaphore);
-    RHICommandContextRef command = resource.command;
-    
-    Extent2D extent = swapchain_->get_extent();
-    
-    // Use cached render pass and views instead of re-creating them every frame
-    uint32_t current_buffer_index = swapchain_->get_current_frame_index();
-    RHITextureViewRef back_buffer_view = swapchain_buffer_views_[current_buffer_index];
-    RHIRenderPassRef render_pass = swapchain_render_passes_[current_buffer_index];
-    
-    command->begin_command();
-    {
-        PROFILE_SCOPE("RenderSystem_SceneRender");
-        if (render_pass) {
-            command->begin_render_pass(render_pass);
-            
-            // Render all mesh batches (bunny, etc.)
-            {
-                PROFILE_SCOPE("RenderSystem_MeshBatches");
-                mesh_manager_->render_batches(command, back_buffer_view, extent);
-            }
-            
-            //####TODO####: Other render passes
-            // for(auto& pass : passes_) { if(pass) pass->build(...); }
-            
-            // Render depth buffer visualization for ImGui display
-            if (depth_visualize_initialized_ && depth_visualize_pass_ && depth_visualize_texture_view_) {
-                PROFILE_SCOPE("RenderSystem_DepthVisualize");
-                // Get camera for near/far planes
-                CameraComponent* camera = packet.active_camera;
-                if (camera) {
-                    Extent2D viz_extent = { 
-                        depth_visualize_texture_->get_info().extent.width, 
-                        depth_visualize_texture_->get_info().extent.height 
-                    };
-                    depth_visualize_pass_->draw(
-                        command, 
-                        depth_texture_, 
-                        depth_visualize_texture_view_, 
-                        viz_extent,
-                        camera->get_near(),
-                        camera->get_far()
-                    );
-                }
-            }
-            
-            command->end_render_pass();
-        }
-        
-        // Render ImGui and Gizmo on top of the scene
-        if (backend_ && show_ui_) {
-            backend_->imgui_new_frame();
-            
-            // Begin ImGuizmo frame (must be called after ImGui::NewFrame)
-            ImGuizmo::BeginFrame();
-            
-            // Build UI windows FIRST (so they get input priority)
-            // Scene Hierarchy Window
-            draw_scene_hierarchy(packet.active_scene);
-            
-            // Inspector Window for selected entity
-            draw_inspector_panel();
-            
-            // Buffer Debug Window (only if enabled)
-            if (show_buffer_debug_) {
-                draw_buffer_debug();
-            }
-            
-            ImGui::Begin("Renderer Debug", &show_ui_);
-            
-            // Wireframe toggle
-            if (ImGui::Checkbox("Wireframe", &wireframe_mode_)) {
-                if (mesh_manager_) {
-                    mesh_manager_->set_wireframe(wireframe_mode_);
-                }
-            }
-            
-            // Buffer Debug toggle
-            ImGui::Checkbox("Show Buffer Debug", &show_buffer_debug_);
-            
-            // Gizmo controls
-            if (gizmo_manager_) {
-                gizmo_manager_->draw_controls();
-            }
-            
-            // Frame info
-            ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 
-                        1000.0f / ImGui::GetIO().Framerate, 
-                        ImGui::GetIO().Framerate);
-            
-            // Profiler toggle
-            ImGui::Separator();
-            if (ImGui::Button("Toggle Profiler")) {
-                ProfilerWidget::toggle_visibility();
-            }
-            
-            ImGui::End();
-            
-            // Draw Profiler Window
-            if (ProfilerWidget::is_visible()) {
-                ProfilerWidget::draw_window();
-            }
-            
-            // Draw gizmo LAST (on top of everything)
-            // Use a fullscreen transparent window for gizmo rendering to ensure correct projection
-            if (gizmo_manager_ && selected_entity_ && packet.active_camera) {
-                ImGuiIO& io = ImGui::GetIO();
-                
-                ImGui::SetNextWindowPos(ImVec2(0, 0));
-                ImGui::SetNextWindowSize(io.DisplaySize);
-                ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-                ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
-                
-                ImGui::Begin("GizmoViewport", nullptr, 
-                    ImGuiWindowFlags_NoTitleBar | 
-                    ImGuiWindowFlags_NoResize | 
-                    ImGuiWindowFlags_NoScrollbar |
-                    ImGuiWindowFlags_NoNavFocus |
-                    ImGuiWindowFlags_NoMove |
-                    ImGuiWindowFlags_NoInputs);
-                
-                // Draw main transform gizmo
-                ImVec2 window_pos = ImGui::GetWindowPos();
-                ImVec2 window_size = ImGui::GetWindowSize();
-                gizmo_manager_->draw_gizmo(packet.active_camera, selected_entity_, 
-                                           window_pos, window_size);
-                
-                // Draw light gizmo for selected entity if it's a light
-                if (packet.active_camera) {
-                    draw_light_gizmo(packet.active_camera, selected_entity_, 
-                                    Extent2D{static_cast<uint32_t>(io.DisplaySize.x), 
-                                            static_cast<uint32_t>(io.DisplaySize.y)});
-                }
-                
-                ImGui::End();
-                ImGui::PopStyleColor();
-                ImGui::PopStyleVar();
-            }
-        }
-        
-        command->end_render_pass();
-    }
-    command->end_command();
-    
-    command->execute(resource.fence, resource.start_semaphore, resource.finish_semaphore);
-    
-    // Render ImGui after scene command execution but BEFORE presentation
-    // This allows ImGui to draw directly onto the backbuffer before it's flipped
-    if (backend_ && show_ui_) {
-        backend_->imgui_render();
-    }
+	prepass_depth_texture_ = backend_->create_texture(depth_info);
 
-    swapchain_->present(resource.finish_semaphore);
-    
-    // Tick backend for resource garbage collection
-    if (backend_) {
-        backend_->tick();
-    }
-    
-    return true;
+	if (prepass_depth_texture_) {
+		RHITextureViewInfo depth_view_info = {};
+		depth_view_info.texture = prepass_depth_texture_;
+		depth_view_info.format = DEPTH_FORMAT;
+		depth_view_info.view_type = VIEW_TYPE_2D;
+		depth_view_info.subresource.aspect = TEXTURE_ASPECT_DEPTH;
+		depth_view_info.subresource.level_count = 1;
+		depth_view_info.subresource.layer_count = 1;
+
+		prepass_depth_texture_view_ = backend_->create_texture_view(depth_view_info);
+		INFO(LogRenderSystem, "Depth prepass resources created");
+	} else {
+		WARN(LogRenderSystem, "Failed to create depth prepass texture");
+		prepass_enabled_ = false;
+	}
+}
+
+void RenderSystem::build_and_execute_rdg(uint32_t frame_index, const RenderPacket &packet) {
+	// Create command list from command context
+	CommandListInfo cmd_info;
+	cmd_info.pool = pool_;
+	cmd_info.context = per_frame_common_resources_[frame_index].command;
+	cmd_info.bypass = true;
+	auto command_list = std::make_shared<RHICommandList>(cmd_info);
+
+	// Create RDG builder
+	RDGBuilder rdg_builder(command_list);
+
+	// Get current back buffer
+	uint32_t current_buffer_index = swapchain_->get_current_frame_index();
+	RHITextureRef back_buffer = swapchain_->get_texture(current_buffer_index);
+
+	if (!back_buffer) {
+		ERR(LogRenderSystem, "No back buffer available for RDG");
+		return;
+	}
+
+	Extent2D extent = swapchain_->get_extent();
+
+	// Import back buffer as RDG texture
+	RDGTextureHandle color_target = rdg_builder.create_texture("BackBuffer")
+											.import(back_buffer, RESOURCE_STATE_COLOR_ATTACHMENT)
+											.finish();
+
+	// Import prepass depth texture
+	RDGTextureHandle depth_target = rdg_builder.create_texture("DepthPrepass")
+											.import(prepass_depth_texture_, RESOURCE_STATE_DEPTH_STENCIL_ATTACHMENT)
+											.finish();
+
+	// Collect draw batches
+	std::vector<render::DrawBatch> batches;
+	mesh_manager_->collect_draw_batches(batches);
+
+	if (batches.empty()) {
+		// No geometry to render, just clear the screen
+		rdg_builder.create_render_pass("ClearPass")
+				.color(0, color_target, ATTACHMENT_LOAD_OP_CLEAR, ATTACHMENT_STORE_OP_STORE,
+						Color4{ 0.1f, 0.2f, 0.4f, 1.0f })
+				.execute([extent](RDGPassContext context) {
+					context.command->set_viewport({ 0, 0 }, { extent.width, extent.height });
+					context.command->set_scissor({ 0, 0 }, { extent.width, extent.height });
+				})
+				.finish();
+
+		rdg_builder.execute();
+		return;
+	}
+
+	// Get camera data
+	CameraComponent *camera = packet.active_camera;
+	if (!camera && mesh_manager_) {
+		camera = mesh_manager_->get_active_camera();
+	}
+
+	if (!camera) {
+		WARN(LogRenderSystem, "No active camera for RDG rendering");
+		rdg_builder.execute();
+		return;
+	}
+
+	// Get light data
+	Vec3 light_dir = Vec3(0.0f, -1.0f, 0.0f);
+	Vec3 light_color = Vec3(1.0f, 1.0f, 1.0f);
+	float light_intensity = 1.0f;
+
+	if (packet.active_scene) {
+		for (auto &entity : packet.active_scene->entities_) {
+			if (!entity) {
+				continue;
+			}
+			auto *light = entity->get_component<DirectionalLightComponent>();
+			if (light && light->enable()) {
+				auto *transform = entity->get_component<TransformComponent>();
+				if (transform) {
+					light_dir = -transform->transform.front();
+				}
+				light_color = light->get_color();
+				light_intensity = light->get_intensity();
+				break;
+			}
+		}
+	}
+
+	// Execute depth prepass first (if enabled)
+	if (prepass_enabled_ && depth_prepass_ && prepass_depth_texture_) {
+		PROFILE_SCOPE("RenderSystem_DepthPrepass");
+
+		depth_prepass_->set_per_frame_data(
+				camera->get_view_matrix(),
+				camera->get_projection_matrix());
+
+		depth_prepass_->build(rdg_builder, depth_target, batches);
+	}
+
+	// Build forward passes using the mesh manager
+	{
+		PROFILE_SCOPE("RenderSystem_ForwardPasses");
+		mesh_manager_->build_rdg(rdg_builder, color_target, depth_target);
+	}
+
+	// Capture RDG info for visualization
+	capture_rdg_info(rdg_builder);
+
+	// Execute the RDG
+	rdg_builder.execute();
+}
+
+void RenderSystem::capture_rdg_info(RDGBuilder &builder) {
+	std::lock_guard<std::mutex> lock(rdg_info_mutex_);
+
+	last_rdg_nodes_.clear();
+	last_rdg_edges_.clear();
+	rdg_graph_layout_dirty_ = true;
+
+	// Helper map to track which resources we've added
+	std::unordered_map<uint32_t, size_t> node_index_map;
+
+	const auto &passes = builder.get_passes();
+
+	// First pass: collect all pass nodes
+	for (const auto &pass : passes) {
+		if (!pass) {
+			continue;
+		}
+
+		RDGNodeInfo node;
+		node.name = pass->name();
+		node.id = pass->ID();
+		node.is_pass = true;
+		node.x = node.y = 0; // Will be calculated during layout
+
+		// Determine pass type
+		switch (pass->node_type()) {
+			case RDG_PASS_NODE_TYPE_RENDER:
+				node.type = "Render";
+				break;
+			case RDG_PASS_NODE_TYPE_COMPUTE:
+				node.type = "Compute";
+				break;
+			case RDG_PASS_NODE_TYPE_RAY_TRACING:
+				node.type = "RayTracing";
+				break;
+			case RDG_PASS_NODE_TYPE_PRESENT:
+				node.type = "Present";
+				break;
+			case RDG_PASS_NODE_TYPE_COPY:
+				node.type = "Copy";
+				break;
+			default:
+				node.type = "Unknown";
+				break;
+		}
+
+		node_index_map[node.id] = last_rdg_nodes_.size();
+		last_rdg_nodes_.push_back(std::move(node));
+	}
+
+	// Second pass: collect resources and edges
+	for (const auto &pass : passes) {
+		if (!pass) {
+			continue;
+		}
+
+		size_t pass_idx = node_index_map[pass->ID()];
+
+		// Collect texture inputs/outputs and create edges
+		pass->for_each_texture([&](RDGTextureEdgeRef edge, RDGTextureNodeRef texture) {
+			if (!texture) {
+				return;
+			}
+
+			uint32_t tex_id = texture->ID();
+			std::string res_name = texture->name();
+
+			// Add resource node if not exists
+			if (node_index_map.find(tex_id) == node_index_map.end()) {
+				RDGNodeInfo res_node;
+				res_node.name = res_name;
+				res_node.id = tex_id;
+				res_node.is_pass = false;
+				res_node.type = "Texture";
+				res_node.x = res_node.y = 0;
+				node_index_map[tex_id] = last_rdg_nodes_.size();
+				last_rdg_nodes_.push_back(std::move(res_node));
+			}
+
+			size_t tex_idx = node_index_map[tex_id];
+
+			if (edge->as_color || edge->as_depth_stencil || edge->as_output_read || edge->as_output_read_write) {
+				// Pass writes to resource: Pass -> Resource
+				last_rdg_nodes_[pass_idx].outputs.push_back(res_name);
+				last_rdg_nodes_[tex_idx].inputs.push_back(pass->name());
+				last_rdg_edges_.push_back({ pass->ID(), tex_id, edge->as_depth_stencil ? "depth" : "" });
+			} else {
+				// Pass reads from resource: Resource -> Pass
+				last_rdg_nodes_[pass_idx].inputs.push_back(res_name);
+				last_rdg_nodes_[tex_idx].outputs.push_back(pass->name());
+				last_rdg_edges_.push_back({ tex_id, pass->ID(), "" });
+			}
+		});
+
+		// Collect buffer inputs/outputs
+		pass->for_each_buffer([&](RDGBufferEdgeRef edge, RDGBufferNodeRef buffer) {
+			if (!buffer) {
+				return;
+			}
+
+			uint32_t buf_id = buffer->ID();
+			std::string res_name = buffer->name();
+
+			// Add resource node if not exists
+			if (node_index_map.find(buf_id) == node_index_map.end()) {
+				RDGNodeInfo res_node;
+				res_node.name = res_name;
+				res_node.id = buf_id;
+				res_node.is_pass = false;
+				res_node.type = "Buffer";
+				res_node.x = res_node.y = 0;
+				node_index_map[buf_id] = last_rdg_nodes_.size();
+				last_rdg_nodes_.push_back(std::move(res_node));
+			}
+
+			size_t buf_idx = node_index_map[buf_id];
+
+			if (edge->as_output_read || edge->as_output_read_write) {
+				// Pass writes to buffer
+				last_rdg_nodes_[pass_idx].outputs.push_back(res_name + " (Buf)");
+				last_rdg_nodes_[buf_idx].inputs.push_back(pass->name());
+				last_rdg_edges_.push_back({ pass->ID(), buf_id, "buf" });
+			} else {
+				// Pass reads from buffer
+				last_rdg_nodes_[pass_idx].inputs.push_back(res_name + " (Buf)");
+				last_rdg_nodes_[buf_idx].outputs.push_back(pass->name());
+				last_rdg_edges_.push_back({ buf_id, pass->ID(), "buf" });
+			}
+		});
+	}
+}
+
+bool RenderSystem::tick(const RenderPacket &packet) {
+	PROFILE_FUNCTION();
+
+	// Note: Window close check is now handled by Window::process_messages() in EngineContext
+
+	// Use frame_index from packet for multi-threaded safety
+	uint32_t frame_index = packet.frame_index;
+
+	// Update active camera in mesh manager if provided
+	if (packet.active_camera) {
+		mesh_manager_->set_active_camera(packet.active_camera);
+	}
+
+	// Tick managers (collect render data)
+	{
+		PROFILE_SCOPE("RenderSystem_Managers");
+		mesh_manager_->tick();
+		light_manager_->tick(frame_index);
+		update_global_setting();
+	}
+
+	// Execute rendering using frame_index from packet for thread safety
+	auto &resource = per_frame_common_resources_[frame_index];
+	resource.fence->wait();
+
+	RHITextureRef swapchain_texture = swapchain_->get_new_frame(nullptr, resource.start_semaphore);
+	RHICommandContextRef command = resource.command;
+
+	Extent2D extent = swapchain_->get_extent();
+
+	command->begin_command();
+	{
+		PROFILE_SCOPE("RenderSystem_SceneRender");
+
+		// Use RDG-based rendering if depth prepass is enabled and initialized
+		if (prepass_enabled_ && depth_prepass_ && prepass_depth_texture_) {
+			build_and_execute_rdg(frame_index, packet);
+		} else {
+			// Fallback to traditional rendering
+			uint32_t current_buffer_index = swapchain_->get_current_frame_index();
+			RHITextureViewRef back_buffer_view = swapchain_buffer_views_[current_buffer_index];
+			RHIRenderPassRef render_pass = swapchain_render_passes_[current_buffer_index];
+
+			if (render_pass) {
+				command->begin_render_pass(render_pass);
+
+				{
+					PROFILE_SCOPE("RenderSystem_MeshBatches");
+					mesh_manager_->render_batches(command, back_buffer_view, extent);
+				}
+
+				command->end_render_pass();
+			}
+		}
+
+		// Depth visualization (works with both rendering paths)
+		if (depth_visualize_initialized_ && depth_visualize_pass_ && depth_visualize_texture_view_) {
+			PROFILE_SCOPE("RenderSystem_DepthVisualize");
+			CameraComponent *camera = packet.active_camera;
+			if (!camera && mesh_manager_) {
+				camera = mesh_manager_->get_active_camera();
+			}
+			if (camera) {
+				// Use prepass depth if available, otherwise use main depth
+				RHITextureRef depth_to_visualize = prepass_enabled_ && prepass_depth_texture_
+						? prepass_depth_texture_
+						: depth_texture_;
+
+				Extent2D viz_extent = {
+					depth_visualize_texture_->get_info().extent.width,
+					depth_visualize_texture_->get_info().extent.height
+				};
+				depth_visualize_pass_->draw(
+						command,
+						depth_to_visualize,
+						depth_visualize_texture_view_,
+						viz_extent,
+						camera->get_near(),
+						camera->get_far());
+			}
+		}
+
+		if (backend_ && show_ui_) {
+			backend_->imgui_new_frame();
+
+			ImGuizmo::BeginFrame();
+
+			draw_scene_hierarchy(packet.active_scene);
+
+			draw_inspector_panel();
+
+			if (show_buffer_debug_) {
+				draw_buffer_debug();
+			}
+
+			draw_rdg_visualizer();
+
+			ImGui::Begin("Renderer Debug", &show_ui_);
+
+			if (ImGui::Checkbox("Wireframe", &wireframe_mode_)) {
+				if (mesh_manager_) {
+					mesh_manager_->set_wireframe(wireframe_mode_);
+				}
+			}
+
+			ImGui::Checkbox("Show Buffer Debug", &show_buffer_debug_);
+			ImGui::Checkbox("Show RDG Visualizer", &show_rdg_visualizer_);
+
+			if (gizmo_manager_) {
+				gizmo_manager_->draw_controls();
+			}
+
+			ImGui::Text("Application average %.3f ms/frame (%.1f FPS)",
+					1000.0f / ImGui::GetIO().Framerate,
+					ImGui::GetIO().Framerate);
+
+			ImGui::Separator();
+			ImGui::Separator();
+			if (ImGui::Button("Toggle Profiler")) {
+				ProfilerWidget::toggle_visibility();
+			}
+
+			ImGui::End();
+
+			if (ProfilerWidget::is_visible()) {
+				ProfilerWidget::draw_window();
+			}
+
+			// Draw gizmo on top of everything with fullscreen transparent window
+			if (gizmo_manager_ && selected_entity_ && packet.active_camera) {
+				ImGuiIO &io = ImGui::GetIO();
+
+				ImGui::SetNextWindowPos(ImVec2(0, 0));
+				ImGui::SetNextWindowSize(io.DisplaySize);
+				ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+				ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
+
+				ImGui::Begin("GizmoViewport", nullptr,
+						ImGuiWindowFlags_NoTitleBar |
+								ImGuiWindowFlags_NoResize |
+								ImGuiWindowFlags_NoScrollbar |
+								ImGuiWindowFlags_NoNavFocus |
+								ImGuiWindowFlags_NoMove |
+								ImGuiWindowFlags_NoInputs);
+
+				ImVec2 window_pos = ImGui::GetWindowPos();
+				ImVec2 window_size = ImGui::GetWindowSize();
+				gizmo_manager_->draw_gizmo(packet.active_camera, selected_entity_,
+						window_pos, window_size);
+
+				if (packet.active_camera) {
+					draw_light_gizmo(packet.active_camera, selected_entity_,
+							Extent2D{ static_cast<uint32_t>(io.DisplaySize.x),
+									static_cast<uint32_t>(io.DisplaySize.y) });
+				}
+
+				ImGui::End();
+				ImGui::PopStyleColor();
+				ImGui::PopStyleVar();
+			}
+		}
+
+		command->end_render_pass();
+	}
+	command->end_command();
+
+	command->execute(resource.fence, resource.start_semaphore, resource.finish_semaphore);
+
+	if (backend_ && show_ui_) {
+		backend_->imgui_render();
+	}
+
+	swapchain_->present(resource.finish_semaphore);
+
+	if (backend_) {
+		backend_->tick();
+	}
+
+	return true;
 }
 
 void RenderSystem::destroy() {
-    // Shutdown ImGui
-    if (backend_) {
-        backend_->imgui_shutdown();
-    }
-    
-    // Cleanup managers first (they may hold RHI resources)
-    if (gizmo_manager_) {
-        gizmo_manager_->shutdown();
-        gizmo_manager_.reset();
-    }
-    if (mesh_manager_) {
-        mesh_manager_->destroy();
-        mesh_manager_.reset();
-    }
-    if (light_manager_) {
-        light_manager_->destroy();
-        light_manager_.reset();
-    }
-    
-    // Clear per-frame resources
-    for (auto& resource : per_frame_common_resources_) {
-        resource.command.reset();
-        resource.start_semaphore.reset();
-        resource.finish_semaphore.reset();
-        resource.fence.reset();
-    }
-    
-    // Cleanup RHI resources in reverse order of creation
-    // Important: swapchain must be destroyed before pool/surface
-    
-    // Clear cached swapchain buffer views first
-    for (auto& view : swapchain_buffer_views_) {
-        view.reset();
-    }
-    
-    depth_texture_view_.reset();
-    depth_texture_.reset();
-    pool_.reset();
-    swapchain_.reset();
-    queue_.reset();
-    surface_.reset();
-    
-    // Destroy backend last (after all RHI resources are released)
-    if (backend_) {
-        backend_->destroy();
-        backend_.reset();
-        // Important: Reset the static backend instance so next init() creates a fresh one
-        RHIBackend::reset_backend();
-    }
+	// Shutdown ImGui
+	if (backend_) {
+		backend_->imgui_shutdown();
+	}
+
+	if (gizmo_manager_) {
+		gizmo_manager_->shutdown();
+		gizmo_manager_.reset();
+	}
+	if (mesh_manager_) {
+		mesh_manager_->destroy();
+		mesh_manager_.reset();
+	}
+
+	// Cleanup depth prepass
+	if (depth_prepass_) {
+		depth_prepass_.reset();
+	}
+	prepass_depth_texture_view_.reset();
+	prepass_depth_texture_.reset();
+	if (light_manager_) {
+		light_manager_->destroy();
+		light_manager_.reset();
+	}
+
+	// Clear per-frame resources
+	for (auto &resource : per_frame_common_resources_) {
+		resource.command.reset();
+		resource.start_semaphore.reset();
+		resource.finish_semaphore.reset();
+		resource.fence.reset();
+	}
+
+	for (auto &view : swapchain_buffer_views_) {
+		view.reset();
+	}
+
+	depth_texture_view_.reset();
+	depth_texture_.reset();
+	pool_.reset();
+	swapchain_.reset();
+	queue_.reset();
+	surface_.reset();
+
+	if (backend_) {
+		backend_->destroy();
+		backend_.reset();
+		// Important: Reset the static backend instance so next init() creates a fresh one
+		RHIBackend::reset_backend();
+	}
 }
 
 void RenderSystem::update_global_setting() {
-    /* //####TODO####
-    global_setting_.totalTicks = EngineContext::get_current_tick();
-    global_setting_.totalTickTime += EngineContext::get_delta_time();
-    // ...
-    EngineContext::render_resource()->set_render_global_setting(global_setting_);
-    */
+	/* //####TODO####
+	global_setting_.totalTicks = EngineContext::get_current_tick();
+	global_setting_.totalTickTime += EngineContext::get_delta_time();
+	EngineContext::render_resource()->set_render_global_setting(global_setting_);
+	*/
 }
 
-// render_ui_begin is now integrated into tick()
 void RenderSystem::render_ui_begin() {
-    // UI building is done directly in tick() after imgui_new_frame()
+	// UI building is done directly in tick() after imgui_new_frame()
 }
 
-// render_ui is now integrated into tick()
 void RenderSystem::render_ui(RHICommandContextRef command) {
-    (void)command;
+	(void)command;
 }
 
-// Draw Scene Hierarchy panel
-void RenderSystem::draw_scene_hierarchy(Scene* scene) {
-    ImGuiIO& io = ImGui::GetIO();
-    float hierarchy_width = 250.0f;
-    
-    // Left side, fill top to bottom
-    ImGui::SetNextWindowPos(ImVec2(0, 0));
-    ImGui::SetNextWindowSize(ImVec2(hierarchy_width, io.DisplaySize.y));
-    
-    ImGui::Begin("Scene Hierarchy", nullptr, 
-        ImGuiWindowFlags_NoMove | 
-        ImGuiWindowFlags_NoResize);
-    
-    if (scene) {
-        for (const auto& entity : scene->entities_) {
-            if (entity) {
-                draw_entity_node(entity.get());
-            }
-        }
-    }
-    
-    ImGui::End();
+void RenderSystem::draw_scene_hierarchy(Scene *scene) {
+	ImGuiIO &io = ImGui::GetIO();
+	float hierarchy_width = 250.0f;
+
+	// Left side, fill top to bottom
+	ImGui::SetNextWindowPos(ImVec2(0, 0));
+	ImGui::SetNextWindowSize(ImVec2(hierarchy_width, io.DisplaySize.y));
+
+	ImGui::Begin("Scene Hierarchy", nullptr,
+			ImGuiWindowFlags_NoMove |
+					ImGuiWindowFlags_NoResize);
+
+	if (scene) {
+		for (const auto &entity : scene->entities_) {
+			if (entity) {
+				draw_entity_node(entity.get());
+			}
+		}
+	}
+
+	ImGui::End();
 }
 
-// Recursively draw entity tree node
-void RenderSystem::draw_entity_node(Entity* entity) {
-    if (!entity) return;
-    
-    // Get entity display info
-    std::string icon = get_entity_icon(entity);
-    std::string name = get_entity_name(entity);
-    std::string label = icon + " " + name + "##" + std::to_string(reinterpret_cast<uintptr_t>(entity));
-    
-    // Check if this entity is selected
-    bool is_selected = (selected_entity_ == entity);
-    
-    // Tree node flags
-    ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick;
-    if (is_selected) {
-        flags |= ImGuiTreeNodeFlags_Selected;
-    }
-    
-    // Check if entity has children (for now, assume no children hierarchy)
-    bool has_children = false;  // Simplified for now
-    if (!has_children) {
-        flags |= ImGuiTreeNodeFlags_Leaf;
-    }
-    
-    bool node_open = ImGui::TreeNodeEx(label.c_str(), flags);
-    
-    // Handle selection click
-    if (ImGui::IsItemClicked()) {
-        selected_entity_ = entity;
-        INFO(LogRenderSystem, "Selected entity: {}", name);
-    }
-    
-    if (node_open) {
-        // Recursively draw children (when hierarchy is implemented)
-        // for (auto& child : entity->get_children()) { draw_entity_node(child); }
-        ImGui::TreePop();
-    }
+void RenderSystem::draw_entity_node(Entity *entity) {
+	if (!entity) {
+		return;
+	}
+
+	// Get entity display info
+	std::string icon = get_entity_icon(entity);
+	std::string name = get_entity_name(entity);
+	std::string label = icon + " " + name + "##" + std::to_string(reinterpret_cast<uintptr_t>(entity));
+
+	// Check if this entity is selected
+	bool is_selected = (selected_entity_ == entity);
+
+	// Tree node flags
+	ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick;
+	if (is_selected) {
+		flags |= ImGuiTreeNodeFlags_Selected;
+	}
+
+	// Check if entity has children (for now, assume no children hierarchy)
+	bool has_children = false; // Simplified for now
+	if (!has_children) {
+		flags |= ImGuiTreeNodeFlags_Leaf;
+	}
+
+	bool node_open = ImGui::TreeNodeEx(label.c_str(), flags);
+
+	// Handle selection click
+	if (ImGui::IsItemClicked()) {
+		selected_entity_ = entity;
+		INFO(LogRenderSystem, "Selected entity: {}", name);
+	}
+
+	if (node_open) {
+		// Recursively draw children (when hierarchy is implemented)
+		// for (auto& child : entity->get_children()) { draw_entity_node(child); }
+		ImGui::TreePop();
+	}
 }
 
 // Draw Inspector panel for selected entity
 void RenderSystem::draw_inspector_panel() {
-    ImGuiIO& io = ImGui::GetIO();
-    float inspector_width = 300.0f;
-    
-    // Right side, fill top to bottom
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - inspector_width, 0));
-    ImGui::SetNextWindowSize(ImVec2(inspector_width, io.DisplaySize.y));
-    
-    ImGui::Begin("Inspector", nullptr, 
-        ImGuiWindowFlags_NoMove | 
-        ImGuiWindowFlags_NoResize);
-    
-    if (selected_entity_) {
-        // Entity header
-        std::string icon = get_entity_icon(selected_entity_);
-        std::string name = get_entity_name(selected_entity_);
-        ImGui::Text("%s %s", icon.c_str(), name.c_str());
-        ImGui::Separator();
-        
-        // Draw all components using reflection
-        auto& inspector = ReflectInspector::get();
-        
-        for (const auto& comp_ptr : selected_entity_->get_components()) {
-            if (!comp_ptr) continue;
-            
-            Component* comp = comp_ptr.get();
-            std::string class_name(comp->get_component_type_name());
-            
-            // Use CollapsingHeader for each component
-            if (ImGui::CollapsingHeader(class_name.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
-                inspector.draw_component(comp);
-            }
-        }
-    } else {
-        ImGui::Text("No entity selected");
-        ImGui::Text("Click an entity in Scene Hierarchy to inspect");
-    }
-    
-    ImGui::End();
+	ImGuiIO &io = ImGui::GetIO();
+	float inspector_width = 300.0f;
+
+	// Right side, fill top to bottom
+	ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - inspector_width, 0));
+	ImGui::SetNextWindowSize(ImVec2(inspector_width, io.DisplaySize.y));
+
+	ImGui::Begin("Inspector", nullptr,
+			ImGuiWindowFlags_NoMove |
+					ImGuiWindowFlags_NoResize);
+
+	if (selected_entity_) {
+		// Entity header
+		std::string icon = get_entity_icon(selected_entity_);
+		std::string name = get_entity_name(selected_entity_);
+		ImGui::Text("%s %s", icon.c_str(), name.c_str());
+		ImGui::Separator();
+
+		// Draw all components using reflection
+		auto &inspector = ReflectInspector::get();
+
+		for (const auto &comp_ptr : selected_entity_->get_components()) {
+			if (!comp_ptr) {
+				continue;
+			}
+
+			Component *comp = comp_ptr.get();
+			std::string class_name(comp->get_component_type_name());
+
+			// Use CollapsingHeader for each component
+			if (ImGui::CollapsingHeader(class_name.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+				inspector.draw_component(comp);
+			}
+		}
+	} else {
+		ImGui::Text("No entity selected");
+		ImGui::Text("Click an entity in Scene Hierarchy to inspect");
+	}
+
+	ImGui::End();
 }
 
 // Draw Buffer Debug panel
 void RenderSystem::draw_buffer_debug() {
-    if (!show_ui_ || !show_buffer_debug_) return;
+	if (!show_ui_ || !show_buffer_debug_) {
+		return;
+	}
 
-    // Always set position and size to ensure window is visible at center-top
-    float window_width = (float)WINDOW_EXTENT.width * 0.5f;
-    float window_height = (float)WINDOW_EXTENT.height * 0.25f;
-    float pos_x = ((float)WINDOW_EXTENT.width - window_width) * 0.5f;
-    float pos_y = 0.0f;
+	// Always set position and size to ensure window is visible at center-top
+	float window_width = (float)WINDOW_EXTENT.width * 0.5f;
+	float window_height = (float)WINDOW_EXTENT.height * 0.25f;
+	float pos_x = ((float)WINDOW_EXTENT.width - window_width) * 0.5f;
+	float pos_y = 0.0f;
 
-    ImGui::SetNextWindowPos(ImVec2(pos_x, pos_y), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(window_width, window_height), ImGuiCond_Always);
+	ImGui::SetNextWindowPos(ImVec2(pos_x, pos_y), ImGuiCond_Always);
+	ImGui::SetNextWindowSize(ImVec2(window_width, window_height), ImGuiCond_Always);
 
-    // Force window to be open
-    bool open = true;
-    ImGui::Begin("Buffer Debug", &open);
+	// Force window to be open
+	bool open = true;
+	ImGui::Begin("Buffer Debug", &open);
 
-    // Depth Buffer
-    ImGui::Text("Depth Buffer:");
-    if (depth_texture_) {
-        const auto& info = depth_texture_->get_info();
-        ImGui::Text("  Texture: valid");
-        ImGui::Text("  Type flags: 0x%X (DEPTH=%s, TEXTURE=%s)", 
-            info.type,
-            (info.type & RESOURCE_TYPE_DEPTH_STENCIL) ? "Y" : "N",
-            (info.type & RESOURCE_TYPE_TEXTURE) ? "Y" : "N");
-    } else {
-        ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "  Texture: NULL");
-    }
-    
-    // Show depth buffer visualization (converted to color)
-    if (depth_visualize_initialized_ && depth_visualize_texture_view_) {
-        void* tex_id = depth_visualize_texture_view_->raw_handle();
-        ImGui::Text("  Visualized Depth:");
-        if (tex_id) {
-            float display_width = 280.0f;
-            float display_height = display_width * ((float)WINDOW_EXTENT.height / (float)WINDOW_EXTENT.width);
-            ImGui::Image(tex_id, ImVec2(display_width, display_height));
-        } else {
-            ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "  Error: SRV is null");
-        }
-    } else {
-        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "  Depth visualize not initialized");
-        
-        // Fallback: try to show raw depth view if available
-        if (depth_texture_view_) {
-            void* tex_id = depth_texture_view_->raw_handle();
-            ImGui::Text("  Raw depth view (may not display correctly):");
-            if (tex_id) {
-                float display_width = 280.0f;
-                float display_height = display_width * ((float)WINDOW_EXTENT.height / (float)WINDOW_EXTENT.width);
-                ImGui::Image(tex_id, ImVec2(display_width, display_height));
-            }
-        }
-    }
-    
-    ImGui::Separator();
-    
-    // Back Buffer info
-    ImGui::Text("Back Buffer:");
-    if (swapchain_) {
-        auto tex = swapchain_->get_texture(swapchain_->get_current_frame_index());
-        ImGui::Text("  Current frame: %d", swapchain_->get_current_frame_index());
-        ImGui::Text("  Texture valid: %s", tex ? "Yes" : "No");
-    } else {
-        ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "  Swapchain not available");
-    }
+	// Depth Buffer
+	ImGui::Text("Depth Buffer:");
+	if (depth_texture_) {
+		const auto &info = depth_texture_->get_info();
+		ImGui::Text("  Texture: valid");
+		ImGui::Text("  Type flags: 0x%X (DEPTH=%s, TEXTURE=%s)",
+				info.type,
+				(info.type & RESOURCE_TYPE_DEPTH_STENCIL) ? "Y" : "N",
+				(info.type & RESOURCE_TYPE_TEXTURE) ? "Y" : "N");
+	} else {
+		ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "  Texture: NULL");
+	}
 
-    ImGui::End();
+	// Show depth buffer visualization (converted to color)
+	if (depth_visualize_initialized_ && depth_visualize_texture_view_) {
+		void *tex_id = depth_visualize_texture_view_->raw_handle();
+		ImGui::Text("  Visualized Depth:");
+		if (tex_id) {
+			float display_width = 280.0f;
+			float display_height = display_width * ((float)WINDOW_EXTENT.height / (float)WINDOW_EXTENT.width);
+			ImGui::Image(tex_id, ImVec2(display_width, display_height));
+		} else {
+			ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "  Error: SRV is null");
+		}
+	} else {
+		ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "  Depth visualize not initialized");
+
+		// Fallback: try to show raw depth view if available
+		if (depth_texture_view_) {
+			void *tex_id = depth_texture_view_->raw_handle();
+			ImGui::Text("  Raw depth view (may not display correctly):");
+			if (tex_id) {
+				float display_width = 280.0f;
+				float display_height = display_width * ((float)WINDOW_EXTENT.height / (float)WINDOW_EXTENT.width);
+				ImGui::Image(tex_id, ImVec2(display_width, display_height));
+			}
+		}
+	}
+
+	ImGui::Separator();
+
+	// Back Buffer info
+	ImGui::Text("Back Buffer:");
+	if (swapchain_) {
+		auto tex = swapchain_->get_texture(swapchain_->get_current_frame_index());
+		ImGui::Text("  Current frame: %d", swapchain_->get_current_frame_index());
+		ImGui::Text("  Texture valid: %s", tex ? "Yes" : "No");
+	} else {
+		ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "  Swapchain not available");
+	}
+
+	ImGui::End();
+}
+
+// Draw RDG Visualizer panel
+void RenderSystem::draw_rdg_visualizer() {
+	if (!show_rdg_visualizer_) {
+		return;
+	}
+
+	ImGui::Begin("RDG Visualizer", &show_rdg_visualizer_, ImGuiWindowFlags_MenuBar);
+
+	std::lock_guard<std::mutex> lock(rdg_info_mutex_);
+
+	// View mode tabs
+	static int view_mode = 0; // 0 = List, 1 = Graph
+
+	if (ImGui::BeginMenuBar()) {
+		if (ImGui::BeginMenu("View")) {
+			if (ImGui::MenuItem("List View", nullptr, view_mode == 0)) {
+				view_mode = 0;
+			}
+			if (ImGui::MenuItem("Graph View", nullptr, view_mode == 1)) {
+				view_mode = 1;
+			}
+			ImGui::EndMenu();
+		}
+		ImGui::EndMenuBar();
+	}
+
+	if (last_rdg_nodes_.empty()) {
+		ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "No RDG data captured yet.");
+		ImGui::Text("RDG rendering will capture data on next frame.");
+		ImGui::End();
+		return;
+	}
+
+	// Pass type colors
+	auto get_type_color = [](const std::string &type) -> ImVec4 {
+		if (type == "Render") {
+			return ImVec4(0.2f, 0.8f, 0.2f, 1.0f); // Green
+		}
+		if (type == "Compute") {
+			return ImVec4(0.2f, 0.4f, 0.9f, 1.0f); // Blue
+		}
+		if (type == "Copy") {
+			return ImVec4(0.9f, 0.6f, 0.2f, 1.0f); // Orange
+		}
+		if (type == "Present") {
+			return ImVec4(0.9f, 0.2f, 0.2f, 1.0f); // Red
+		}
+		if (type == "RayTracing") {
+			return ImVec4(0.8f, 0.2f, 0.8f, 1.0f); // Purple
+		}
+		if (type == "Texture") {
+			return ImVec4(0.9f, 0.9f, 0.3f, 1.0f); // Yellow
+		}
+		if (type == "Buffer") {
+			return ImVec4(0.5f, 0.8f, 0.9f, 1.0f); // Cyan
+		}
+		return ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+	};
+
+	// Node background colors
+	auto get_node_bg_color = [](const RDGNodeInfo &node) -> ImU32 {
+		if (!node.is_pass) {
+			return IM_COL32(60, 60, 40, 255); // Resource: Dark yellow-ish
+		}
+		if (node.type == "Render") {
+			return IM_COL32(40, 80, 40, 255);
+		}
+		if (node.type == "Compute") {
+			return IM_COL32(40, 60, 100, 255);
+		}
+		if (node.type == "Copy") {
+			return IM_COL32(100, 80, 40, 255);
+		}
+		if (node.type == "Present") {
+			return IM_COL32(100, 40, 40, 255);
+		}
+		if (node.type == "RayTracing") {
+			return IM_COL32(80, 40, 100, 255);
+		}
+		return IM_COL32(60, 60, 60, 255);
+	};
+
+	if (view_mode == 0) {
+		// List View (original)
+		ImGui::Text("Total Passes: %zu",
+				std::count_if(last_rdg_nodes_.begin(), last_rdg_nodes_.end(),
+						[](const auto &n) { return n.is_pass; }));
+		ImGui::Separator();
+
+		for (const auto &node : last_rdg_nodes_) {
+			if (!node.is_pass) {
+				continue; // Only show passes in list view
+			}
+
+			ImVec4 type_color = get_type_color(node.type);
+			std::string header = "[" + node.type + "] " + node.name;
+			ImGui::TextColored(type_color, "%s", header.c_str());
+
+			if (!node.inputs.empty()) {
+				ImGui::Indent();
+				ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Inputs:");
+				ImGui::Indent();
+				for (const auto &input : node.inputs) {
+					ImGui::BulletText("%s", input.c_str());
+				}
+				ImGui::Unindent();
+				ImGui::Unindent();
+			}
+
+			if (!node.outputs.empty()) {
+				ImGui::Indent();
+				ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Outputs:");
+				ImGui::Indent();
+				for (const auto &output : node.outputs) {
+					ImGui::BulletText("%s", output.c_str());
+				}
+				ImGui::Unindent();
+				ImGui::Unindent();
+			}
+
+			ImGui::Spacing();
+		}
+
+		// Legend
+		ImGui::Separator();
+		ImGui::Text("Legend:");
+		ImGui::TextColored(get_type_color("Render"), "Render");
+		ImGui::SameLine();
+		ImGui::TextColored(get_type_color("Compute"), "Compute");
+		ImGui::SameLine();
+		ImGui::TextColored(get_type_color("Copy"), "Copy");
+		ImGui::SameLine();
+		ImGui::TextColored(get_type_color("Present"), "Present");
+	} else {
+		// Graph View
+		ImVec2 canvas_p0 = ImGui::GetCursorScreenPos();
+		ImVec2 canvas_sz = ImGui::GetContentRegionAvail();
+		if (canvas_sz.x < 50.0f) {
+			canvas_sz.x = 50.0f;
+		}
+		if (canvas_sz.y < 50.0f) {
+			canvas_sz.y = 50.0f;
+		}
+		ImVec2 canvas_p1 = ImVec2(canvas_p0.x + canvas_sz.x, canvas_p0.y + canvas_sz.y);
+
+		// Draw graph canvas
+		ImGuiIO &io = ImGui::GetIO();
+		ImDrawList *draw_list = ImGui::GetWindowDrawList();
+
+		// Background
+		draw_list->AddRectFilled(canvas_p0, canvas_p1, IM_COL32(20, 20, 25, 255));
+		draw_list->AddRect(canvas_p0, canvas_p1, IM_COL32(80, 80, 80, 255));
+
+		// Simple layout: Passes in a row at top, resources below
+		if (rdg_graph_layout_dirty_) {
+			float pass_x = 50;
+			float pass_y = 50;
+			float res_x = 50;
+			float res_y = 200;
+
+			for (auto &node : last_rdg_nodes_) {
+				if (node.is_pass) {
+					node.x = pass_x;
+					node.y = pass_y;
+					pass_x += 180;
+				} else {
+					node.x = res_x;
+					node.y = res_y;
+					res_x += 150;
+					if (res_x > 800) {
+						res_x = 50;
+						res_y += 80;
+					}
+				}
+			}
+			rdg_graph_layout_dirty_ = false;
+		}
+
+		// Draw edges first (behind nodes)
+		for (const auto &edge : last_rdg_edges_) {
+			auto from_it = std::find_if(last_rdg_nodes_.begin(), last_rdg_nodes_.end(),
+					[&](const auto &n) { return n.id == edge.from_id; });
+			auto to_it = std::find_if(last_rdg_nodes_.begin(), last_rdg_nodes_.end(),
+					[&](const auto &n) { return n.id == edge.to_id; });
+
+			if (from_it != last_rdg_nodes_.end() && to_it != last_rdg_nodes_.end()) {
+				ImVec2 p1 = ImVec2(canvas_p0.x + from_it->x + 60, canvas_p0.y + from_it->y + 25);
+				ImVec2 p2 = ImVec2(canvas_p0.x + to_it->x + 60, canvas_p0.y + to_it->y);
+
+				// Bezier curve
+				ImVec2 cp1 = ImVec2(p1.x, p1.y + 30);
+				ImVec2 cp2 = ImVec2(p2.x, p2.y - 30);
+
+				ImU32 edge_color = edge.label == "depth" ? IM_COL32(255, 200, 100, 180) : edge.label == "buf" ? IM_COL32(100, 200, 255, 180)
+																											  : IM_COL32(150, 150, 150, 150);
+
+				draw_list->AddBezierCubic(p1, cp1, cp2, p2, edge_color, 2.0f);
+
+				// Arrow head
+				ImVec2 dir = ImVec2(p2.x - cp2.x, p2.y - cp2.y);
+				float len = sqrtf(dir.x * dir.x + dir.y * dir.y);
+				if (len > 0) {
+					dir.x /= len;
+					dir.y /= len;
+					ImVec2 normal = ImVec2(-dir.y, dir.x);
+					ImVec2 arrow_p1 = ImVec2(p2.x - 8 * dir.x - 4 * normal.x, p2.y - 8 * dir.y - 4 * normal.y);
+					ImVec2 arrow_p2 = ImVec2(p2.x - 8 * dir.x + 4 * normal.x, p2.y - 8 * dir.y + 4 * normal.y);
+					draw_list->AddTriangleFilled(p2, arrow_p1, arrow_p2, edge_color);
+				}
+			}
+		}
+
+		// Draw nodes
+		for (const auto &node : last_rdg_nodes_) {
+			ImVec2 node_pos = ImVec2(canvas_p0.x + node.x, canvas_p0.y + node.y);
+			ImVec2 node_size = node.is_pass ? ImVec2(120, 50) : ImVec2(100, 40);
+
+			// Node body
+			ImU32 bg_color = get_node_bg_color(node);
+			draw_list->AddRectFilled(node_pos, ImVec2(node_pos.x + node_size.x, node_pos.y + node_size.y),
+					bg_color, 4.0f);
+			draw_list->AddRect(node_pos, ImVec2(node_pos.x + node_size.x, node_pos.y + node_size.y),
+					IM_COL32(150, 150, 150, 255), 4.0f);
+
+			// Node text
+			ImVec4 text_color = get_type_color(node.type);
+			draw_list->AddText(ImVec2(node_pos.x + 5, node_pos.y + 5),
+					IM_COL32(255, 255, 255, 255), node.name.c_str());
+
+			// Type label
+			std::string type_label = node.is_pass ? node.type : "Res";
+			draw_list->AddText(ImVec2(node_pos.x + 5, node_pos.y + 25),
+					IM_COL32((int)(text_color.x * 255), (int)(text_color.y * 255),
+							(int)(text_color.z * 255), 255),
+					type_label.c_str());
+		}
+
+		// Controls
+		ImGui::SetCursorScreenPos(canvas_p0);
+		ImGui::InvisibleButton("canvas", canvas_sz);
+
+		// Info text
+		ImGui::SetCursorScreenPos(ImVec2(canvas_p0.x + 10, canvas_p0.y + 10));
+		ImGui::Text("Nodes: %zu | Edges: %zu", last_rdg_nodes_.size(), last_rdg_edges_.size());
+
+		// Legend
+		ImGui::SetCursorScreenPos(ImVec2(canvas_p0.x + 10, canvas_p0.y + canvas_sz.y - 30));
+		ImGui::Text("Pass: ");
+		ImGui::SameLine();
+		ImGui::TextColored(get_type_color("Render"), "Render");
+		ImGui::SameLine();
+		ImGui::TextColored(get_type_color("Compute"), "Compute");
+		ImGui::SameLine();
+		ImGui::TextColored(get_type_color("Copy"), "Copy");
+		ImGui::SameLine();
+		ImGui::TextColored(get_type_color("Present"), "Present");
+		ImGui::SameLine();
+		ImGui::Text("| Resource: ");
+		ImGui::SameLine();
+		ImGui::TextColored(get_type_color("Texture"), "Texture");
+		ImGui::SameLine();
+		ImGui::TextColored(get_type_color("Buffer"), "Buffer");
+	}
+
+	ImGui::End();
 }
 
 // Draw light gizmo visualization
-void RenderSystem::draw_light_gizmo(CameraComponent* camera, Entity* entity, const Extent2D& extent) {
-    if (!camera || !entity) return;
-    
-    auto* transform = entity->get_component<TransformComponent>();
-    if (!transform) return;
-    
-    Vec3 position = transform->transform.get_position();
-    
-    // Project 3D position to screen space
-    Mat4 view = camera->get_view_matrix();
-    Mat4 proj = camera->get_projection_matrix();
-    Mat4 view_proj = proj * view;
-    
-    Vec4 pos_clip = view_proj * Vec4(position.x(), position.y(), position.z(), 1.0f);
-    if (pos_clip.w() <= 0) return; // Behind camera
-    
-    Vec3 pos_ndc = pos_clip.head<3>() / pos_clip.w();
-    ImVec2 screen_pos;
-    screen_pos.x = (pos_ndc.x() * 0.5f + 0.5f) * extent.width;
-    screen_pos.y = (1.0f - (pos_ndc.y() * 0.5f + 0.5f)) * extent.height; // Flip Y for screen coords
-    
-    ImDrawList* draw_list = ImGui::GetWindowDrawList();
-    
-    // Draw Directional Light gizmo (sun icon)
-    if (entity->get_component<DirectionalLightComponent>()) {
-        ImU32 color = IM_COL32(255, 255, 0, 255); // Yellow
-        float radius = 15.0f;
-        
-        // Draw circle with rays
-        draw_list->AddCircle(screen_pos, radius, color, 16, 2.0f);
-        // Draw rays
-        for (int i = 0; i < 8; ++i) {
-            float angle = i * 3.14159f / 4.0f;
-            ImVec2 inner(screen_pos.x + cosf(angle) * (radius + 2), 
-                        screen_pos.y + sinf(angle) * (radius + 2));
-            ImVec2 outer(screen_pos.x + cosf(angle) * (radius + 10), 
-                        screen_pos.y + sinf(angle) * (radius + 10));
-            draw_list->AddLine(inner, outer, color, 2.0f);
-        }
-        // Label
-        draw_list->AddText(ImVec2(screen_pos.x + 20, screen_pos.y - 8), color, "[D]");
-    }
-    
-    // Draw Point Light gizmo (bulb icon)
-    if (auto* point_light = entity->get_component<PointLightComponent>()) {
-        Vec3 color_vec = point_light->get_color();
-        ImU32 color = IM_COL32(
-            static_cast<int>(color_vec.x() * 255),
-            static_cast<int>(color_vec.y() * 255),
-            static_cast<int>(color_vec.z() * 255),
-            255
-        );
-        float radius = 12.0f;
-        
-        // Draw filled circle (bulb)
-        draw_list->AddCircleFilled(screen_pos, radius, color);
-        draw_list->AddCircle(screen_pos, radius, IM_COL32(255, 255, 255, 255), 16, 2.0f);
-        
-        // Draw range indicator (wire circle)
-        float range = point_light->get_bounding_sphere().radius;
-        // Approximate screen radius based on distance
-        float dist = (camera->get_position() - position).norm();
-        float screen_radius = (range / dist) * extent.height * 0.5f;
-        if (screen_radius > 5 && screen_radius < 200) {
-            draw_list->AddCircle(screen_pos, screen_radius, color, 32, 1.0f);
-        }
-        // Label
-        draw_list->AddText(ImVec2(screen_pos.x + 15, screen_pos.y - 8), color, "[P]");
-    }
+void RenderSystem::draw_light_gizmo(CameraComponent *camera, Entity *entity, const Extent2D &extent) {
+	if (!camera || !entity) {
+		return;
+	}
+
+	auto *transform = entity->get_component<TransformComponent>();
+	if (!transform) {
+		return;
+	}
+
+	Vec3 position = transform->transform.get_position();
+
+	// Project 3D position to screen space
+	Mat4 view = camera->get_view_matrix();
+	Mat4 proj = camera->get_projection_matrix();
+	Mat4 view_proj = proj * view;
+
+	Vec4 pos_clip = view_proj * Vec4(position.x(), position.y(), position.z(), 1.0f);
+	if (pos_clip.w() <= 0) {
+		return; // Behind camera
+	}
+
+	Vec3 pos_ndc = pos_clip.head<3>() / pos_clip.w();
+	ImVec2 screen_pos;
+	screen_pos.x = (pos_ndc.x() * 0.5f + 0.5f) * extent.width;
+	screen_pos.y = (1.0f - (pos_ndc.y() * 0.5f + 0.5f)) * extent.height; // Flip Y for screen coords
+
+	ImDrawList *draw_list = ImGui::GetWindowDrawList();
+
+	// Draw Directional Light gizmo (sun icon)
+	if (entity->get_component<DirectionalLightComponent>()) {
+		ImU32 color = IM_COL32(255, 255, 0, 255); // Yellow
+		float radius = 15.0f;
+
+		// Draw circle with rays
+		draw_list->AddCircle(screen_pos, radius, color, 16, 2.0f);
+		// Draw rays
+		for (int i = 0; i < 8; ++i) {
+			float angle = i * 3.14159f / 4.0f;
+			ImVec2 inner(screen_pos.x + cosf(angle) * (radius + 2),
+					screen_pos.y + sinf(angle) * (radius + 2));
+			ImVec2 outer(screen_pos.x + cosf(angle) * (radius + 10),
+					screen_pos.y + sinf(angle) * (radius + 10));
+			draw_list->AddLine(inner, outer, color, 2.0f);
+		}
+		// Label
+		draw_list->AddText(ImVec2(screen_pos.x + 20, screen_pos.y - 8), color, "[D]");
+	}
+
+	// Draw Point Light gizmo (bulb icon)
+	if (auto *point_light = entity->get_component<PointLightComponent>()) {
+		Vec3 color_vec = point_light->get_color();
+		ImU32 color = IM_COL32(
+				static_cast<int>(color_vec.x() * 255),
+				static_cast<int>(color_vec.y() * 255),
+				static_cast<int>(color_vec.z() * 255),
+				255);
+		float radius = 12.0f;
+
+		// Draw filled circle (bulb)
+		draw_list->AddCircleFilled(screen_pos, radius, color);
+		draw_list->AddCircle(screen_pos, radius, IM_COL32(255, 255, 255, 255), 16, 2.0f);
+
+		// Draw range indicator (wire circle)
+		float range = point_light->get_bounding_sphere().radius;
+		// Approximate screen radius based on distance
+		float dist = (camera->get_position() - position).norm();
+		float screen_radius = (range / dist) * extent.height * 0.5f;
+		if (screen_radius > 5 && screen_radius < 200) {
+			draw_list->AddCircle(screen_pos, screen_radius, color, 32, 1.0f);
+		}
+		// Label
+		draw_list->AddText(ImVec2(screen_pos.x + 15, screen_pos.y - 8), color, "[P]");
+	}
+}
+
+void DefaultRenderResource::init(RHIBackendRef backend_) {
+	{
+		RHITextureInfo info = {};
+		info.extent = { 1, 1, 1 };
+		info.format = FORMAT_R8G8B8A8_UNORM;
+		info.type = RESOURCE_TYPE_TEXTURE;
+		info.memory_usage = MEMORY_USAGE_GPU_ONLY;
+		info.mip_levels = 1;
+		info.array_layers = 1;
+
+		fallback_white_texture_ = backend_->create_texture(info);
+
+		uint32_t white = 0xFFFFFFFF;
+
+		RHIBufferInfo buf_info = {};
+		buf_info.size = sizeof(uint32_t);
+		buf_info.type = RESOURCE_TYPE_VERTEX_BUFFER; // Use VertexBuffer as generic staging
+		buf_info.memory_usage = MEMORY_USAGE_CPU_TO_GPU;
+		buf_info.creation_flag = BUFFER_CREATION_PERSISTENT_MAP;
+		auto staging = backend_->create_buffer(buf_info);
+
+		if (staging) {
+			void *data = staging->map();
+			if (data) {
+				memcpy(data, &white, sizeof(uint32_t));
+				staging->unmap();
+			}
+
+			auto cmd = backend_->get_immediate_command();
+			if (cmd) {
+				TextureSubresourceLayers layers = {};
+				layers.aspect = TEXTURE_ASPECT_COLOR;
+				layers.layer_count = 1;
+				layers.base_array_layer = 0;
+				layers.mip_level = 0;
+
+				cmd->copy_buffer_to_texture(staging, 0, fallback_white_texture_, layers);
+			}
+			staging->destroy();
+		}
+	}
+
+	// Create 1x1 Black Texture (0, 0, 0, 255)
+	{
+		RHITextureInfo info = {};
+		info.extent = { 1, 1, 1 };
+		info.format = FORMAT_R8G8B8A8_UNORM;
+		info.type = RESOURCE_TYPE_TEXTURE;
+		info.memory_usage = MEMORY_USAGE_GPU_ONLY;
+		info.mip_levels = 1;
+		info.array_layers = 1;
+
+		fallback_black_texture_ = backend_->create_texture(info);
+
+		uint32_t black = 0xFF000000; // ARGB: A=255, R=0, G=0, B=0
+
+		RHIBufferInfo buf_info = {};
+		buf_info.size = sizeof(uint32_t);
+		buf_info.type = RESOURCE_TYPE_VERTEX_BUFFER;
+		buf_info.memory_usage = MEMORY_USAGE_CPU_TO_GPU;
+		buf_info.creation_flag = BUFFER_CREATION_PERSISTENT_MAP;
+		auto staging = backend_->create_buffer(buf_info);
+
+		if (staging) {
+			void* data = staging->map();
+			if (data) {
+				memcpy(data, &black, sizeof(uint32_t));
+				staging->unmap();
+			}
+
+			auto cmd = backend_->get_immediate_command();
+			if (cmd) {
+				TextureSubresourceLayers layers = {};
+				layers.aspect = TEXTURE_ASPECT_COLOR;
+				layers.layer_count = 1;
+				layers.base_array_layer = 0;
+				layers.mip_level = 0;
+
+				cmd->copy_buffer_to_texture(staging, 0, fallback_black_texture_, layers);
+			}
+			staging->destroy();
+		}
+	}
+
+	// Create 1x1 Normal Texture (128, 128, 255) -> Flat Normal (0, 0, 1)
+	{
+		RHITextureInfo info = {};
+		info.extent = { 1, 1, 1 };
+		info.format = FORMAT_R8G8B8A8_UNORM;
+		info.type = RESOURCE_TYPE_TEXTURE;
+		info.memory_usage = MEMORY_USAGE_GPU_ONLY;
+		info.mip_levels = 1;
+		info.array_layers = 1;
+
+		fallback_normal_texture_ = backend_->create_texture(info);
+
+		// RGBA: R=128, G=128, B=255, A=255 -> 0xFFFF8080 (Little Endian uint32)
+		uint32_t normal = 0xFFFF8080;
+
+		RHIBufferInfo buf_info = {};
+		buf_info.size = sizeof(uint32_t);
+		buf_info.type = RESOURCE_TYPE_VERTEX_BUFFER;
+		buf_info.memory_usage = MEMORY_USAGE_CPU_TO_GPU;
+		buf_info.creation_flag = BUFFER_CREATION_PERSISTENT_MAP;
+		auto staging = backend_->create_buffer(buf_info);
+
+		if (staging) {
+			void *data = staging->map();
+			if (data) {
+				memcpy(data, &normal, sizeof(uint32_t));
+				staging->unmap();
+			}
+
+			auto cmd = backend_->get_immediate_command();
+			if (cmd) {
+				TextureSubresourceLayers layers = {};
+				layers.aspect = TEXTURE_ASPECT_COLOR;
+				layers.layer_count = 1;
+				layers.base_array_layer = 0;
+				layers.mip_level = 0;
+
+				cmd->copy_buffer_to_texture(staging, 0, fallback_normal_texture_, layers);
+			}
+			staging->destroy();
+		}
+	}
 }

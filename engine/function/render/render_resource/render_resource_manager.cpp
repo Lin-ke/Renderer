@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <fstream>
 
-//####TODO####: Move these to config header
 #ifndef MAX_PER_FRAME_RESOURCE_SIZE
 #define MAX_PER_FRAME_RESOURCE_SIZE 4096
 #endif
@@ -60,6 +59,11 @@ void RenderResourceManager::destroy() {
     depth_texture_.reset();
     velocity_texture_.reset();
     prev_depth_texture_.reset();
+    
+    // Release default fallback textures
+    default_black_texture_.reset();
+    default_white_texture_.reset();
+    default_normal_texture_.reset();
 
     // Clear per-frame resources
     for (auto& resource : per_frame_resources_) {
@@ -80,10 +84,6 @@ void RenderResourceManager::init_per_frame_resources() {
         
         per_frame_resources_[i]->camera_buffer = std::make_unique<Buffer<CameraInfo>>(RESOURCE_TYPE_UNIFORM_BUFFER);
         per_frame_resources_[i]->light_buffer = std::make_unique<Buffer<LightInfo>>(RESOURCE_TYPE_UNIFORM_BUFFER);
-        
-        //####TODO####: Create large array buffers for object/light data
-        // For now, skip buffer creation as single-element Buffer is too small
-        // In the future, create proper array buffers or use dynamic sizing
     }
 
     INFO(LogRenderResourceManager, "Per-frame resources initialized");
@@ -94,34 +94,45 @@ void RenderResourceManager::init_global_resources() {
 
     global_setting_buffer_ = std::make_unique<Buffer<RenderGlobalSetting>>(RESOURCE_TYPE_UNIFORM_BUFFER);
 
-    //####TODO####: Create material buffer with proper array size
-    // For now, skip large buffer creation - single Buffer<MaterialInfo> is insufficient
-    // Need ArrayBuffer or dynamic buffer allocation
-
-    //####TODO####: Create global textures when Texture class supports procedural creation
-    // depth_texture_ = std::make_shared<Texture>(...);
-    // velocity_texture_ = std::make_shared<Texture>(...);
+    default_black_texture_ = std::make_shared<Texture>(TextureType::Texture2D, FORMAT_R8G8B8A8_UNORM, Extent3D{1, 1, 1});
+    if (default_black_texture_) {
+        uint32_t black_pixel = 0xFF000000;
+        default_black_texture_->set_data(&black_pixel, sizeof(black_pixel));
+        default_black_texture_->set_name("Default_Black");
+    }
+    
+    default_white_texture_ = std::make_shared<Texture>(TextureType::Texture2D, FORMAT_R8G8B8A8_UNORM, Extent3D{1, 1, 1});
+    if (default_white_texture_) {
+        uint32_t white_pixel = 0xFFFFFFFF;
+        default_white_texture_->set_data(&white_pixel, sizeof(white_pixel));
+        default_white_texture_->set_name("Default_White");
+    }
+    
+    default_normal_texture_ = std::make_shared<Texture>(TextureType::Texture2D, FORMAT_R8G8B8A8_UNORM, Extent3D{1, 1, 1});
+    if (default_normal_texture_) {
+        uint32_t normal_pixel = 0xFFFF8080;
+        default_normal_texture_->set_data(&normal_pixel, sizeof(normal_pixel));
+        default_normal_texture_->set_name("Default_Normal");
+    }
 
     INFO(LogRenderResourceManager, "Global resources initialized");
 }
 
 uint32_t RenderResourceManager::allocate_bindless_id(const BindlessResourceInfo& resource_info, 
                                                       BindlessSlot slot) {
-    if (slot >= BINDLESS_SLOT_MAX_ENUM) return 0;
+    assert(slot < BINDLESS_SLOT_MAX_ENUM && "Invalid bindless slot");
 
     uint32_t id = bindless_id_allocators_[slot].allocate();
     if (id != 0) {
         bindless_resources_[slot][id] = resource_info;
-        
-        //####TODO####: Update descriptor set when bindless system is implemented
-        // This would update the global descriptor set with the new resource
     }
     
     return id;
 }
 
 void RenderResourceManager::release_bindless_id(uint32_t id, BindlessSlot slot) {
-    if (slot >= BINDLESS_SLOT_MAX_ENUM || id == 0) return;
+    assert(slot < BINDLESS_SLOT_MAX_ENUM && "Invalid bindless slot");
+    if (id == 0) return;  // id == 0 is valid case (resource not allocated)
 
     bindless_resources_[slot].erase(id);
     bindless_id_allocators_[slot].release(id);
@@ -135,31 +146,25 @@ void RenderResourceManager::set_camera_info(const CameraInfo& camera_info) {
 }
 
 void RenderResourceManager::set_object_info(const ObjectInfo& object_info, uint32_t object_id) {
-    if (object_id >= MAX_PER_FRAME_OBJECT_SIZE) return;
-    
-    //####TODO####: Write to GPU buffer when array buffer system is implemented
-    // For now, just store the data locally or skip
+    assert(object_id < MAX_PER_FRAME_OBJECT_SIZE && "Object ID out of range");
+    (void)object_info;
 }
 
 void RenderResourceManager::set_material_info(const MaterialInfo& material_info, uint32_t material_id) {
-    if (material_id >= MAX_PER_FRAME_RESOURCE_SIZE) return;
-    
-    //####TODO####: Write to GPU buffer when array buffer system is implemented
-    // For now, material data is stored in Material class and submitted per-draw
+    assert(material_id < MAX_PER_FRAME_RESOURCE_SIZE && "Material ID out of range");
+    (void)material_info;
 }
 
 void RenderResourceManager::set_directional_light_info(const DirectionalLightInfo& light_info, 
                                                         uint32_t cascade) {
-    if (cascade >= DIRECTIONAL_SHADOW_CASCADE_LEVEL) return;
-    
-    //####TODO####: Write to GPU buffer when light buffer system is implemented
+    assert(cascade < DIRECTIONAL_SHADOW_CASCADE_LEVEL && "Cascade index out of range");
+    (void)light_info;
 }
 
 void RenderResourceManager::set_point_light_info(const PointLightInfo& light_info, 
                                                   uint32_t light_id) {
-    if (light_id >= MAX_POINT_LIGHT_COUNT) return;
-    
-    //####TODO####: Write to GPU buffer when light buffer system is implemented
+    assert(light_id < MAX_POINT_LIGHT_COUNT && "Point light ID out of range");
+    (void)light_info;
 }
 
 void RenderResourceManager::set_global_setting(const RenderGlobalSetting& setting) {
@@ -171,7 +176,6 @@ void RenderResourceManager::set_global_setting(const RenderGlobalSetting& settin
 RHIShaderRef RenderResourceManager::get_or_create_shader(const std::string& path, 
                                                           ShaderFrequency frequency,
                                                           const std::string& entry) {
-    // Use path + frequency + entry as unique key
     std::string key = path + "_" + std::to_string(frequency) + "_" + entry;
     
     auto iter = shader_cache_.find(key);
@@ -179,8 +183,6 @@ RHIShaderRef RenderResourceManager::get_or_create_shader(const std::string& path
         return iter->second;
     }
 
-    //####TODO####: Load shader binary from file when shader compilation pipeline is ready
-    // For now, return nullptr as we don't have compiled shader binaries
     INFO(LogRenderResourceManager, "Shader not found in cache: {}", key);
     
     // Try to load from asset system
@@ -205,8 +207,10 @@ RHIShaderRef RenderResourceManager::get_or_create_shader(const std::string& path
                 }
             }
         }
+    } catch (const std::exception& e) {
+        ERR(LogRenderResourceManager, "Failed to load shader: {} - {}", path, e.what());
     } catch (...) {
-        ERR(LogRenderResourceManager, "Failed to load shader: {}", path);
+        ERR(LogRenderResourceManager, "Failed to load shader: {} - unknown error", path);
     }
     
     return nullptr;

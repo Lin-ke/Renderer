@@ -1,5 +1,5 @@
-#ifndef ENTITY_H
-#define ENTITY_H
+#pragma once
+
 #include <memory>
 #include "engine/function/framework/component.h"
 #include "engine/function/asset/asset.h"
@@ -13,7 +13,7 @@ public:
         auto component = std::make_unique<T>(std::forward<Args>(args)...);
         T* ptr = component.get();
         ptr->set_owner(this);
-        ptr->on_init();  // Initialize component after setting owner
+        ptr->on_init();
         components_.push_back(std::move(component));
         return ptr;
     }
@@ -69,4 +69,3 @@ public:
     std::unique_ptr<Entity> clone();
 };
 
-#endif

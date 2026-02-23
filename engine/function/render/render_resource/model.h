@@ -64,17 +64,17 @@ struct IndexRange {
  * Runtime structure - pointers are resolved from deps after loading
  */
 struct MaterialSlot {
-    MeshRef mesh;           // The mesh geometry (resolved from model's mesh_deps)
-    MaterialRef material;   // The material to render with (resolved from model's material_deps)
-    uint32_t mesh_index = 0;     // Index into mesh_deps
-    uint32_t material_index = 0; // Index into material_deps
-    uint32_t slot_index = 0;     // Original slot index for tracking
+    MeshRef mesh_;           // The mesh geometry (resolved from model's mesh_deps)
+    MaterialRef material_;   // The material to render with (resolved from model's material_deps)
+    uint32_t mesh_index_ = 0;     // Index into mesh_deps
+    uint32_t material_index_ = 0; // Index into material_deps
+    uint32_t slot_index_ = 0;     // Original slot index for tracking
     
     template<class Archive>
     void serialize(Archive& ar) {
-        ar(cereal::make_nvp("mesh_index", mesh_index));
-        ar(cereal::make_nvp("material_index", material_index));
-        ar(cereal::make_nvp("slot_index", slot_index));
+        ar(cereal::make_nvp("mesh_index", mesh_index_));
+        ar(cereal::make_nvp("material_index", material_index_));
+        ar(cereal::make_nvp("slot_index", slot_index_));
     }
 };
 
@@ -114,12 +114,13 @@ public:
                                         const UID& explicit_uid = UID::empty());
     
     /**
-     * @brief Convenience overload
+     * @brief Convenience overload with material type support
      */
     static std::shared_ptr<Model> Load(const std::string& path, 
                                         bool smooth_normal = true,
                                         bool load_materials = false,
                                         bool flip_uv = false,
+                                        ModelMaterialType material_type = ModelMaterialType::PBR,
                                         const UID& explicit_uid = UID::empty());
 
     /**
@@ -138,7 +139,7 @@ public:
     inline MaterialSlot& get_slot(uint32_t index) { return material_slots_[index]; }
     
     void add_slot(MeshRef mesh, MaterialRef material);
-    void set_material(uint32_t slot_index, MaterialRef material);
+    void set_material(uint32_t slot_index, MaterialRef material_);
     
     MaterialRef get_material(uint32_t slot_index) const;
     MeshRef get_mesh(uint32_t slot_index) const;

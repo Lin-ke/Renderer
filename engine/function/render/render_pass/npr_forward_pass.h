@@ -89,6 +89,11 @@ public:
                             float light_intensity);
     
     /**
+     * @brief Set the depth texture for screen space rim light calculation
+     */
+    void set_depth_texture(RHITextureRef depth_texture) { depth_texture_ = depth_texture; }
+    
+    /**
      * @brief Draw a single batch
      */
     void draw_batch(RHICommandContextRef command, const DrawBatch& batch);
@@ -137,6 +142,10 @@ private:
     
     // Samplers
     RHISamplerRef default_sampler_;
+    RHISamplerRef clamp_sampler_;
+    
+    // Depth texture for screen space rim light (from depth prepass)
+    RHITextureRef depth_texture_;
     
     // Default vertex buffers for meshes missing attributes
     RHIBufferRef default_normal_buffer_;
@@ -149,6 +158,9 @@ private:
     bool per_frame_dirty_ = true;
     bool wireframe_mode_ = false;
     bool initialized_ = false;
+    
+    // Depth texture bind flag
+    bool depth_texture_bound_ = false;
 };
 
 } // namespace render

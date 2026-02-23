@@ -35,7 +35,7 @@ float TimeScope::get_seconds() const {
 
 void TimeScopes::push_scope(const std::string& name) {
     auto new_scope = std::make_shared<TimeScope>();
-    new_scope->name = name;
+    new_scope->name_ = name;
     new_scope->depth_ = depth_;
     new_scope->begin();
 

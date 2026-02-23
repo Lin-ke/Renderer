@@ -40,17 +40,19 @@ struct PBRPerObjectData {
 
 // PBR Material data structure (matches HLSL cbuffer)
 // Use float for boolean flags to match HLSL alignment
+// Total size must be 16-byte aligned for DX11 constant buffers
 struct PBRMaterialData {
-    Vec4 albedo;           // base color
-    Vec4 emission;
-    float roughness;
-    float metallic;
-    float alpha_cutoff;
-    float use_albedo_map;
-    float use_normal_map;
-    float use_arm_map;     // AO/Roughness/Metallic map
-    float use_emission_map;
-    Vec2 _padding;
+    Vec4 albedo;           // base color (16 bytes)
+    Vec4 emission;         // (16 bytes)
+    float roughness;       // (4 bytes)
+    float metallic;        // (4 bytes)
+    float alpha_cutoff;    // (4 bytes)
+    float use_albedo_map;  // (4 bytes)
+    float use_normal_map;  // (4 bytes)
+    float use_arm_map;     // AO/Roughness/Metallic map (4 bytes)
+    float use_emission_map;// (4 bytes)
+    float _padding;        // (4 bytes) - padding to ensure 16-byte alignment
+    // Total: 64 bytes (16 * 4), perfectly aligned
 };
 
 class PBRForwardPass : public RenderPass {

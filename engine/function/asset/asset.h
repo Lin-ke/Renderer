@@ -1,5 +1,4 @@
-#ifndef ASSET_H
-#define ASSET_H
+#pragma once
 
 #include <memory>
 #include <string_view>
@@ -9,7 +8,6 @@
 #include <cereal/types/vector.hpp>
 #include "uid.h"
 #include <mutex>
-// 资源类型枚举
 enum class AssetType : uint8_t {
     Unknown = 0,
     Model,
@@ -41,7 +39,7 @@ public:
     virtual void traverse_deps(std::function<void(std::shared_ptr<Asset>)> callback) const {}
     
     const UID& get_uid() const { return uid_; }
-    void set_uid(const UID& id) { uid_ = id; } // 允许管理器设置 UID
+    void set_uid(const UID& id) { uid_ = id; }
     bool is_initialized() const { return initialized_.load(); }
     void mark_initialized() { initialized_.store(true); }
     
@@ -84,5 +82,3 @@ private:
 
 using AssetDeps = std::vector<UID>;
 using AssetRef = std::shared_ptr<Asset>;
-
-#endif

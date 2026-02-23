@@ -147,12 +147,14 @@ public:
     ComPtr<ID3D11ShaderResourceView> get_srv() const { return srv_; }
     ComPtr<ID3D11RenderTargetView> get_rtv() const { return rtv_; }
     ComPtr<ID3D11DepthStencilView> get_dsv() const { return dsv_; }
+    ComPtr<ID3D11DepthStencilView> get_dsv_read_only() const { return dsv_read_only_; }
     ComPtr<ID3D11UnorderedAccessView> get_uav() const { return uav_; }
 
 private:
     ComPtr<ID3D11ShaderResourceView> srv_;
     ComPtr<ID3D11RenderTargetView> rtv_;
     ComPtr<ID3D11DepthStencilView> dsv_;
+    ComPtr<ID3D11DepthStencilView> dsv_read_only_;
     ComPtr<ID3D11UnorderedAccessView> uav_;
 };
 

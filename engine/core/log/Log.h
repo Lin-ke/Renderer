@@ -1,5 +1,4 @@
-#ifndef LOG_H
-#define LOG_H
+#pragma once
 
 #include <format>
 #include <glog/logging.h>
@@ -7,7 +6,7 @@
 #include <iostream>
 #include "engine/core/os/thread_pool.h"
 
-// Custom Log Sink for GLog
+
 class CustomLogSink : public google::LogSink {
 public:
     void send(google::LogSeverity severity, const char* full_filename,
@@ -16,7 +15,7 @@ public:
               const char* message, size_t message_len) override;
 
     void WaitTillSent() override {
-        // No-op for synchronous output
+        
     }
 };
 
@@ -24,19 +23,16 @@ public:
 #define DECLARE_LOG_TAG(TagName) extern const char* TagName
 #define DEFINE_LOG_TAG(TagName, DisplayString) const char* TagName = DisplayString
 
-// ==========================================
-// Part 2: Log 类 (底层实现)
-// ==========================================
+
 class Log {
 public:
     static std::atomic<bool> initialized_;
     static std::mutex init_mutex_;
 
-    static void init(); // 实现请放在 .cpp
+    static void init();
     static void shutdown();
-    static void set_min_log_level(int level); // 0: INFO, 1: WARNING, 2: ERROR, 3: FATAL
+    static void set_min_log_level(int level);
 
-    // 这里接收的是 const char* (即全局变量的值)
     template<typename... Args>
     static void info(const char* file, int line, int thread_id, const char* tag, std::format_string<Args...> fmt, Args&&... args) {
         google::LogMessage(file, line, google::GLOG_INFO).stream() 
@@ -66,11 +62,7 @@ public:
     }
 };
 
-// ==========================================
-// Part 3: 使用宏
-// ==========================================
 
-// 清理旧宏
 #ifdef INFO
 #undef INFO
 #endif
@@ -88,5 +80,3 @@ public:
 #define WARN(Tag, ...)   ::Log::warn(__FILE__, __LINE__, ThreadPool::get_thread_id(), Tag, __VA_ARGS__)
 #define ERR(Tag, ...)    ::Log::error(__FILE__, __LINE__, ThreadPool::get_thread_id(), Tag, __VA_ARGS__)
 #define FATAL(Tag, ...)  ::Log::critical(__FILE__, __LINE__, ThreadPool::get_thread_id(), Tag, __VA_ARGS__)
-
-#endif // LOG_H

@@ -735,6 +735,9 @@ struct AttachmentInfo {
     Color4 clear_color = {0.0f, 0.0f, 0.0f, 0.0f};
     float clear_depth = 1.0f;
     uint32_t clear_stencil = 0;
+    
+    // For depth-stencil attachment: if true, depth is read-only (allows simultaneous SRV binding)
+    bool read_only = false;
 };
 
 struct RHIRenderPassInfo {

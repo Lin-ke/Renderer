@@ -1,5 +1,4 @@
-#ifndef TIMER_H
-#define TIMER_H
+#pragma once
 
 #include <chrono>
 
@@ -66,5 +65,3 @@ private:
     TimePoint start_time_;
     TimePoint last_time_;
 };
-
-#endif // TIMER_H

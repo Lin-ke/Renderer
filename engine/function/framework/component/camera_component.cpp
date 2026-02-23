@@ -7,12 +7,10 @@
 #include <memory>
 
 void CameraComponent::on_init() {
-    // Component::on_init();
     update_matrix();
 }
 
 void CameraComponent::on_update(float delta_time) {
-    // InitComponentIfNeed();
     if (is_active_camera()) {
         input_move(delta_time);
     }
@@ -23,13 +21,11 @@ void CameraComponent::input_move(float delta_time) {
     auto transform_component = get_owner()->get_component<TransformComponent>();
     if (!transform_component) return;
 
-    float speed = 20.0f; // Increased from 5.0 for better navigation
+    float speed = 20.0f;
     float delta = speed * delta_time;
     float sensitivity = 0.5f;
 
     Vec3 delta_position = Vec3::Zero();
-    
-    // Use Input::get_instance()
     const auto& input = Input::get_instance();
 
     if (input.is_key_down(Key::W)) delta_position += transform_component->transform.front() * delta;
@@ -39,36 +35,22 @@ void CameraComponent::input_move(float delta_time) {
     if (input.is_key_down(Key::Space)) delta_position += transform_component->transform.up() * delta;
     if (input.is_key_down(Key::LeftControl)) delta_position -= transform_component->transform.up() * delta;
     
-    transform_component->transform.translate(delta_position); // Using Transform directly
+    transform_component->transform.translate(delta_position);
 
     if (input.is_mouse_button_down(MouseButton::Right)) {
         float dx, dy;
         input.get_mouse_delta(dx, dy);
-        // Corrected directions: 
-        // Mouse Right -> dx > 0 -> Decrease Yaw (rotate right)
-        // Mouse Up -> dy < 0 -> Increase Pitch (look up)
         Vec2 offset(-dx * sensitivity, -dy * sensitivity);
 
         Vec3 euler_angle = transform_component->transform.get_euler_angle();
         euler_angle = Math::clamp_euler_angle(euler_angle + Vec3(0.0f, offset.x(), offset.y()));
         transform_component->transform.set_rotation(euler_angle);
 
-        // FOV
-        /* //####TODO####: Scroll input
-        fovy_ -= input.get_scroll_delta().y * sensitivity * 2;
-        fovy_ = std::clamp(fovy_, 30.0f, 135.0f);
-        */
     }
 }
 
 bool CameraComponent::is_active_camera() {
-    /* //####TODO####: Scene and active camera
-    if (get_owner() && get_owner()->get_scene() && 
-        get_owner()->get_scene()->get_active_camera().get() == this) {
-        return true;
-    }
-    */
-    return true; // Default to true for now if single camera
+    return true;
 }
 
 void CameraComponent::update_matrix() {
@@ -83,14 +65,13 @@ void CameraComponent::update_matrix() {
     prev_view_ = view_;
     prev_proj_ = proj_;
 
-    // Use transform's orientation for view matrix instead of hardcoding look_at to origin
     view_ = Math::look_at(position_, position_ + front_, up_);
     proj_ = Math::perspective(Math::to_radians(fovy_), aspect_, near_, far_);
-    // proj_(1, 1) *= -1; // Vulkan specific? RD had it. DX11 might differ. Keeping it if project uses Vulkan conventions.
+
 
     move_ = (prev_view_ == view_ && prev_proj_ == proj_) ? false : true;
 
-    // frustum_ = create_frustum_from_matrix(proj_ * view_, -1.0f, 1.0f, -1.0f, 1.0f, 0.0f, 1.0f); //####TODO####
+
 
     camera_info_.view = view_;
     camera_info_.proj = proj_;
@@ -110,7 +91,6 @@ void CameraComponent::update_matrix() {
 }
 
 void CameraComponent::update_camera_info() {
-    // EngineContext::render_resource()->set_camera_info(camera_info_); //####TODO####
 }
 
 REGISTER_CLASS_IMPL(CameraComponent)

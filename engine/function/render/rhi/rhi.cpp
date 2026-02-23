@@ -60,22 +60,18 @@ RHIBackendRef RHIBackend::init(const RHIBackendInfo& info) {
 }
 
 void RHIBackend::tick() {
-    // Optimization: Only scan a portion of resources if the list is too large, 
-    // or use a more efficient removal strategy.
     for (auto& resources : resource_map_) {
         if (resources.empty()) continue;
 
         for (size_t i = 0; i < resources.size(); ++i) {
             RHIResourceRef& resource = resources[i];
             if (resource) {
-                // If the only reference is held by this map, it's a candidate for deletion
                 if (resource.use_count() == 1) {
                     resource->last_use_tick_++;
                 } else {
                     resource->last_use_tick_ = 0;
                 }
 
-                // Delete resource after a few frames of inactivity
                 if (resource->last_use_tick_ > 6) {
                     resource->destroy();
                     resource = nullptr;
@@ -83,7 +79,6 @@ void RHIBackend::tick() {
             }
         }
 
-        // Efficiently remove null entries
         resources.erase(std::remove(resources.begin(), resources.end(), nullptr), resources.end());
     }
 }

@@ -7,7 +7,7 @@
 
 bool ProfilerWidget::show_window_ = false;
 
-// Global period for time synchronization across all threads
+
 static std::array<TimePoint, 2> g_period = {};
 
 static void profiler_value_getter(float* start_timestamp, float* end_timestamp, 
@@ -37,7 +37,7 @@ static void profiler_value_getter(float* start_timestamp, float* end_timestamp,
         *level = static_cast<ImU8>(scope->get_depth());
     }
     if (caption) {
-        *caption = scope->name.c_str();
+        *caption = scope->name_.c_str();
     }
 }
 
@@ -50,7 +50,7 @@ void ProfilerWidget::draw_flame_graph(const std::map<std::thread::id, std::share
     g_period = {};
     bool init = false;
     
-    // Calculate the global time period across all threads
+    
     for (const auto& [thread_id, scopes] : time_scopes) {
         if (scopes && !scopes->get_scopes().empty()) {
             const auto& begin = scopes->get_begin_time();
@@ -76,12 +76,12 @@ void ProfilerWidget::draw_flame_graph(const std::map<std::thread::id, std::share
             continue;
         }
         
-        // Format thread name
+        
         std::stringstream ss;
         ss << thread_id;
         std::string thread_name = "[" + ss.str() + "] Thread";
         
-        // Draw the flame graph for this thread
+        
         ImGuiFlameGraph::PlotFlame(
             "", 
             profiler_value_getter, 
@@ -96,7 +96,7 @@ void ProfilerWidget::draw_flame_graph(const std::map<std::thread::id, std::share
         ImGui::Spacing();
     }
     
-    // Show total frame time
+    
     ImGui::Separator();
     ImGui::Text("Total Frame Time: %.4f ms", scale_max);
 }
@@ -112,7 +112,7 @@ void ProfilerWidget::draw_window(bool* open) {
     }
     
     if (ImGui::Begin("Profiler", open ? open : &show_window_)) {
-        // Controls
+        
         if (ImGui::Button("Clear")) {
             Profiler::get().clear();
         }
@@ -125,7 +125,7 @@ void ProfilerWidget::draw_window(bool* open) {
         
         ImGui::Separator();
         
-        // Flame graph
+        
         const auto& all_scopes = Profiler::get().get_all_scopes();
         draw_flame_graph(all_scopes);
     }

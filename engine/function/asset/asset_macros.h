@@ -1,4 +1,4 @@
-#pragma once // 1. 放在最顶端，这是最标准的写法，现代编译器支持极好
+#pragma once
 
 #include <vector>
 #include <memory>
@@ -7,13 +7,11 @@
 #include "engine/function/asset/asset_manager.h"
 #include "engine/core/reflect/serialize.h"
 
-// ==========================================
-// Part 1: 类型萃取 & 核心逻辑
-// ==========================================
-
 template <typename T> struct is_vector_impl : std::false_type {};
 template <typename T, typename A> struct is_vector_impl<std::vector<T, A>> : std::true_type {};
 template <typename T> using is_vector = is_vector_impl<T>;
+
+class UID;
 
 template <typename T>
 struct UidStorageTraits {
@@ -77,28 +75,19 @@ struct AssetLogic {
     }
 };
 
-// ==========================================
-// Part 2: 宏定义 (基于 FOR_EACH)
-// ==========================================
-
-// 1. 声明
+/// Declares dependency pointer and its UID storage
 #define DECL_ENTRY(Type, Name) \
     Type Name; \
-    typename UidStorageTraits<Type>::type Name##_uid;
-// 2. Load
+    typename UidStorageTraits<Type>::type Name##_uid{};
 #define LOAD_ENTRY(Type, Name) \
     AssetLogic::load(Name, Name##_uid);
-// 3. Save
 #define SYNC_ENTRY(Type, Name) \
     AssetLogic::sync(Name, Name##_uid);
-// 4. Serialize
 #define SERIALIZE_ENTRY(Type, Name) \
     ar(cereal::make_nvp(#Name, Name##_uid)); 
-// 5. Visit Deps
 #define VISIT_ENTRY(Type, Name) \
     AssetLogic::visit(callback, Name);
 
-// --- FOR_EACH 基础设施 (保持不变) ---
 #define EXPAND(x) x
 #define FE_1(ACT, X)      ACT X
 #define FE_2(ACT, X, ...) ACT X EXPAND(FE_1(ACT, __VA_ARGS__))
@@ -130,5 +119,32 @@ struct AssetLogic {
     } \
     \
     void traverse_deps(std::function<void(std::shared_ptr<Asset>)> callback) const override { \
+        FOR_EACH(VISIT_ENTRY, __VA_ARGS__) \
+    }
+
+/// ASSET_DEPS_EXTEND: For subclasses that inherit base class dependencies
+/// Automatically calls base class methods to avoid dependency loss
+/// Usage: ASSET_DEPS_EXTEND(BaseClass, (Type, name), ...)
+#define ASSET_DEPS_EXTEND(BaseClass, ...) \
+    FOR_EACH(DECL_ENTRY, __VA_ARGS__) \
+    \
+    virtual void load_asset_deps() override { \
+        BaseClass::load_asset_deps(); \
+        FOR_EACH(LOAD_ENTRY, __VA_ARGS__) \
+    } \
+    \
+    virtual void save_asset_deps() override { \
+        BaseClass::save_asset_deps(); \
+        FOR_EACH(SYNC_ENTRY, __VA_ARGS__) \
+    } \
+    \
+    template <class Archive> \
+    void serialize_deps(Archive & ar) { \
+        BaseClass::serialize_deps(ar); \
+        FOR_EACH(SERIALIZE_ENTRY, __VA_ARGS__) \
+    } \
+    \
+    void traverse_deps(std::function<void(std::shared_ptr<Asset>)> callback) const override { \
+        BaseClass::traverse_deps(callback); \
         FOR_EACH(VISIT_ENTRY, __VA_ARGS__) \
     }

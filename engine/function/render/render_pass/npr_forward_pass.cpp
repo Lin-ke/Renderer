@@ -36,6 +36,7 @@ NPRForwardPass::~NPRForwardPass() {
     if (per_object_buffer_) per_object_buffer_->destroy();
     if (material_buffer_) material_buffer_->destroy();
     if (default_sampler_) default_sampler_->destroy();
+    if (clamp_sampler_) clamp_sampler_->destroy();
     if (default_normal_buffer_) default_normal_buffer_->destroy();
     if (default_tangent_buffer_) default_tangent_buffer_->destroy();
     if (default_texcoord_buffer_) default_texcoord_buffer_->destroy();
@@ -176,6 +177,7 @@ void NPRForwardPass::create_samplers() {
     auto backend = EngineContext::rhi();
     if (!backend) return;
     
+    // Default sampler (repeat mode)
     RHISamplerInfo sampler_info = {};
     sampler_info.min_filter = FILTER_TYPE_LINEAR;
     sampler_info.mag_filter = FILTER_TYPE_LINEAR;
@@ -188,6 +190,21 @@ void NPRForwardPass::create_samplers() {
     default_sampler_ = backend->create_sampler(sampler_info);
     if (!default_sampler_) {
         ERR(LogNPRForwardPass, "Failed to create default sampler");
+    }
+    
+    // Clamp sampler for ramp texture (clamp to edge)
+    RHISamplerInfo clamp_sampler_info = {};
+    clamp_sampler_info.min_filter = FILTER_TYPE_LINEAR;
+    clamp_sampler_info.mag_filter = FILTER_TYPE_LINEAR;
+    clamp_sampler_info.mipmap_mode = MIPMAP_MODE_LINEAR;
+    clamp_sampler_info.address_mode_u = ADDRESS_MODE_CLAMP_TO_EDGE;
+    clamp_sampler_info.address_mode_v = ADDRESS_MODE_CLAMP_TO_EDGE;
+    clamp_sampler_info.address_mode_w = ADDRESS_MODE_CLAMP_TO_EDGE;
+    clamp_sampler_info.max_anisotropy = 16.0f;
+    
+    clamp_sampler_ = backend->create_sampler(clamp_sampler_info);
+    if (!clamp_sampler_) {
+        ERR(LogNPRForwardPass, "Failed to create clamp sampler");
     }
 }
 
@@ -378,6 +395,12 @@ void NPRForwardPass::draw_batch(RHICommandContextRef cmd, const DrawBatch& batch
     cmd->set_graphics_pipeline(pipeline_);
     cmd->bind_constant_buffer(material_buffer_, 2, SHADER_FREQUENCY_FRAGMENT);
     cmd->bind_sampler(default_sampler_, 0, SHADER_FREQUENCY_FRAGMENT);
+    cmd->bind_sampler(clamp_sampler_, 1, SHADER_FREQUENCY_FRAGMENT);
+    
+    // Bind depth texture for screen space rim light (slot 4)
+    if (depth_texture_) {
+        cmd->bind_texture(depth_texture_, 4, SHADER_FREQUENCY_FRAGMENT);
+    }
 
     // Update per-object buffer
     if (per_object_buffer_) {
@@ -393,41 +416,25 @@ void NPRForwardPass::draw_batch(RHICommandContextRef cmd, const DrawBatch& batch
     }
 
     // Update material buffer
-    if (material_buffer_ && batch.material) {
+    auto npr_mat = std::dynamic_pointer_cast<NPRMaterial>(batch.material);
+    if (material_buffer_ && npr_mat) {
         NPRMaterialData mat_data = {};
-        mat_data.albedo = batch.material->get_diffuse();
-        mat_data.emission = batch.material->get_emission();
+        mat_data.albedo = npr_mat->get_diffuse();
+        mat_data.emission = npr_mat->get_emission();
         
-        // NPR parameters (use defaults if not NPR material)
-        auto npr_mat = std::dynamic_pointer_cast<NPRMaterial>(batch.material);
-        float lambert_clamp, ramp_tex_offset, rim_threshold, rim_strength;
-        float rim_width, use_light_map, use_ramp_map;
-        Vec3 rim_color;
+        // NPR parameters
+        float lambert_clamp = npr_mat->get_lambert_clamp();
+        float ramp_tex_offset = npr_mat->get_ramp_offset();
+        float rim_threshold = npr_mat->get_rim_threshold();
+        float rim_strength = npr_mat->get_rim_strength();
+        float rim_width = npr_mat->get_rim_width();
+        Vec3 rim_color = npr_mat->get_rim_color();
+        float use_light_map = npr_mat->get_light_map_texture() ? 1.0f : 0.0f;
+        float use_ramp_map = npr_mat->get_ramp_texture() ? 1.0f : 0.0f;
         
-        if (npr_mat) {
-            lambert_clamp = npr_mat->get_lambert_clamp();
-            ramp_tex_offset = npr_mat->get_ramp_offset();
-            rim_threshold = npr_mat->get_rim_threshold();
-            rim_strength = npr_mat->get_rim_strength();
-            rim_width = npr_mat->get_rim_width();
-            rim_color = npr_mat->get_rim_color();
-            use_light_map = npr_mat->get_light_map_texture() ? 1.0f : 0.0f;
-            use_ramp_map = npr_mat->get_ramp_texture() ? 1.0f : 0.0f;
-        } else {
-            // Default NPR values
-            lambert_clamp = 0.5f;
-            ramp_tex_offset = 0.0f;
-            rim_threshold = 0.1f;
-            rim_strength = 1.0f;
-            rim_width = 0.5f;
-            rim_color = Vec3(1.0f, 1.0f, 1.0f);
-            use_light_map = 0.0f;
-            use_ramp_map = 0.0f;
-        }
-        
-        auto diffuse_tex = batch.material->get_diffuse_texture();
+        auto diffuse_tex = npr_mat->get_diffuse_texture();
         float use_albedo_map = diffuse_tex ? 1.0f : 0.0f;
-        float use_normal_map = batch.material->get_normal_texture() ? 1.0f : 0.0f;
+        float use_normal_map = npr_mat->get_normal_texture() ? 1.0f : 0.0f;
         
         // Use helper to set all NPR params
         set_npr_params(mat_data, 
@@ -442,30 +449,54 @@ void NPRForwardPass::draw_batch(RHICommandContextRef cmd, const DrawBatch& batch
         }
     }
 
-    // Bind textures
-    if (batch.material) {
-        auto albedo_tex = batch.material->get_diffuse_texture();
+    // Bind textures (all from NPRMaterial) with fallback
+    auto* render_system = EngineContext::render_system();
+    RHITextureRef fallback_white = render_system ? render_system->get_fallback_white_texture() : nullptr;
+    RHITextureRef fallback_normal = render_system ? render_system->get_fallback_normal_texture() : nullptr;
+    RHITextureRef fallback_black = render_system ? render_system->get_fallback_black_texture() : nullptr;
+    
+    // Bind depth texture fallback if not set
+    if (!depth_texture_ && fallback_black) {
+        cmd->bind_texture(fallback_black, 4, SHADER_FREQUENCY_FRAGMENT);
+    }
+    
+    if (npr_mat) {
+        auto albedo_tex = npr_mat->get_diffuse_texture();
         if (albedo_tex && albedo_tex->texture_) {
             cmd->bind_texture(albedo_tex->texture_, 0, SHADER_FREQUENCY_FRAGMENT);
+        } else if (fallback_white) {
+            cmd->bind_texture(fallback_white, 0, SHADER_FREQUENCY_FRAGMENT);
         }
         
-        auto normal_tex = batch.material->get_normal_texture();
+        auto normal_tex = npr_mat->get_normal_texture();
         if (normal_tex && normal_tex->texture_) {
             cmd->bind_texture(normal_tex->texture_, 1, SHADER_FREQUENCY_FRAGMENT);
+        } else if (fallback_normal) {
+            cmd->bind_texture(fallback_normal, 1, SHADER_FREQUENCY_FRAGMENT);
         }
         
-        // Bind NPR-specific textures
-        auto npr_mat = std::dynamic_pointer_cast<NPRMaterial>(batch.material);
-        if (npr_mat) {
-            auto light_map_tex = npr_mat->get_light_map_texture();
-            if (light_map_tex && light_map_tex->texture_) {
-                cmd->bind_texture(light_map_tex->texture_, 2, SHADER_FREQUENCY_FRAGMENT);
-            }
-            
-            auto ramp_tex = npr_mat->get_ramp_texture();
-            if (ramp_tex && ramp_tex->texture_) {
-                cmd->bind_texture(ramp_tex->texture_, 3, SHADER_FREQUENCY_FRAGMENT);
-            }
+        auto light_map_tex = npr_mat->get_light_map_texture();
+        if (light_map_tex && light_map_tex->texture_) {
+            cmd->bind_texture(light_map_tex->texture_, 2, SHADER_FREQUENCY_FRAGMENT);
+        } else if (fallback_white) {
+            cmd->bind_texture(fallback_white, 2, SHADER_FREQUENCY_FRAGMENT);
+        }
+        
+        auto ramp_tex = npr_mat->get_ramp_texture();
+        if (ramp_tex && ramp_tex->texture_) {
+            cmd->bind_texture(ramp_tex->texture_, 3, SHADER_FREQUENCY_FRAGMENT);
+        } else if (fallback_white) {
+            cmd->bind_texture(fallback_white, 3, SHADER_FREQUENCY_FRAGMENT);
+        }
+    } else {
+        // No material, bind all fallbacks
+        if (fallback_white) {
+            cmd->bind_texture(fallback_white, 0, SHADER_FREQUENCY_FRAGMENT);
+            cmd->bind_texture(fallback_white, 2, SHADER_FREQUENCY_FRAGMENT);
+            cmd->bind_texture(fallback_white, 3, SHADER_FREQUENCY_FRAGMENT);
+        }
+        if (fallback_normal) {
+            cmd->bind_texture(fallback_normal, 1, SHADER_FREQUENCY_FRAGMENT);
         }
     }
 
@@ -521,6 +552,18 @@ void NPRForwardPass::execute_batches(RHICommandListRef cmd, const std::vector<Dr
 
     cmd->bind_constant_buffer(material_buffer_, 2, SHADER_FREQUENCY_FRAGMENT);
     cmd->bind_sampler(default_sampler_, 0, SHADER_FREQUENCY_FRAGMENT);
+    cmd->bind_sampler(clamp_sampler_, 1, SHADER_FREQUENCY_FRAGMENT);
+    
+    // Bind depth texture for screen space rim light (slot 4)
+    if (depth_texture_) {
+        cmd->bind_texture(depth_texture_, 4, SHADER_FREQUENCY_FRAGMENT);
+    } else {
+        auto* render_system = EngineContext::render_system();
+        RHITextureRef fallback_black = render_system ? render_system->get_fallback_black_texture() : nullptr;
+        if (fallback_black) {
+            cmd->bind_texture(fallback_black, 4, SHADER_FREQUENCY_FRAGMENT);
+        }
+    }
 
     // Draw all batches
     for (const auto& batch : batches) {
@@ -538,40 +581,24 @@ void NPRForwardPass::execute_batches(RHICommandListRef cmd, const std::vector<Dr
         }
 
         // Update material buffer
-        if (material_buffer_ && batch.material) {
+        auto npr_mat = std::dynamic_pointer_cast<NPRMaterial>(batch.material);
+        if (material_buffer_ && npr_mat) {
             NPRMaterialData mat_data = {};
-            mat_data.albedo = batch.material->get_diffuse();
-            mat_data.emission = batch.material->get_emission();
+            mat_data.albedo = npr_mat->get_diffuse();
+            mat_data.emission = npr_mat->get_emission();
             
-            // NPR parameters (use defaults if not NPR material)
-            auto npr_mat = std::dynamic_pointer_cast<NPRMaterial>(batch.material);
-            float lambert_clamp, ramp_tex_offset, rim_threshold, rim_strength;
-            float rim_width, use_light_map, use_ramp_map;
-            Vec3 rim_color;
+            // NPR parameters
+            float lambert_clamp = npr_mat->get_lambert_clamp();
+            float ramp_tex_offset = npr_mat->get_ramp_offset();
+            float rim_threshold = npr_mat->get_rim_threshold();
+            float rim_strength = npr_mat->get_rim_strength();
+            float rim_width = npr_mat->get_rim_width();
+            Vec3 rim_color = npr_mat->get_rim_color();
+            float use_light_map = npr_mat->get_light_map_texture() ? 1.0f : 0.0f;
+            float use_ramp_map = npr_mat->get_ramp_texture() ? 1.0f : 0.0f;
             
-            if (npr_mat) {
-                lambert_clamp = npr_mat->get_lambert_clamp();
-                ramp_tex_offset = npr_mat->get_ramp_offset();
-                rim_threshold = npr_mat->get_rim_threshold();
-                rim_strength = npr_mat->get_rim_strength();
-                rim_width = npr_mat->get_rim_width();
-                rim_color = npr_mat->get_rim_color();
-                use_light_map = npr_mat->get_light_map_texture() ? 1.0f : 0.0f;
-                use_ramp_map = npr_mat->get_ramp_texture() ? 1.0f : 0.0f;
-            } else {
-                // Default NPR values
-                lambert_clamp = 0.5f;
-                ramp_tex_offset = 0.0f;
-                rim_threshold = 0.1f;
-                rim_strength = 1.0f;
-                rim_width = 0.5f;
-                rim_color = Vec3(1.0f, 1.0f, 1.0f);
-                use_light_map = 0.0f;
-                use_ramp_map = 0.0f;
-            }
-            
-            float use_albedo_map = batch.material->get_diffuse_texture() ? 1.0f : 0.0f;
-            float use_normal_map = batch.material->get_normal_texture() ? 1.0f : 0.0f;
+            float use_albedo_map = npr_mat->get_diffuse_texture() ? 1.0f : 0.0f;
+            float use_normal_map = npr_mat->get_normal_texture() ? 1.0f : 0.0f;
             
             // Use helper to set all NPR params
             set_npr_params(mat_data, 
@@ -586,30 +613,26 @@ void NPRForwardPass::execute_batches(RHICommandListRef cmd, const std::vector<Dr
             }
         }
 
-        // Bind textures
-        if (batch.material) {
-            auto albedo_tex = batch.material->get_diffuse_texture();
+        // Bind textures (all from NPRMatefrial)
+        if (npr_mat) {
+            auto albedo_tex = npr_mat->get_diffuse_texture();
             if (albedo_tex && albedo_tex->texture_) {
                 cmd->bind_texture(albedo_tex->texture_, 0, SHADER_FREQUENCY_FRAGMENT);
             }
             
-            auto normal_tex = batch.material->get_normal_texture();
+            auto normal_tex = npr_mat->get_normal_texture();
             if (normal_tex && normal_tex->texture_) {
                 cmd->bind_texture(normal_tex->texture_, 1, SHADER_FREQUENCY_FRAGMENT);
             }
             
-            // Bind NPR-specific textures
-            auto npr_mat = std::dynamic_pointer_cast<NPRMaterial>(batch.material);
-            if (npr_mat) {
-                auto light_map_tex = npr_mat->get_light_map_texture();
-                if (light_map_tex && light_map_tex->texture_) {
-                    cmd->bind_texture(light_map_tex->texture_, 2, SHADER_FREQUENCY_FRAGMENT);
-                }
-                
-                auto ramp_tex = npr_mat->get_ramp_texture();
-                if (ramp_tex && ramp_tex->texture_) {
-                    cmd->bind_texture(ramp_tex->texture_, 3, SHADER_FREQUENCY_FRAGMENT);
-                }
+            auto light_map_tex = npr_mat->get_light_map_texture();
+            if (light_map_tex && light_map_tex->texture_) {
+                cmd->bind_texture(light_map_tex->texture_, 2, SHADER_FREQUENCY_FRAGMENT);
+            }
+            
+            auto ramp_tex = npr_mat->get_ramp_texture();
+            if (ramp_tex && ramp_tex->texture_) {
+                cmd->bind_texture(ramp_tex->texture_, 3, SHADER_FREQUENCY_FRAGMENT);
             }
         }
 
@@ -654,10 +677,24 @@ void NPRForwardPass::build(RDGBuilder& builder, RDGTextureHandle color_target,
         .color(0, color_target, ATTACHMENT_LOAD_OP_CLEAR, ATTACHMENT_STORE_OP_STORE, 
                Color4{0.1f, 0.1f, 0.2f, 1.0f});
     
-    rp_builder.depth_stencil(depth_target, ATTACHMENT_LOAD_OP_CLEAR, 
-                             ATTACHMENT_STORE_OP_DONT_CARE, 1.0f, 0);
+    // Use LOAD for depth if depth prepass was performed, otherwise CLEAR
+    // Use read-only depth to allow simultaneous SRV binding for rim light
+    rp_builder.depth_stencil(depth_target, ATTACHMENT_LOAD_OP_LOAD, 
+                             ATTACHMENT_STORE_OP_DONT_CARE, 1.0f, 0, {}, true);
     
-    rp_builder.execute([this, batches](RDGPassContext context) {
+    // Declare dependency on depth texture (as input attachment)
+    // This ensures RDG inserts proper barriers
+    rp_builder.read(0, 0, 0, depth_target, VIEW_TYPE_2D, 
+                    TextureSubresourceRange{TEXTURE_ASPECT_DEPTH, 0, 1, 0, 1});
+    
+    // Get the actual depth texture from RDG for binding
+    auto* render_system = EngineContext::render_system();
+    RHITextureRef depth_tex = render_system ? render_system->get_prepass_depth_texture() : nullptr;
+    
+    rp_builder.execute([this, batches, depth_tex](RDGPassContext context) {
+        // Set depth texture for this frame
+        set_depth_texture(depth_tex);
+        
         RHICommandListRef cmd = context.command;
         if (!cmd) return;
         

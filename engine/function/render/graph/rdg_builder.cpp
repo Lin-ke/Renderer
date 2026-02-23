@@ -68,7 +68,6 @@ RDGBufferBuilder RDGBuilder::create_buffer(std::string name) {
 }
 
 RDGRenderPassBuilder RDGBuilder::create_render_pass(std::string name) {
-    ERR(LogRDGBuilder, "Creating Render Pass: {}", name);
     RDGRenderPassNodeRef pass_node = graph_->CreateNode<RDGRenderPassNode>(name);
     black_board_.add_pass(pass_node);
     passes_.push_back(pass_node);
@@ -76,7 +75,6 @@ RDGRenderPassBuilder RDGBuilder::create_render_pass(std::string name) {
 }
 
 RDGComputePassBuilder RDGBuilder::create_compute_pass(std::string name) {
-    ERR(LogRDGBuilder, "Creating Compute Pass: {}", name);
     RDGComputePassNodeRef pass_node = graph_->CreateNode<RDGComputePassNode>(name);
     black_board_.add_pass(pass_node);
     passes_.push_back(pass_node);
@@ -123,15 +121,12 @@ RDGBufferHandle RDGBuilder::get_buffer(std::string name) {
 }
 
 void RDGBuilder::execute() {
-    ERR(LogRDGBuilder, "Executing RDG with {} passes", passes_.size());
     for (auto& pass : passes_) {
         if (!pass) continue;
         if (pass->is_culled_) {
-            ERR(LogRDGBuilder, "Pass {} is culled", pass->name());
             continue;
         }
 
-        ERR(LogRDGBuilder, "Executing pass: {}", pass->name());
         switch (pass->node_type()) {
             case RDG_PASS_NODE_TYPE_RENDER: execute_pass(static_cast<RDGRenderPassNodeRef>(pass)); break;
             case RDG_PASS_NODE_TYPE_COMPUTE: execute_pass(static_cast<RDGComputePassNodeRef>(pass)); break;
@@ -143,14 +138,12 @@ void RDGBuilder::execute() {
     }
 
     for (auto& pass : passes_) {
-        // release_resource(pass); // Resource releasing is typically handled inside execute_pass logic or here if needed explicitly
         for (auto& descriptor : pass->pooled_descriptor_sets_) {
             RDGDescriptorSetPool::get(EngineContext::current_frame_index())->release(
                 {descriptor.first}, pass->root_signature_, descriptor.second);
         }
     }
     
-    // Clear passes and graph for next frame to prevent accumulation
     passes_.clear();
     graph_ = std::make_shared<DependencyGraph::DependencyGraph>();
     black_board_.clear();
@@ -160,32 +153,26 @@ void RDGBuilder::create_input_barriers(RDGPassNodeRef pass) {
     pass->for_each_texture([&](RDGTextureEdgeRef edge, RDGTextureNodeRef texture) {
         if (edge->is_output()) return;
         RHIResourceState previous_state_val = previous_state(texture, pass, edge->subresource, false);
-        // if (previous_state_val != edge->state) 
-        {
-            RHITextureBarrier barrier = {
-                .texture = resolve(texture),
-                .src_state = previous_state_val,
-                .dst_state = edge->state,
-                .subresource = edge->subresource
-            };
-            command_->texture_barrier(barrier);
-        }
+        RHITextureBarrier barrier = {
+            .texture = resolve(texture),
+            .src_state = previous_state_val,
+            .dst_state = edge->state,
+            .subresource = edge->subresource
+        };
+        command_->texture_barrier(barrier);
     });
 
     pass->for_each_buffer([&](RDGBufferEdgeRef edge, RDGBufferNodeRef buffer) {
         if (edge->is_output()) return;
         RHIResourceState previous_state_val = previous_state(buffer, pass, 0, 0, false);
-        // if (previous_state_val != edge->state) 
-        {
-            RHIBufferBarrier barrier = {
-                .buffer = resolve(buffer),
-                .src_state = previous_state_val,
-                .dst_state = edge->state,
-                .offset = edge->offset,
-                .size = edge->size
-            };
-            command_->buffer_barrier(barrier);
-        }
+        RHIBufferBarrier barrier = {
+            .buffer = resolve(buffer),
+            .src_state = previous_state_val,
+            .dst_state = edge->state,
+            .offset = edge->offset,
+            .size = edge->size
+        };
+        command_->buffer_barrier(barrier);
     });
 }
 
@@ -193,32 +180,26 @@ void RDGBuilder::create_output_barriers(RDGPassNodeRef pass) {
     pass->for_each_texture([&](RDGTextureEdgeRef edge, RDGTextureNodeRef texture) {
         if (!edge->is_output()) return;
         RHIResourceState previous_state_val = previous_state(texture, pass, edge->subresource, true);
-        // if (previous_state_val != edge->state) 
-        {
-            RHITextureBarrier barrier = {
-                .texture = resolve(texture),
-                .src_state = previous_state_val,
-                .dst_state = edge->state,
-                .subresource = edge->subresource
-            };
-            command_->texture_barrier(barrier);
-        }
+        RHITextureBarrier barrier = {
+            .texture = resolve(texture),
+            .src_state = previous_state_val,
+            .dst_state = edge->state,
+            .subresource = edge->subresource
+        };
+        command_->texture_barrier(barrier);
     });
 
     pass->for_each_buffer([&](RDGBufferEdgeRef edge, RDGBufferNodeRef buffer) {
         if (!edge->is_output()) return;
         RHIResourceState previous_state_val = previous_state(buffer, pass, 0, 0, true);
-        // if (previous_state_val != edge->state) 
-        {
-            RHIBufferBarrier barrier = {
-                .buffer = resolve(buffer),
-                .src_state = previous_state_val,
-                .dst_state = edge->state,
-                .offset = edge->offset,
-                .size = edge->size
-            };
-            command_->buffer_barrier(barrier);
-        }
+        RHIBufferBarrier barrier = {
+            .buffer = resolve(buffer),
+            .src_state = previous_state_val,
+            .dst_state = edge->state,
+            .offset = edge->offset,
+            .size = edge->size
+        };
+        command_->buffer_barrier(barrier);
     });
 }
 
@@ -310,7 +291,8 @@ void RDGBuilder::prepare_render_target(RDGRenderPassNodeRef pass, RHIRenderPassI
                 .load_op = edge->load_op,
                 .store_op = edge->store_op,
                 .clear_depth = edge->clear_depth,
-                .clear_stencil = edge->clear_stencil
+                .clear_stencil = edge->clear_stencil,
+                .read_only = edge->read_only_depth
             };
         }
     });
@@ -332,8 +314,6 @@ void RDGBuilder::release_resource(RDGPassNodeRef pass) {
 }
 
 void RDGBuilder::execute_pass(RDGRenderPassNodeRef pass) {
-    // INFO(LogRDGBuilder, "Executing Render Pass: {}", pass->name());
-
     prepare_descriptor_set(pass);
 
     RHIRenderPassInfo render_pass_info = {};
@@ -368,15 +348,12 @@ void RDGBuilder::execute_pass(RDGRenderPassNodeRef pass) {
 
     command_->pop_event();
     
-    // Destroy render pass to prevent resource leak
     if (render_pass) {
         render_pass->destroy();
     }
 }
 
 void RDGBuilder::execute_pass(RDGComputePassNodeRef pass) {
-    // INFO(LogRDGBuilder, "Executing Compute Pass: {}", pass->name());
-
     prepare_descriptor_set(pass);
 
     command_->push_event(pass->name(), {1.0f, 0.0f, 0.0f});
@@ -404,8 +381,6 @@ void RDGBuilder::execute_pass(RDGComputePassNodeRef pass) {
 }
 
 void RDGBuilder::execute_pass(RDGRayTracingPassNodeRef pass) {
-    // INFO(LogRDGBuilder, "Executing RayTracing Pass: {}", pass->name());
-
     prepare_descriptor_set(pass);
 
     command_->push_event(pass->name(), {0.0f, 1.0f, 0.0f});
@@ -844,15 +819,17 @@ RDGRenderPassBuilder& RDGRenderPassBuilder::color(uint32_t binding, RDGTextureHa
 }
 
 RDGRenderPassBuilder& RDGRenderPassBuilder::depth_stencil(RDGTextureHandle texture, AttachmentLoadOp load, AttachmentStoreOp store,
-                                                          float clear_depth, uint32_t clear_stencil, TextureSubresourceRange subresource) {
+                                                          float clear_depth, uint32_t clear_stencil, TextureSubresourceRange subresource,
+                                                          bool read_only_depth) {
     RDGTextureEdgeRef edge = graph_->CreateEdge<RDGTextureEdge>();
-    edge->state = RESOURCE_STATE_DEPTH_STENCIL_ATTACHMENT;
+    edge->state = read_only_depth ? RESOURCE_STATE_SHADER_RESOURCE : RESOURCE_STATE_DEPTH_STENCIL_ATTACHMENT;
     edge->load_op = load;
     edge->store_op = store;
     edge->clear_depth = clear_depth;
     edge->clear_stencil = clear_stencil;
     edge->subresource = subresource;
     edge->as_depth_stencil = true;
+    edge->read_only_depth = read_only_depth;
     edge->view_type = subresource.layer_count > 1 ? VIEW_TYPE_2D_ARRAY : VIEW_TYPE_2D;
 
     graph_->Link(pass_, graph_->GetNode(texture.id()), edge);

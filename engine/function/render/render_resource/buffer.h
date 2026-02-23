@@ -45,7 +45,7 @@ public:
         ._padding = 0
     };
 
-    inline uint32_t vertex_num() { return vertex_num_; }
+    inline uint32_t vertex_num() const { return vertex_num_; }
 
 private:
     void set_buffer_data(void* data, uint32_t size, RHIBufferRef& buffer, uint32_t& id, uint32_t slot);
@@ -65,8 +65,8 @@ public:
 
     uint32_t index_id_ = 0;
 
-    inline uint32_t index_num() { return index_num_; }
-    inline uint32_t triangle_num() { return index_num_ / 3; }
+    inline uint32_t index_num() const { return index_num_; }
+    inline uint32_t triangle_num() const { return index_num_ / 3; }
 
 private:
     uint32_t index_num_ = 0;

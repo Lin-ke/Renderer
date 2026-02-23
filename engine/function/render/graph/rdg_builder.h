@@ -255,7 +255,8 @@ public:
                                 TextureSubresourceRange subresource = {});
     RDGRenderPassBuilder& depth_stencil(RDGTextureHandle texture, AttachmentLoadOp load = ATTACHMENT_LOAD_OP_DONT_CARE,
                                         AttachmentStoreOp store = ATTACHMENT_STORE_OP_DONT_CARE, float clear_depth = 1.0f,
-                                        uint32_t clear_stencil = 0, TextureSubresourceRange subresource = {});
+                                        uint32_t clear_stencil = 0, TextureSubresourceRange subresource = {},
+                                        bool read_only_depth = false);
     
     // --- Output declarations (for future passes) ---
     // These declare that a resource is modified (or read) by this pass and effectively exported for subsequent passes.

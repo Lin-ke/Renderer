@@ -4,13 +4,12 @@
 #include "engine/main/engine_context.h"
 #include "engine/core/log/Log.h"
 #include "engine/function/asset/asset_manager.h"
+#include <cassert>
 #include <fstream>
 #include <filesystem>
 
 DECLARE_LOG_TAG(LogRenderResource);
 DEFINE_LOG_TAG(LogRenderResource, "RenderResource");
-
-// Helpers
 
 TextureViewType texture_type_to_view_type(TextureType type) {
     switch (type) {
@@ -18,7 +17,9 @@ TextureViewType texture_type_to_view_type(TextureType type) {
         case TextureType::Texture2DArray: return VIEW_TYPE_2D_ARRAY;
         case TextureType::TextureCube: return VIEW_TYPE_CUBE;
         case TextureType::Texture3D: return VIEW_TYPE_3D;
-        default: return VIEW_TYPE_2D;
+        default: 
+            assert(false && "Invalid TextureType");
+            return VIEW_TYPE_2D;
     }
 }
 
@@ -33,7 +34,6 @@ Texture::Texture(const std::string& path)
     : texture_type_(TextureType::Texture2D), format_(FORMAT_R8G8B8A8_SRGB), array_layer_(1) {
     paths_.push_back(path);
     name_ = std::filesystem::path(path).filename().string();
-    // Generate deterministic UID from path for asset management
     set_uid(UID::from_hash(path));
     load_from_file();
 }
@@ -134,6 +134,10 @@ void Texture::load_from_file() {
     }
 
     bool rhi_initialized = false;
+    std::vector<RHIBufferRef> staging_buffers;
+    
+    auto immediate_command = EngineContext::rhi()->get_immediate_command();
+    
     for (uint32_t i = 0; i < (uint32_t)paths_.size(); ++i) {
         std::string physical_path = paths_[i];
         if (EngineContext::asset()) {
@@ -172,21 +176,31 @@ void Texture::load_from_file() {
             rhi_initialized = true;
         }
 
-        uint32_t pixel_size = width * height * 4;
-        
         if (EngineContext::rhi()) {
+            uint32_t row_pitch = width * 4;
+            uint32_t aligned_row_pitch = (row_pitch + 255) & ~255;
+            uint32_t total_size = aligned_row_pitch * height;
+            
             RHIBufferInfo staging_info = {};
-            staging_info.size = pixel_size;
+            staging_info.size = total_size;
             staging_info.memory_usage = MEMORY_USAGE_CPU_ONLY;
             staging_info.type = RESOURCE_TYPE_BUFFER;
             staging_info.creation_flag = BUFFER_CREATION_PERSISTENT_MAP;
 
             RHIBufferRef staging_buffer = EngineContext::rhi()->create_buffer(staging_info);
             void* mapped = staging_buffer->map();
-            memcpy(mapped, pixels, pixel_size);
+            
+            if (aligned_row_pitch == row_pitch) {
+                memcpy(mapped, pixels, total_size);
+            } else {
+                uint8_t* dst = static_cast<uint8_t*>(mapped);
+                uint8_t* src = pixels;
+                for (int y = 0; y < height; ++y) {
+                    memcpy(dst + y * aligned_row_pitch, src + y * row_pitch, row_pitch);
+                }
+            }
+            
             staging_buffer->unmap();
-
-            auto immediate_command = EngineContext::rhi()->get_immediate_command();
             
             immediate_command->texture_barrier({
                 texture_,
@@ -201,14 +215,14 @@ void Texture::load_from_file() {
                 texture_,
                 {TEXTURE_ASPECT_COLOR, 0, i, 1}
             );
+            
+            staging_buffers.push_back(staging_buffer);
         }
 
         stbi_image_free(pixels);
     }
 
     if (rhi_initialized && EngineContext::rhi()) {
-        auto immediate_command = EngineContext::rhi()->get_immediate_command();
-        
         immediate_command->texture_barrier({
             texture_,
             RESOURCE_STATE_TRANSFER_DST,
@@ -226,6 +240,7 @@ void Texture::load_from_file() {
         });
 
         immediate_command->flush();
+        staging_buffers.clear();
     }
 }
 

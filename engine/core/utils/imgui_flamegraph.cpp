@@ -3,7 +3,7 @@
 
 namespace ImGuiFlameGraph {
 
-// Helper functions for ImVec2 operations
+
 static inline ImVec2 ImVec2Add(const ImVec2& a, const ImVec2& b) {
     return ImVec2(a.x + b.x, a.y + b.y);
 }
@@ -28,7 +28,7 @@ void PlotFlame(
     float scale_max,
     ImVec2 graph_size)
 {
-    ImGui::PushItemWidth(-1);   // Fix width
+    ImGui::PushItemWidth(-1);   
 
     ImGuiWindow* window = ImGui::GetCurrentWindow();
     if (window->SkipItems)
@@ -37,7 +37,7 @@ void PlotFlame(
     ImGuiContext& g = *GImGui;
     const ImGuiStyle& style = g.Style;
 
-    // Find the maximum depth
+    
     ImU8 max_depth = 0;
     for (int i = values_offset; i < values_count; ++i) {
         ImU8 depth;
@@ -65,16 +65,16 @@ void PlotFlame(
     if (!ImGui::ItemAdd(total_bb, 0, &frame_bb))
         return;
 
-    // Determine scale from values if not specified
+    
     if (scale_min == FLT_MAX || scale_max == FLT_MAX) {
         float v_min = FLT_MAX;
         float v_max = -FLT_MAX;
         for (int i = values_offset; i < values_count; i++) {
             float v_start, v_end;
             values_getter(&v_start, &v_end, nullptr, nullptr, data, i);
-            if (v_start == v_start) // Check non-NaN values
+            if (v_start == v_start)
                 v_min = ImMin(v_min, v_start);
-            if (v_end == v_end) // Check non-NaN values
+            if (v_end == v_end)
                 v_max = ImMax(v_max, v_end);
         }
         if (scale_min == FLT_MAX)
@@ -135,7 +135,7 @@ void PlotFlame(
             }
         }
 
-        // Text overlay
+        
         if (overlay_text) {
             ImGui::RenderTextClipped(
                 ImVec2(frame_bb.Min.x, frame_bb.Min.y + style.FramePadding.y),

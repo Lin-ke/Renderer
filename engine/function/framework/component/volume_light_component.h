@@ -6,10 +6,6 @@
 #include "engine/core/reflect/class_db.h" // Includes VolumeLightInfo/Textures
 #include <cstdint>
 
-//####TODO####: Define VolumeLightTextures if not in RenderStructs.h
-// RenderStructs.h usually only has UBO/SSBO structs. 
-// VolumeLightTextures (shared_ptr to textures) might be in a different file or need def.
-// I will define a placeholder struct here if needed.
 struct VolumeLightTextures {
     // std::shared_ptr<Texture> ...
     // Using void* or placeholders for now
@@ -37,7 +33,7 @@ public:
 
     inline bool enable() const { return enable_; }
     
-    void update_light_info(); // Public for manager
+    void update_light_info();
 
     uint32_t volume_light_id_ = 0;
 

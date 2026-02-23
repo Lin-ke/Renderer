@@ -26,19 +26,40 @@
 
 DEFINE_LOG_TAG(LogModelImporter, "ModelImporter");
 
+enum class MtlMaterialTypeHint {
+    Default = 0,  // Use global setting or fallback
+    PBR = 1,
+    NPR = 2,
+};
+
+// MTL file global settings
+struct MtlGlobalSettings {
+    ModelMaterialType default_material_type = ModelMaterialType::PBR;
+};
+
 // MTL material data structure for manual parsing
 struct MtlMaterial {
     std::string name;
     std::string diffuse_map;
+    std::string light_map;      // NPR LightMap (map_Ke)
+    std::string ramp_map;       // NPR Ramp texture (map_Ramp)
     Vec4 ambient_color{0.2f, 0.2f, 0.2f, 1.0f};
     Vec4 diffuse_color{0.8f, 0.8f, 0.8f, 1.0f};
     Vec4 specular_color{0.0f, 0.0f, 0.0f, 1.0f};
     float shininess = 32.0f;
     float opacity = 1.0f;
     float roughness = 0.5f;
+    // Material type (overrides global setting if specified)
+    MtlMaterialTypeHint material_type_hint = MtlMaterialTypeHint::Default;
+    // NPR parameters
+    float lambert_clamp = 0.5f;
+    float ramp_offset = 0.0f;
+    float rim_width = 0.5f;
+    float rim_threshold = 0.1f;
+    float rim_strength = 1.0f;
+    Vec3 rim_color{1.0f, 1.0f, 1.0f};
 };
 
-// Helper function to safely convert aiString to std::string
 static std::string safe_ai_string(const aiString& ai_str) {
     const char* data = ai_str.C_Str();
     std::string result;
@@ -54,8 +75,9 @@ static std::string safe_ai_string(const aiString& ai_str) {
     return result;
 }
 
-// Parse MTL file manually
-static bool parse_mtl_file(const std::filesystem::path& mtl_path, std::vector<MtlMaterial>& out_materials) {
+static bool parse_mtl_file(const std::filesystem::path& mtl_path, 
+                           std::vector<MtlMaterial>& out_materials,
+                           MtlGlobalSettings& out_settings) {
     std::ifstream file(mtl_path);
     if (!file.is_open()) {
         WARN(LogModelImporter, "Failed to open MTL file: {}", mtl_path.string());
@@ -73,7 +95,19 @@ static bool parse_mtl_file(const std::filesystem::path& mtl_path, std::vector<Mt
         std::string keyword;
         iss >> keyword;
         
-        if (keyword == "newmtl") {
+        // Global MaterialType setting (can appear outside newmtl blocks)
+        if (keyword == "MaterialType") {
+            std::string type_str;
+            iss >> type_str;
+            if (type_str == "NPR" || type_str == "npr") {
+                out_settings.default_material_type = ModelMaterialType::NPR;
+                INFO(LogModelImporter, "MTL global MaterialType set to NPR");
+            } else if (type_str == "PBR" || type_str == "pbr") {
+                out_settings.default_material_type = ModelMaterialType::PBR;
+                INFO(LogModelImporter, "MTL global MaterialType set to PBR");
+            }
+        }
+        else if (keyword == "newmtl") {
             out_materials.emplace_back();
             current = &out_materials.back();
             iss >> current->name;
@@ -103,13 +137,68 @@ static bool parse_mtl_file(const std::filesystem::path& mtl_path, std::vector<Mt
             float d;
             if (iss >> d) current->opacity = d;
         }
+        // NPR LightMap (using map_Ke as custom extension)
+        else if ((keyword == "map_Ke" || keyword == "map_lightmap") && current) {
+            std::string rest;
+            std::getline(iss, rest);
+            size_t start = rest.find_first_not_of(" \t");
+            if (start != std::string::npos) {
+                current->light_map = rest.substr(start);
+            }
+        }
+        // NPR Ramp texture
+        else if ((keyword == "map_Ramp" || keyword == "map_ramp") && current) {
+            std::string rest;
+            std::getline(iss, rest);
+            size_t start = rest.find_first_not_of(" \t");
+            if (start != std::string::npos) {
+                current->ramp_map = rest.substr(start);
+            }
+        }
+        // RIM parameters
+        else if (keyword == "RimWidth" && current) {
+            float v;
+            if (iss >> v) current->rim_width = v;
+        }
+        else if (keyword == "RimThreshold" && current) {
+            float v;
+            if (iss >> v) current->rim_threshold = v;
+        }
+        else if (keyword == "RimStrength" && current) {
+            float v;
+            if (iss >> v) current->rim_strength = v;
+        }
+        else if (keyword == "RimColor" && current) {
+            float r, g, b;
+            if (iss >> r >> g >> b) current->rim_color = Vec3(r, g, b);
+        }
+        // Per-material MaterialType (overrides global setting)
+        else if (keyword == "MaterialType" && current) {
+            std::string type_str;
+            iss >> type_str;
+            if (type_str == "NPR" || type_str == "npr") {
+                current->material_type_hint = MtlMaterialTypeHint::NPR;
+            } else if (type_str == "PBR" || type_str == "pbr") {
+                current->material_type_hint = MtlMaterialTypeHint::PBR;
+            }
+        }
+        // NPR parameters
+        else if (keyword == "LambertClamp" && current) {
+            float v;
+            if (iss >> v) current->lambert_clamp = v;
+        }
+        else if (keyword == "RampOffset" && current) {
+            float v;
+            if (iss >> v) current->ramp_offset = v;
+        }
     }
     
-    INFO(LogModelImporter, "Parsed MTL file: {} materials from {}", out_materials.size(), mtl_path.string());
+    INFO(LogModelImporter, "Parsed MTL file: {} materials from {} (global type: {})", 
+         out_materials.size(), mtl_path.string(),
+         out_settings.default_material_type == ModelMaterialType::NPR ? "NPR" : "PBR");
     return !out_materials.empty();
 }
 
-// Helper to convert UTF-8 to wide string
 static std::wstring utf8_to_wstring(const std::string& str) {
     if (str.empty()) return std::wstring();
     int size_needed = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, str.c_str(), -1, nullptr, 0);
@@ -119,7 +208,6 @@ static std::wstring utf8_to_wstring(const std::string& str) {
     return wstr;
 }
 
-// Helper to convert local encoding to wide string
 static std::wstring acp_to_wstring(const std::string& str) {
     if (str.empty()) return std::wstring();
     int size_needed = MultiByteToWideChar(CP_ACP, 0, str.c_str(), -1, nullptr, 0);
@@ -129,7 +217,6 @@ static std::wstring acp_to_wstring(const std::string& str) {
     return wstr;
 }
 
-// Safe path creation helpers
 static std::optional<std::filesystem::path> safe_path_from_string(const std::string& str) {
     try { return std::filesystem::path(str); } catch (...) { return std::nullopt; }
 }
@@ -138,12 +225,7 @@ static std::optional<std::filesystem::path> safe_path_from_wstring(const std::ws
     try { return std::filesystem::path(wstr); } catch (...) { return std::nullopt; }
 }
 
-// ============================================================================
-// ModelImporter Implementation
-// ============================================================================
-
 std::shared_ptr<Model> ModelImporter::import_model(const std::string& physical_path, const std::string& virtual_path, const ModelProcessSetting& settings) {
-    // DEBUG PRINT
     printf("DEBUG: ModelImporter::import_model called for %s\n", physical_path.c_str());
 
     source_path_ = std::filesystem::path(physical_path);
@@ -152,19 +234,16 @@ std::shared_ptr<Model> ModelImporter::import_model(const std::string& physical_p
     output_dir_ = source_path_.parent_path();
     settings_ = settings;
     
-    // Check if asset manager is available
     if (!EngineContext::asset()) {
         ERR(LogModelImporter, "AssetManager not initialized, cannot import model");
         return nullptr;
     }
     
-    // Clear caches
     texture_cache_.clear();
     material_cache_.clear();
     mesh_cache_.clear();
     
     try {
-        // Set up Assimp flags
         uint32_t process_steps = aiProcess_Triangulate | aiProcess_FixInfacingNormals;
         if (settings_.flip_uv) process_steps |= aiProcess_FlipUVs;
         if (settings_.smooth_normal) {
@@ -173,7 +252,6 @@ std::shared_ptr<Model> ModelImporter::import_model(const std::string& physical_p
             process_steps |= aiProcess_JoinIdenticalVertices | aiProcess_GenNormals;
         }
         
-        // Import with Assimp
         Assimp::Importer importer;
         const aiScene* scene = nullptr;
         
@@ -199,26 +277,27 @@ std::shared_ptr<Model> ModelImporter::import_model(const std::string& physical_p
             return nullptr;
         }
         
-        // Parse MTL if available
         std::vector<MtlMaterial> mtl_materials;
         std::unordered_map<std::string, size_t> mtl_name_to_index;
+        MtlGlobalSettings mtl_settings;
         if (settings_.load_materials) {
             std::filesystem::path mtl_path = source_path_;
             mtl_path.replace_extension(".mtl");
-            if (parse_mtl_file(mtl_path, mtl_materials)) {
+            if (parse_mtl_file(mtl_path, mtl_materials, mtl_settings)) {
                 for (size_t i = 0; i < mtl_materials.size(); ++i) {
                     mtl_name_to_index[mtl_materials[i].name] = i;
+                }
+                if (mtl_settings.default_material_type != ModelMaterialType::PBR || 
+                    mtl_materials.empty() == false) {
+                    settings_.material_type = mtl_settings.default_material_type;
                 }
             }
         }
         
-        // Collect meshes
         std::vector<aiMesh*> process_meshes;
         process_node(scene->mRootNode, scene, process_meshes);
         
-        // Create new Model asset
         auto model = std::make_shared<Model>(physical_path, settings);
-        // Use hash of virtual path if available for deterministic UID, otherwise physical
         std::string uid_seed = virtual_path.empty() ? physical_path : virtual_path;
         model->set_uid(UID::from_hash(uid_seed)); 
         
@@ -261,20 +340,14 @@ std::shared_ptr<Mesh> ModelImporter::process_mesh(
     const std::unordered_map<std::string, size_t>& mtl_name_to_index,
     std::shared_ptr<Material>& out_material) {
     
-    // Generate deterministic UID and path for this mesh
     std::string mesh_sub_name = "mesh_" + std::to_string(index);
     UID mesh_uid = generate_sub_asset_uid(mesh_sub_name, "mesh");
     
-    // Construct virtual path for the mesh asset
-    // If original model was "/Game/models/bunny.obj", mesh is "/Game/models/bunny.obj.mesh_0.asset"
-    // Use virtual path if available, otherwise physical path (which might fail save_asset)
     std::string base_path = !virtual_path_.empty() ? virtual_path_ : source_path_.string();
     std::string mesh_asset_path = base_path + "." + mesh_sub_name + ".asset";
     
-    // Check if mesh is already cached or loaded
     if (EngineContext::asset()->get_asset_immediate(mesh_uid)) {
-        out_material = nullptr; // Material will be handled separately if mesh is cached
-        // Note: For full correctness we should probably still try to get the material if requested
+        out_material = nullptr;
     }
 
     // Extract vertex data
@@ -357,75 +430,96 @@ std::shared_ptr<Mesh> ModelImporter::process_mesh(
             }
         }
         
-        out_material = get_or_create_material(mat_name_str, ai_mat, mtl_mat);
+        out_material = get_or_create_material(mat_name_str, ai_mat, mtl_mat, index);
     }
     
     return mesh_asset;
 }
 
 UID ModelImporter::generate_sub_asset_uid(const std::string& sub_name, const std::string& type_suffix) {
-    // Determine UID by hashing the virtual path + sub-name if available
-    // Otherwise fallback to source physical path
     std::string base_path = !virtual_path_.empty() ? virtual_path_ : source_path_.string();
-    std::string key = base_path + "::" + sub_name + "::" + type_suffix;
+    std::string mat_type_str = (settings_.material_type == ModelMaterialType::NPR) ? "npr" : "pbr";
+    std::string key = base_path + "::" + sub_name + "::" + type_suffix + "::" + mat_type_str;
     return UID::from_hash(key);
 }
 
 std::shared_ptr<Material> ModelImporter::get_or_create_material(
     const std::string& mat_name,
     aiMaterial* ai_mat,
-    const MtlMaterial* mtl_mat) {
+    const MtlMaterial* mtl_mat,
+    int mesh_index) {
+    
+    std::string cache_key = mat_name + "_mesh_" + std::to_string(mesh_index);
     
     // Check cache first (importer-local cache)
-    auto cache_it = material_cache_.find(mat_name);
+    auto cache_it = material_cache_.find(cache_key);
     if (cache_it != material_cache_.end()) {
         return cache_it->second;
     }
     
-    // Deterministic UID for material
-    UID mat_uid = generate_sub_asset_uid(mat_name, "material");
+    // Deterministic UID for material (include mesh_index for uniqueness)
+    UID mat_uid = generate_sub_asset_uid(cache_key, "material");
     
     std::string base_path = !virtual_path_.empty() ? virtual_path_ : source_path_.string();
-    std::string mat_asset_path = base_path + "." + mat_name + ".asset";
+    std::string mat_asset_path = base_path + "." + cache_key + ".asset";
     
     // Check if asset already exists in engine
     if (auto existing = EngineContext::asset()->get_asset_immediate(mat_uid)) {
         auto mat = std::dynamic_pointer_cast<Material>(existing);
         if (mat) {
-            material_cache_[mat_name] = mat;
+            material_cache_[cache_key] = mat;
             return mat;
         }
     }
     
-    // Create material based on settings
+    ModelMaterialType mat_type = settings_.material_type;
+    if (mtl_mat && mtl_mat->material_type_hint != MtlMaterialTypeHint::Default) {
+        mat_type = (mtl_mat->material_type_hint == MtlMaterialTypeHint::NPR) 
+                   ? ModelMaterialType::NPR 
+                   : ModelMaterialType::PBR;
+    }
+    
     std::shared_ptr<Material> material;
-    if (settings_.material_type == ModelMaterialType::NPR) {
+    if (mat_type == ModelMaterialType::NPR) {
         auto npr_mat = std::make_shared<NPRMaterial>();
-        // Set default NPR parameters
-        npr_mat->set_lambert_clamp(0.5f);
-        npr_mat->set_ramp_offset(0.0f);
-        npr_mat->set_rim_threshold(0.1f);
-        npr_mat->set_rim_strength(1.0f);
-        npr_mat->set_rim_width(0.5f);
-        npr_mat->set_rim_color(Vec3(1.0f, 1.0f, 1.0f));
+        // Set NPR parameters from MTL or defaults
+        if (mtl_mat) {
+            npr_mat->set_lambert_clamp(mtl_mat->lambert_clamp);
+            npr_mat->set_ramp_offset(mtl_mat->ramp_offset);
+            npr_mat->set_rim_threshold(mtl_mat->rim_threshold);
+            npr_mat->set_rim_strength(mtl_mat->rim_strength);
+            npr_mat->set_rim_width(mtl_mat->rim_width);
+            npr_mat->set_rim_color(mtl_mat->rim_color);
+        } else {
+            // Set default NPR parameters
+            npr_mat->set_lambert_clamp(0.5f);
+            npr_mat->set_ramp_offset(0.0f);
+            npr_mat->set_rim_threshold(0.1f);
+            npr_mat->set_rim_strength(1.0f);
+            npr_mat->set_rim_width(0.5f);
+            npr_mat->set_rim_color(Vec3(1.0f, 1.0f, 1.0f));
+        }
         material = npr_mat;
     } else {
         material = std::make_shared<PBRMaterial>();
     }
     material->set_uid(mat_uid);
     
-    // Common material setup (diffuse color and texture)
-    material->set_diffuse(Vec4(1.0f, 1.0f, 1.0f, 1.0f)); // Use white to see texture clearly
+    if (mat_type == ModelMaterialType::NPR) {
+        auto npr_mat = std::dynamic_pointer_cast<NPRMaterial>(material);
+        if (npr_mat) npr_mat->set_diffuse(Vec4(1.0f, 1.0f, 1.0f, 1.0f));
+    } else {
+        auto pbr_mat = std::dynamic_pointer_cast<PBRMaterial>(material);
+        if (pbr_mat) pbr_mat->set_diffuse(Vec4(1.0f, 1.0f, 1.0f, 1.0f));
+    }
     
-    if (settings_.material_type == ModelMaterialType::PBR) {
+    if (mat_type == ModelMaterialType::PBR) {
         auto pbr_mat = std::dynamic_pointer_cast<PBRMaterial>(material);
         if (pbr_mat) {
             pbr_mat->set_roughness(0.5f);
             pbr_mat->set_metallic(0.0f);
         }
     }
-    
-    // Load diffuse texture from MTL or FBX
     if (mtl_mat && !mtl_mat->diffuse_map.empty()) {
         try {
             std::filesystem::path tex_path = output_dir_ / mtl_mat->diffuse_map;
@@ -434,16 +528,74 @@ std::shared_ptr<Material> ModelImporter::get_or_create_material(
             }
             if (std::filesystem::exists(tex_path)) {
                 auto texture = std::make_shared<Texture>(tex_path.string());
-                material->set_diffuse_texture(texture);
+                // Texture constructor already sets UID from path and marks dirty
+                // Set texture based on material type
+                if (mat_type == ModelMaterialType::NPR) {
+                    auto npr_mat = std::dynamic_pointer_cast<NPRMaterial>(material);
+                    if (npr_mat) npr_mat->set_diffuse_texture(texture);
+                } else {
+                    auto pbr_mat = std::dynamic_pointer_cast<PBRMaterial>(material);
+                    if (pbr_mat) pbr_mat->set_diffuse_texture(texture);
+                }
             }
-        } catch (...) {}
+        } catch (const std::exception& e) {
+            ERR(LogModelImporter, "Failed to load diffuse texture: {}", e.what());
+        } catch (...) {
+            ERR(LogModelImporter, "Failed to load diffuse texture: unknown error");
+        }
+        
+        // Load NPR LightMap texture from MTL
+        if (mat_type == ModelMaterialType::NPR && !mtl_mat->light_map.empty()) {
+            try {
+                std::filesystem::path lightmap_path = output_dir_ / mtl_mat->light_map;
+                if (settings_.force_png_texture) {
+                    lightmap_path.replace_extension(".png");
+                }
+                if (std::filesystem::exists(lightmap_path)) {
+                    auto lightmap_tex = std::make_shared<Texture>(lightmap_path.string());
+                    auto npr_mat = std::dynamic_pointer_cast<NPRMaterial>(material);
+                    if (npr_mat) npr_mat->set_light_map_texture(lightmap_tex);
+                }
+            } catch (const std::exception& e) {
+                ERR(LogModelImporter, "Failed to load light map texture: {}", e.what());
+            } catch (...) {
+                ERR(LogModelImporter, "Failed to load light map texture: unknown error");
+            }
+        }
+        
+        // Load NPR Ramp texture from MTL
+        if (mat_type == ModelMaterialType::NPR && !mtl_mat->ramp_map.empty()) {
+            try {
+                std::filesystem::path ramp_path = output_dir_ / mtl_mat->ramp_map;
+                if (settings_.force_png_texture) {
+                    ramp_path.replace_extension(".png");
+                }
+                if (std::filesystem::exists(ramp_path)) {
+                    auto ramp_tex = std::make_shared<Texture>(ramp_path.string());
+                    auto npr_mat = std::dynamic_pointer_cast<NPRMaterial>(material);
+                    if (npr_mat) npr_mat->set_ramp_texture(ramp_tex);
+                }
+            } catch (const std::exception& e) {
+                ERR(LogModelImporter, "Failed to load ramp texture: {}", e.what());
+            } catch (...) {
+                ERR(LogModelImporter, "Failed to load ramp texture: unknown error");
+            }
+        }
     } else if (!mtl_mat) {
         // Fall back to FBX material data for texture
         auto tex = load_material_texture(ai_mat, (aiTextureType)1 /* aiTextureType_DIFFUSE */);
-        if (tex) material->set_diffuse_texture(tex);
+        if (tex) {
+            if (mat_type == ModelMaterialType::NPR) {
+                auto npr_mat = std::dynamic_pointer_cast<NPRMaterial>(material);
+                if (npr_mat) npr_mat->set_diffuse_texture(tex);
+            } else {
+                auto pbr_mat = std::dynamic_pointer_cast<PBRMaterial>(material);
+                if (pbr_mat) pbr_mat->set_diffuse_texture(tex);
+            }
+        }
         
         // For PBR, also load metallic/roughness from FBX
-        if (settings_.material_type == ModelMaterialType::PBR) {
+        if (mat_type == ModelMaterialType::PBR) {
             auto pbr_mat = std::dynamic_pointer_cast<PBRMaterial>(material);
             if (pbr_mat) {
                 float metallic = 0.0f, roughness = 0.5f;
@@ -458,15 +610,19 @@ std::shared_ptr<Material> ModelImporter::get_or_create_material(
         // Load diffuse color from FBX
         aiColor4D base_color;
         if (AI_SUCCESS == ai_mat->Get(AI_MATKEY_COLOR_DIFFUSE, base_color)) {
-            material->set_diffuse(Vec4(base_color.r, base_color.g, base_color.b, base_color.a));
+            if (mat_type == ModelMaterialType::NPR) {
+                auto npr_mat = std::dynamic_pointer_cast<NPRMaterial>(material);
+                if (npr_mat) npr_mat->set_diffuse(Vec4(base_color.r, base_color.g, base_color.b, base_color.a));
+            } else {
+                auto pbr_mat = std::dynamic_pointer_cast<PBRMaterial>(material);
+                if (pbr_mat) pbr_mat->set_diffuse(Vec4(base_color.r, base_color.g, base_color.b, base_color.a));
+            }
         }
     }
     
-    // Material asset will be saved automatically when Model is saved via ASSET_DEPS
-    // Just mark it dirty so it will be included in the save
     material->mark_dirty();
     
-    material_cache_[mat_name] = material;
+    material_cache_[cache_key] = material;
     return material;
 }
 
@@ -492,6 +648,7 @@ std::shared_ptr<Texture> ModelImporter::load_material_texture(aiMaterial* mat, a
         if (found_path.empty()) continue;
         
         auto texture = std::make_shared<Texture>(found_path.string());
+        // Texture constructor already sets UID from path and marks dirty
         texture_cache_[texture_name] = texture;
         return texture;
     }

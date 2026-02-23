@@ -24,7 +24,7 @@ DEFINE_LOG_TAG(LogGame, "Game");
 
 // Frame counter for debugging
 static uint32_t g_frame_count = 0;
-static const uint32_t MAX_FRAMES = 30000;  // Only render 30 frames then exit
+static const uint32_t MAX_FRAMES = 3000000;  // Only render 30 frames then exit
 
 Entity* setup_bunny_scene() {
     INFO(LogGame, "Setting up bunny render scene...");

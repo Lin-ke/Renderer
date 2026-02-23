@@ -42,7 +42,6 @@ struct AssetHeader : public AssetUID {
 	}
 };
 
-// 完整的资产文件结构
 struct AssetFile : public AssetHeader {
 	AssetRef asset;
 
@@ -70,7 +69,7 @@ static auto with_asset_read(const fs::path &path, Func &&func)
 				data_container.serialize(ar);
 			} else if (ext == ".asset") {
 				cereal::JSONInputArchive ar(ifs);
-				data_container.serialize(ar); // 为了去掉最外层的一个“value0”
+				data_container.serialize(ar);
 			} else {
 				ERR(LogAsset, "Unknown asset format: {}", path.string());
 				return ResultT{};
@@ -83,7 +82,6 @@ static auto with_asset_read(const fs::path &path, Func &&func)
 	return ResultT{};
 }
 
-// 写入口，总是写入完整文件
 template <typename Func>
 static void with_asset_write(const fs::path &path, Func &&func) {
 	auto ext = path.extension();
@@ -125,8 +123,6 @@ static std::shared_future<T> make_ready_future(const T &value) {
 	return promise.get_future().share();
 }
 
-// --- 2. AssetManager Core ---
-
 AssetManager::~AssetManager() = default;
 
 void AssetManager::init(const fs::path &game_path) {
@@ -141,15 +137,9 @@ void AssetManager::init(const fs::path &game_path) {
 			INFO(LogAsset, "Created asset directory: {}", p.string());
 		}
 	}
-	/// DEBUG
-	// for (auto&[uid, path_str] : uid_to_path_) {
-	//     INFO("Registered Asset UID: {} -> {}", uid.to_string(), path_str);
-	// }
 }
 
 void AssetManager::tick() {}
-
-// --- Load / Save Implementation ---
 
 AssetDeps AssetManager::peek_asset_deps(const fs::path &path) {
 	return with_asset_read<AssetHeader>(path, [](AssetHeader &&header) {
@@ -176,7 +166,6 @@ void AssetManager::perform_save_to_disk(AssetRef asset, const fs::path &phys_pat
 
 	with_asset_write(phys_path, [&](AssetFile &file_data) {
 		file_data.uid = asset->get_uid();
-		// better syntax in cpp23.
         std::unordered_set<UID> dep_uids;
 		asset->traverse_deps([&](AssetRef dep) {
 			if (dep) {
@@ -194,8 +183,6 @@ void AssetManager::perform_save_to_disk(AssetRef asset, const fs::path &phys_pat
 
 	register_asset(asset, phys_path.generic_string());
 }
-
-// --- Task & Queue Logic ---
 
 void AssetManager::collect_dependencies_recursive(UID uid, std::vector<UID> &sorted_uids, std::unordered_set<UID> &visited) {
 	if (uid.is_empty() || visited.contains(uid)) {
@@ -278,7 +265,6 @@ std::vector<std::shared_future<AssetRef>> AssetManager::enqueue_load_task(UID ui
 		if (pool && use_thread_pool) {
 			pool->enqueue(std::move(task_lambda));
 		} else {
-			// Sync fallback: unlock for IO, then relock
 			task_lambda();
 		}
 		lock.lock();
@@ -323,8 +309,6 @@ AssetRef AssetManager::get_asset_immediate(UID uid) {
 	}
 	return nullptr;
 }
-
-// --- Scanning ---
 
 void AssetManager::scan_directory(const fs::path &dir_path) {
 	std::vector<fs::path> paths;
@@ -416,7 +400,6 @@ static std::string type_to_ext(AssetType type) {
     switch (type) {
         case AssetType::Texture:
         case AssetType::Model:
-            return ".binasset";
         default:
             return ".asset";
     }
@@ -482,9 +465,17 @@ void AssetManager::save_asset(AssetRef asset, const std::string &virtual_path) {
 
 		// Check if save is needed
 		if (!is_new && !asset_to_save->is_dirty()) {
-			INFO(LogAsset, "Skipping save for {} (not new and not dirty)", asset_to_save->get_uid().to_string());
+			INFO(LogAsset, "Skipping save for {} ({}): is_new={}, is_dirty={}", 
+			     asset_to_save->get_uid().to_string(), 
+			     asset_to_save->get_asset_type_name(),
+			     is_new, 
+			     asset_to_save->is_dirty());
 			continue;
 		}
+		INFO(LogAsset, "Will save {} ({}) to {}", 
+		     asset_to_save->get_uid().to_string(), 
+		     asset_to_save->get_asset_type_name(),
+		     save_path.string());
 
 		// Call on_save_asset to sync internal state before saving
 		asset_to_save->on_save_asset();
@@ -505,8 +496,6 @@ void AssetManager::save_asset(AssetRef asset, const std::string &virtual_path) {
 		f.wait();
 	}
 }
-
-// --- Path Utilities ---
 
 std::optional<fs::path> AssetManager::get_physical_path(std::string_view virtual_path) {
 	// This function now assumes virtual_path is a generic string

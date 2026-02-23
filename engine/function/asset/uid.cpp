@@ -10,29 +10,27 @@ UID::UID()
     static thread_local std::mt19937 gen(rd());
     static thread_local uuids::uuid_random_generator generator(gen);
     
-    this->id = generator();
-    this->str = uuids::to_string(this->id);
+    this->id_ = generator();
+    this->str_ = uuids::to_string(this->id_);
 }
 
 UID::UID(const std::string& input_str)
 {
     auto parsed = uuids::uuid::from_string(input_str);
     if (parsed) {
-        this->id = *parsed;
+        this->id_ = *parsed;
     } else {
-        this->id = uuids::uuid(); // nil
+        this->id_ = uuids::uuid(); // nil
     }
-    this->str = input_str; 
+    this->str_ = input_str; 
 }
 
-// 私有构造：专门用于创建空对象
 UID::UID(NullTag)
 {
-    this->id = uuids::uuid(); // nil
-    this->str = uuids::to_string(this->id);
+    this->id_ = uuids::uuid(); // nil
+    this->str_ = uuids::to_string(this->id_);
 }
 
-// 静态 Empty 方法
 UID UID::empty()
 {
     return UID(NullTag{});
@@ -53,8 +51,7 @@ UID UID::from_hash(const std::string& input_str) {
     std::memcpy(bytes.data() + 8, &low, 8);
     
     UID uid;
-    uid.id = uuids::uuid(bytes.begin(), bytes.end());
-    uid.str = uuids::to_string(uid.id);
-    return uid;
+    uid.id_ = uuids::uuid(bytes.begin(), bytes.end());
+    uid.str_ = uuids::to_string(uid.id_);
     return uid;
 }

@@ -1,5 +1,5 @@
-#ifndef SPIRIT_COMPONENT_H
-#define SPIRIT_COMPONENT_H
+#pragma once
+
 #include "engine/function/asset/basic/png.h"
 #include "engine/function/framework/component.h"
 #include "engine/function/asset/asset_macros.h"
@@ -24,4 +24,3 @@ class SpiritComponent : public Component {
 };
 CEREAL_REGISTER_TYPE(SpiritComponent);
 CEREAL_REGISTER_POLYMORPHIC_RELATION(Component, SpiritComponent);
-#endif

@@ -9,6 +9,7 @@
 #include "engine/function/render/render_resource/texture.h"
 
 #include <array>
+#include <cassert>
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
@@ -17,7 +18,6 @@
 #include <queue>
 
 //####TODO####: Full bindless resource system is not implemented yet
-// This is a simplified version that provides basic ID allocation and buffer management
 
 struct BindlessResourceInfo {
     ResourceType resource_type = RESOURCE_TYPE_NONE;
@@ -58,10 +58,8 @@ public:
             free_indices_.pop();
             return index;
         }
-        if (next_index_ < max_size_) {
-            return next_index_++;
-        }
-        return 0; // Allocation failed
+        assert(next_index_ < max_size_ && "IndexAllocator: out of indices");
+        return next_index_++;
     }
 
     void release(uint32_t index) {
@@ -124,6 +122,11 @@ public:
     // Global texture access
     TextureRef get_depth_texture() { return depth_texture_; }
     TextureRef get_velocity_texture() { return velocity_texture_; }
+    
+    // Default texture fallbacks
+    TextureRef get_default_black_texture() { return default_black_texture_; }
+    TextureRef get_default_white_texture() { return default_white_texture_; }
+    TextureRef get_default_normal_texture() { return default_normal_texture_; }
 
     // Buffer access
     RHIBufferRef get_per_frame_camera_buffer();
@@ -160,8 +163,11 @@ private:
     TextureRef depth_texture_;
     TextureRef velocity_texture_;
     TextureRef prev_depth_texture_;
+    
+    TextureRef default_black_texture_;
+    TextureRef default_white_texture_;
+    TextureRef default_normal_texture_;
 
-    // Bindless resources tracking
     std::array<std::unordered_map<uint32_t, BindlessResourceInfo>, BINDLESS_SLOT_MAX_ENUM> bindless_resources_;
 
     bool initialized_ = false;

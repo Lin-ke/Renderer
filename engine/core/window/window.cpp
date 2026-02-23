@@ -8,7 +8,7 @@
 #include <imgui.h>
 #include <imgui_impl_win32.h>
 
-// Forward declaration of ImGui Win32 message handler
+
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 
@@ -37,13 +37,19 @@ Window::Window(int width, int height, const std::wstring& title, bool visible)
 
     DWORD style = visible ? WS_OVERLAPPEDWINDOW : 0;
     
+    // Calculate required window size to ensure client area matches width/height
+    RECT window_rect = { 0, 0, width_, height_ };
+    AdjustWindowRect(&window_rect, style, FALSE);
+    int adjusted_width = window_rect.right - window_rect.left;
+    int adjusted_height = window_rect.bottom - window_rect.top;
+
     hwnd_ = CreateWindowEx(
         0,
         class_name_.c_str(),
         title_.c_str(),
         style,
         CW_USEDEFAULT, CW_USEDEFAULT,
-        width_, height_,
+        adjusted_width, adjusted_height,
         nullptr,
         nullptr,
         hinstance_,
@@ -52,7 +58,7 @@ Window::Window(int width, int height, const std::wstring& title, bool visible)
 
     if (!hwnd_) {
         DWORD error = GetLastError();
-        // Log error or handle it
+        //####TODO####: Add proper error handling/logging for window creation failure
         (void)error;
     }
 
@@ -71,7 +77,7 @@ Window::~Window() {
 
 bool Window::process_messages() {
     MSG msg = { 0 };
-    // Handle all pending messages
+    
     while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
         if (msg.message == WM_QUIT) {
             return false;
@@ -83,14 +89,13 @@ bool Window::process_messages() {
 }
 
 LRESULT CALLBACK Window::window_proc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    // Forward to ImGui first (only if ImGui is initialized)
-    // NOTE: ImGui_ImplWin32_WndProcHandler returns true if it handled the message
+    
     if (ImGui::GetCurrentContext()) {
         ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam);
-        // Don't return here - let input system also process the message
+        
     }
     
-    // Check if ImGui wants to capture input (only if ImGui is initialized)
+    
     bool imgui_wants_mouse = false;
     bool imgui_wants_keyboard = false;
     if (ImGui::GetCurrentContext()) {
@@ -117,7 +122,7 @@ LRESULT CALLBACK Window::window_proc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM 
             return 0;
 
         case WM_MOUSEMOVE:
-            // Always update mouse position for input system
+            
             input.on_mouse_move(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
             return 0;
 
@@ -146,7 +151,7 @@ LRESULT CALLBACK Window::window_proc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM 
             return 0;
         
         case WM_MOUSEWHEEL:
-            // Mouse wheel not implemented in Input class yet
+            
             return 0;
     }
     return DefWindowProc(hWnd, msg, wParam, lParam);

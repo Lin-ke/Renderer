@@ -29,9 +29,9 @@ DEFINE_LOG_TAG(LogKleeSceneDeps, "KleeSceneDeps");
 
 static const std::string TEST_SCENE_FILE = "/Game/test_deps_scene.asset";
 // Test with Klee model which contains Japanese material names (Unicode)
-static const std::string KLEE_MODEL_PATH = std::string(ENGINE_PATH) + "/assets/models/Klee/klee.fbx";
+static const std::string KLEE_MODEL_PATH = "/Engine/models/Klee/klee.fbx";
 // Fallback to bunny if Klee not available
-static const std::string TEST_MODEL_PATH = std::string(ENGINE_PATH) + "/assets/models/bunny.obj";
+static const std::string TEST_MODEL_PATH = "/Engine/models/bunny.obj";
 
 TEST_CASE("Scene Dependency System with Model", "[scene][deps]") {
     try {

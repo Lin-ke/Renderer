@@ -368,6 +368,10 @@ DX11TextureView::DX11TextureView(const RHITextureViewInfo& info, DX11Backend& ba
         dsv_desc.Texture2D.MipSlice = info.subresource.base_mip_level;
         backend.get_device()->CreateDepthStencilView(dx_tex->get_handle().Get(), &dsv_desc, dsv_.GetAddressOf());
         
+        // Create read-only DSV for simultaneous SRV binding
+        dsv_desc.Flags = D3D11_DSV_READ_ONLY_DEPTH;
+        backend.get_device()->CreateDepthStencilView(dx_tex->get_handle().Get(), &dsv_desc, dsv_read_only_.GetAddressOf());
+        
         // If srv_ was not created yet (e.g. depth texture not marked as TEXTURE), create it for shader sampling
         if (!srv_) {
             D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
@@ -958,10 +962,11 @@ void DX11CommandContext::begin_render_pass(RHIRenderPassRef rp) {
     ID3D11DepthStencilView* dsv = nullptr;
     if (info.depth_stencil_attachment.texture_view) {
         auto dx_view = resource_cast(info.depth_stencil_attachment.texture_view);
-        dsv = dx_view->get_dsv().Get();
+        // Use read-only DSV if depth is read-only (allows simultaneous SRV binding)
+        dsv = info.depth_stencil_attachment.read_only ? dx_view->get_dsv_read_only().Get() : dx_view->get_dsv().Get();
         
         UINT clear_flags = 0;
-        if (info.depth_stencil_attachment.load_op == ATTACHMENT_LOAD_OP_CLEAR) {
+        if (info.depth_stencil_attachment.load_op == ATTACHMENT_LOAD_OP_CLEAR && !info.depth_stencil_attachment.read_only) {
             clear_flags |= D3D11_CLEAR_DEPTH;
             // if (has_stencil) clear_flags |= D3D11_CLEAR_STENCIL;
             context_->ClearDepthStencilView(dsv, clear_flags, info.depth_stencil_attachment.clear_depth, (UINT8)info.depth_stencil_attachment.clear_stencil);
@@ -1089,11 +1094,91 @@ bool DX11CommandContext::read_texture(RHITextureRef texture, void* data, uint32_
 DX11RenderPass::DX11RenderPass(const RHIRenderPassInfo& info, DX11Backend& backend) : RHIRenderPass(info) {}
 RHIDescriptorSetRef DX11RootSignature::create_descriptor_set(uint32_t set) { return nullptr; }
 DX11CommandContextImmediate::DX11CommandContextImmediate(DX11Backend& backend) : backend_(backend) {}
-void DX11CommandContextImmediate::flush() {}
-void DX11CommandContextImmediate::texture_barrier(const RHITextureBarrier& b) {}
-void DX11CommandContextImmediate::buffer_barrier(const RHIBufferBarrier& b) {}
-void DX11CommandContextImmediate::copy_texture_to_buffer(RHITextureRef s, TextureSubresourceLayers ss, RHIBufferRef d, uint64_t doff) {}
-void DX11CommandContextImmediate::copy_buffer_to_texture(RHIBufferRef s, uint64_t soff, RHITextureRef d, TextureSubresourceLayers ds) {}
-void DX11CommandContextImmediate::copy_buffer(RHIBufferRef s, uint64_t soff, RHIBufferRef d, uint64_t doff, uint64_t sz) {}
-void DX11CommandContextImmediate::copy_texture(RHITextureRef s, TextureSubresourceLayers ss, RHITextureRef d, TextureSubresourceLayers ds) {}
-void DX11CommandContextImmediate::generate_mips(RHITextureRef s) {}
+void DX11CommandContextImmediate::flush() {
+    // Flush the immediate context to ensure all commands are submitted
+    backend_.get_context()->Flush();
+}
+void DX11CommandContextImmediate::texture_barrier(const RHITextureBarrier& b) {
+    // DX11 doesn't need explicit texture barriers, but we can use this for debugging
+    // In DX12/Vulkan this would insert a resource barrier
+}
+void DX11CommandContextImmediate::buffer_barrier(const RHIBufferBarrier& b) {
+    // DX11 doesn't need explicit buffer barriers
+}
+void DX11CommandContextImmediate::copy_texture_to_buffer(RHITextureRef s, TextureSubresourceLayers ss, RHIBufferRef d, uint64_t doff) {
+    backend_.get_context()->CopyResource(
+        (ID3D11Resource*)d->raw_handle(), 
+        (ID3D11Resource*)s->raw_handle()
+    );
+}
+void DX11CommandContextImmediate::copy_buffer_to_texture(RHIBufferRef s, uint64_t soff, RHITextureRef d, TextureSubresourceLayers ds) {
+    // For buffer to texture copy in DX11, we need to use UpdateSubresource
+    // since CopyResource requires resources of the same type.
+    // Map the staging buffer to get CPU pointer, then use UpdateSubresource
+    auto* dx11_buffer = static_cast<DX11Buffer*>(s.get());
+    auto* dx11_texture = static_cast<DX11Texture*>(d.get());
+    
+    if (!dx11_buffer || !dx11_texture) return;
+    
+    // Map the source buffer to access data
+    D3D11_MAPPED_SUBRESOURCE mapped;
+    HRESULT hr = backend_.get_context()->Map(dx11_buffer->get_handle().Get(), 0, D3D11_MAP_READ, 0, &mapped);
+    if (FAILED(hr)) return;
+    
+    // Get texture info for proper row pitch calculation
+    const auto& tex_info = dx11_texture->get_info();
+    uint32_t width = tex_info.extent.width;
+    uint32_t height = tex_info.extent.height;
+    uint32_t bpp = 4; // Assuming RGBA8 format
+    
+    // Calculate row pitch with 256-byte alignment (as done in texture.cpp)
+    uint32_t row_pitch = width * bpp;
+    uint32_t aligned_row_pitch = (row_pitch + 255) & ~255;
+    
+    // Use UpdateSubresource to copy data to the specific subresource
+    uint32_t dst_subresource = D3D11CalcSubresource(ds.mip_level, ds.base_array_layer, tex_info.mip_levels);
+    
+    // Use D3D11_BOX to specify the region
+    D3D11_BOX box = {};
+    box.left = 0;
+    box.right = width;
+    box.top = 0;
+    box.bottom = height;
+    box.front = 0;
+    box.back = 1;
+    
+    backend_.get_context()->UpdateSubresource(
+        dx11_texture->get_handle().Get(),
+        dst_subresource,
+        &box,
+        mapped.pData,
+        aligned_row_pitch,
+        aligned_row_pitch * height
+    );
+    
+    backend_.get_context()->Unmap(dx11_buffer->get_handle().Get(), 0);
+}
+void DX11CommandContextImmediate::copy_buffer(RHIBufferRef s, uint64_t soff, RHIBufferRef d, uint64_t doff, uint64_t sz) {
+    D3D11_BOX box = { (UINT)soff, 0, 0, (UINT)(soff + sz), 1, 1 };
+    backend_.get_context()->CopySubresourceRegion(
+        (ID3D11Resource*)d->raw_handle(), 0, (UINT)doff, 0, 0,
+        (ID3D11Resource*)s->raw_handle(), 0, &box
+    );
+}
+void DX11CommandContextImmediate::copy_texture(RHITextureRef s, TextureSubresourceLayers ss, RHITextureRef d, TextureSubresourceLayers ds) {
+    backend_.get_context()->CopyResource(
+        (ID3D11Resource*)d->raw_handle(), 
+        (ID3D11Resource*)s->raw_handle()
+    );
+}
+void DX11CommandContextImmediate::generate_mips(RHITextureRef s) {
+    // DX11 can auto-generate mipmaps using GenerateMips on a shader resource view
+    // This requires the texture to have a valid SRV bound
+    auto texture = std::static_pointer_cast<DX11Texture>(s);
+    if (texture) {
+        auto srv = texture->get_srv();
+        if (srv) {
+            backend_.get_context()->GenerateMips(srv.Get());
+        }
+    }
+}

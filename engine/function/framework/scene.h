@@ -1,5 +1,5 @@
-#ifndef SCENE_H
-#define SCENE_H
+#pragma once
+
 #include "engine/function/asset/asset.h"
 #include "engine/function/framework/entity.h"
 #include "engine/function/framework/prefab.h"
@@ -9,7 +9,8 @@
 #include <cereal/archives/binary.hpp>
 #include <sstream>
 
-// Forward declarations for light components
+// Forward declarations for components
+class CameraComponent;
 class DirectionalLightComponent;
 class PointLightComponent;
 class VolumeLightComponent;
@@ -31,17 +32,14 @@ public:
     Entity* instantiate(std::shared_ptr<Prefab> prefab) {
         if (!prefab || !prefab->get_root_entity()) return nullptr;
 
-        // Use efficient clone via reflection
         auto new_entity = prefab->get_root_entity()->clone();
 
-        // 3. Attach PrefabComponent
         auto* prefab_comp = new_entity->get_component<PrefabComponent>();
         if (!prefab_comp) {
             prefab_comp = new_entity->add_component<PrefabComponent>();
         }
         prefab_comp->prefab = prefab;
 
-        // 4. Add to Scene
         Entity* ptr = new_entity.get();
         entities_.push_back(std::move(new_entity));
         return ptr;
@@ -63,7 +61,6 @@ public:
 
     virtual void load_asset_deps() override {
         for (auto& entity : entities_) {
-            // Fix component owner pointers after deserialization
             for (auto& comp : entity->get_components()) {
                 if (comp) {
                     comp->set_owner(entity.get());
@@ -94,6 +91,12 @@ public:
         }
         return components;
     }
+
+    /**
+     * @brief Get the first camera component in the scene
+     * @return Pointer to camera, or nullptr if none exists
+     */
+    CameraComponent* get_camera() const;
 
     /**
      * @brief Get the first directional light component in the scene
@@ -134,4 +137,4 @@ public:
 CEREAL_REGISTER_TYPE(Scene);
 CEREAL_REGISTER_POLYMORPHIC_RELATION(Asset, Scene);
 
-#endif
+

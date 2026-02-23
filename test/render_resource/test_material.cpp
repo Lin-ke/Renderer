@@ -40,10 +40,10 @@ TEST_CASE("Material Parameters and Serialization", "[render_resource]") {
     // Load back as Material, then cast
     auto loaded_asset = EngineContext::asset()->load_asset<Material>(material_path);
     REQUIRE(loaded_asset != nullptr);
-    REQUIRE(loaded_asset->get_diffuse().y() == Catch::Approx(0.5f));
     
     auto loaded_pbr = std::dynamic_pointer_cast<PBRMaterial>(loaded_asset);
     REQUIRE(loaded_pbr != nullptr);
+    REQUIRE(loaded_pbr->get_diffuse().y() == Catch::Approx(0.5f));
     REQUIRE(loaded_pbr->get_metallic() == Catch::Approx(0.1f));
 
     loaded_asset.reset();
@@ -109,9 +109,9 @@ TEST_CASE("Material Texture Dependencies", "[render_resource]") {
     EngineContext::asset()->save_asset(texture, texture_path);
     UID tex_uid = texture->get_uid();
 
-    auto material = std::make_shared<Material>();
+    // Use PBRMaterial for texture dependencies test
+    auto material = std::make_shared<PBRMaterial>();
     material->set_diffuse_texture(texture);
-    material->set_texture_2d(texture, 3); 
     
     std::string material_path = "/Game/dep_material.asset";
     EngineContext::asset()->save_asset(material, material_path);
@@ -128,12 +128,10 @@ TEST_CASE("Material Texture Dependencies", "[render_resource]") {
     auto loaded_material = EngineContext::asset()->load_asset<Material>(material_path);
     REQUIRE(loaded_material != nullptr);
     
-    REQUIRE(loaded_material->get_diffuse_texture() != nullptr);
-    CHECK(loaded_material->get_diffuse_texture()->get_uid() == tex_uid);
-    
-    REQUIRE(loaded_material->get_texture_2d_list().size() >= 4);
-    REQUIRE(loaded_material->get_texture_2d_list()[3] != nullptr);
-    CHECK(loaded_material->get_texture_2d_list()[3]->get_uid() == tex_uid);
+    auto loaded_pbr = std::dynamic_pointer_cast<PBRMaterial>(loaded_material);
+    REQUIRE(loaded_pbr != nullptr);
+    REQUIRE(loaded_pbr->get_diffuse_texture() != nullptr);
+    CHECK(loaded_pbr->get_diffuse_texture()->get_uid() == tex_uid);
 
     loaded_material.reset();
     

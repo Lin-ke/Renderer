@@ -75,10 +75,10 @@ TEST_CASE("Scene Dependency Integration", "[scene]") {
 
         // 1. Create a dependency asset (Texture)
         auto texture = std::make_shared<PNGAsset>();
-        texture->width = 256;
-        texture->height = 256;
-        texture->channels = 4;
-        texture->pixels.resize(256 * 256 * 4, 128);
+        texture->width_ = 256;
+        texture->height_ = 256;
+        texture->channels_ = 4;
+        texture->pixels_.resize(256 * 256 * 4, 128);
         
         std::string texture_path = "/Game/texture.binasset";
         EngineContext::asset()->save_asset(texture, texture_path);
@@ -125,7 +125,7 @@ TEST_CASE("Scene Dependency Integration", "[scene]") {
         // Check Dependency
         REQUIRE(spirit->texture != nullptr);
         CHECK(spirit->texture->get_uid() == texture_uid);
-        CHECK(spirit->texture->width == 256);
+        CHECK(spirit->texture->width_ == 256);
 
         EngineContext::exit();
     }

@@ -20,11 +20,6 @@ GizmoManager::~GizmoManager() {
 void GizmoManager::init() {
     if (initialized_) return;
     
-    // ImGuizmo uses the current ImGui context, no need to set explicitly
-    // Just ensure ImGui is initialized first
-    ImGuiIO& io = ImGui::GetIO();
-    (void)io;
-    
     ImGuizmo::Enable(true);
     
     initialized_ = true;
@@ -58,38 +53,26 @@ void GizmoManager::draw_gizmo(CameraComponent* camera, Entity* selected_entity,
     ImGuiIO& io = ImGui::GetIO();
     (void)io;
     
-    // Get camera matrices (ImGuizmo expects column-major matrices)
     Mat4 view = camera->get_view_matrix();
     Mat4 proj = camera->get_projection_matrix();
     
-    // ImGuizmo works with DirectX coordinate system directly
-    // No Y-flip needed for projection matrix
-    Mat4 proj_gl = proj;
-
-    // Convert Eigen matrices to float arrays (column-major for ImGuizmo)
     float view_matrix[16];
     float proj_matrix[16];
     float transform_matrix[16];
-
-    // Eigen stores in column-major by default
     for (int i = 0; i < 4; ++i) {
         for (int j = 0; j < 4; ++j) {
             view_matrix[i + j * 4] = view(i, j);
-            proj_matrix[i + j * 4] = proj_gl(i, j);
+            proj_matrix[i + j * 4] = proj(i, j);
         }
     }
 
-    // Set gizmo projection mode
     ImGuizmo::SetOrthographic(false);
 
-    // Set viewport to the current ImGui window size and position
-    // This ensures mouse interaction matches the visual gizmo exactly
     ImGuizmo::SetRect(viewport_pos.x, viewport_pos.y, viewport_size.x, viewport_size.y);
     
     // Get current transform matrix
     Mat4 model = transform->transform.get_matrix();
     
-    // Calculate anchor offset in local space
     Vec3 local_offset = Vec3::Zero();
     if (current_anchor_ != Anchor::Pivot) {
         if (auto* mesh_renderer = selected_entity->get_component<MeshRendererComponent>()) {
@@ -105,7 +88,6 @@ void GizmoManager::draw_gizmo(CameraComponent* camera, Entity* selected_entity,
         }
     }
 
-    // Apply offset to matrix for ImGuizmo
     Mat4 gizmo_matrix = model;
     if (local_offset.norm() > 0.0001f) {
         Mat4 offset_mat = Mat4::Identity();
@@ -129,7 +111,6 @@ void GizmoManager::draw_gizmo(CameraComponent* camera, Entity* selected_entity,
     float original_transform[16];
     for (int i = 0; i < 16; ++i) original_transform[i] = transform_matrix[i];
     
-    // Draw gizmo - always call Manipulate to ensure consistent rendering
     bool manipulated = ImGuizmo::Manipulate(view_matrix, proj_matrix, 
                          static_cast<ImGuizmo::OPERATION>(current_operation_),
                          static_cast<ImGuizmo::MODE>(current_mode_),
@@ -164,22 +145,18 @@ void GizmoManager::draw_gizmo(CameraComponent* camera, Entity* selected_entity,
             new_model = new_gizmo_matrix * inv_offset_mat;
         }
         
-        // Extract position, rotation, scale
-        Vec3 position = new_model.block<3, 1>(0, 3);
+            Vec3 position = new_model.block<3, 1>(0, 3);
         
-        // Extract scale
         Vec3 scale;
         scale.x() = new_model.block<3, 1>(0, 0).norm();
         scale.y() = new_model.block<3, 1>(0, 1).norm();
         scale.z() = new_model.block<3, 1>(0, 2).norm();
 
-        // Extract rotation (remove scale)
         Mat3 rotation_matrix;
         rotation_matrix.col(0) = new_model.block<3, 1>(0, 0) / scale.x();
         rotation_matrix.col(1) = new_model.block<3, 1>(0, 1) / scale.y();
         rotation_matrix.col(2) = new_model.block<3, 1>(0, 2) / scale.z();
 
-        // Apply to transform
         transform->transform.set_position(position);
         transform->transform.set_rotation(Math::extract_euler_angles(rotation_matrix));
         transform->transform.set_scale(scale);
@@ -192,7 +169,6 @@ void GizmoManager::draw_controls() {
     ImGui::Separator();
     ImGui::Text("Gizmo");
 
-    // Operation buttons
     if (ImGui::RadioButton("Translate", current_operation_ == Operation::Translate)) {
         current_operation_ = Operation::Translate;
     }
@@ -205,7 +181,6 @@ void GizmoManager::draw_controls() {
         current_operation_ = Operation::Scale;
     }
 
-    // Mode buttons
     if (ImGui::RadioButton("Local", current_mode_ == Mode::Local)) {
         current_mode_ = Mode::Local;
     }
@@ -214,7 +189,6 @@ void GizmoManager::draw_controls() {
         current_mode_ = Mode::World;
     }
 
-    // Anchor buttons
     ImGui::Text("Anchor:");
     if (ImGui::RadioButton("Pivot", current_anchor_ == Anchor::Pivot)) {
         current_anchor_ = Anchor::Pivot;

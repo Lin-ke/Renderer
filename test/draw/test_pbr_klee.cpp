@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
+#include "test/test_utils.h"
 #include "engine/main/engine_context.h"
 #include "engine/function/framework/world.h"
 #include "engine/function/framework/scene.h"
@@ -16,90 +17,193 @@
 #include "engine/function/render/render_pass/npr_forward_pass.h"
 #include "engine/function/input/input.h"
 #include "engine/core/log/Log.h"
+#include "engine/function/asset/asset_manager.h"
 
 #include <thread>
 #include <chrono>
-#include <fstream>
 #include <vector>
-#include <filesystem>
-
-// stb_image_write is already implemented in test_bunny.cpp
-#include <stb_image_write.h>
-
-/**
- * @file test/draw/test_pbr_klee.cpp
- * @brief NPR rendering test using Klee model
- */
 
 DEFINE_LOG_TAG(LogPBRKlee, "PBRKlee");
 
-// Using Klee model for rendering test
 static const std::string PBR_MODEL_PATH = "/Engine/models/Klee/klee.fbx";
+static const std::string SCENE_SAVE_PATH = "/Game/npr_klee_test.asset";
 
-static bool save_screenshot_png_klee(const std::string& filename, uint32_t width, uint32_t height, const std::vector<uint8_t>& data) {
-    int stride_in_bytes = width * 4;
-    int result = stbi_write_png(filename.c_str(), static_cast<int>(width), static_cast<int>(height), 4, data.data(), stride_in_bytes);
-    return result != 0;
-}
-
-static float calculate_average_brightness_klee(const std::vector<uint8_t>& data) {
-    if (data.empty()) return 0.0f;
+/**
+ * @brief Part 1: Create and setup test scene, save to file
+ */
+static bool create_and_save_npr_scene(const std::string& scene_path) {
+    INFO(LogPBRKlee, "=== Part 1: Creating Scene ===");
     
-    uint64_t total = 0;
-    size_t pixel_count = data.size() / 4;
+    auto scene = std::make_shared<Scene>();
     
-    for (size_t i = 0; i < pixel_count; i++) {
-        uint32_t r = data[i * 4 + 0];
-        uint32_t g = data[i * 4 + 1];
-        uint32_t b = data[i * 4 + 2];
-        total += (r + g + b) / 3;
-    }
+    // Create camera entity
+    auto* camera_ent = scene->create_entity();
+    auto* cam_trans = camera_ent->add_component<TransformComponent>();
+    cam_trans->transform.set_position({-30.0f, 10.0f, 0.0f});
+    cam_trans->transform.set_rotation({0.0f, -15.0f, 0.0f});
     
-    return static_cast<float>(total) / static_cast<float>(pixel_count);
-}
-
-TEST_CASE("Load NPR FBX Model", "[draw][npr]") {
-    std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Asset);
-    mode.set(EngineContext::StartMode::Window);
-    mode.set(EngineContext::StartMode::Render);
-    mode.set(EngineContext::StartMode::SingleThread);
+    auto* camera = camera_ent->add_component<CameraComponent>();
+    camera->set_fov(60.0f);
+    camera->set_far(1000.0f);
+    camera->on_init();
     
-    EngineContext::init(mode);
+    // Create directional light entity
+    auto* light_ent = scene->create_entity();
+    auto* light_trans = light_ent->add_component<TransformComponent>();
+    light_trans->transform.set_position({100.0f, 200.0f, 100.0f});
+    light_trans->transform.set_rotation({0.0f, -45.0f, -60.0f});
     
-    REQUIRE(EngineContext::rhi() != nullptr);
-    REQUIRE(EngineContext::render_system() != nullptr);
+    auto* light = light_ent->add_component<DirectionalLightComponent>();
+    light->set_color({1.0f, 1.0f, 1.0f});
+    light->set_intensity(100.0f);
+    light->set_enable(true);
+    light->on_init();
     
-    std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
-    EngineContext::asset()->init(test_asset_dir);
+    // Create model entity
+    auto* model_ent = scene->create_entity();
+    auto* model_trans = model_ent->add_component<TransformComponent>();
+    model_trans->transform.set_position({0.0f, 0.0f, 0.0f});
+    model_trans->transform.set_scale({1.0f, 1.0f, 1.0f});
     
-    REQUIRE(EngineContext::world() != nullptr);
-    
-    // Load model with materials (using AssetManager for caching)
+    // Load NPR model
     INFO(LogPBRKlee, "Loading NPR model from: {}", PBR_MODEL_PATH);
     
-    // Note: load_materials=true to load textures from MTL/FBX
-    auto npr_model = Model::Load(PBR_MODEL_PATH, true, true, true);
+    ModelProcessSetting npr_setting;
+    npr_setting.smooth_normal = true;
+    npr_setting.load_materials = true;
+    npr_setting.flip_uv = true;
+    npr_setting.material_type = ModelMaterialType::NPR;
     
-    REQUIRE(npr_model->get_submesh_count() > 0);
+    auto npr_model = Model::Load(PBR_MODEL_PATH, npr_setting);
+    if (npr_model->get_submesh_count() == 0) return false;
     
     INFO(LogPBRKlee, "NPR model loaded: {} submeshes", npr_model->get_submesh_count());
     
-    // Debug: Check materials
-    for (uint32_t i = 0; i < npr_model->get_submesh_count(); i++) {
-        auto mat = npr_model->get_material(i);
-        if (mat) {
-            auto diffuse = mat->get_diffuse();
-            uint32_t tex_id = mat->get_diffuse_texture() ? mat->get_diffuse_texture()->texture_id_ : 0;
-            
-            INFO(LogPBRKlee, "Submesh[{}] material: diffuse=({},{},{},{}), texture_id={}",
-                 i, diffuse.x(), diffuse.y(), diffuse.z(), diffuse.w(), tex_id);
-        } else {
-            INFO(LogPBRKlee, "Submesh[{}] has no material", i);
-        }
+    // Add MeshRendererComponent
+    auto* model_mesh = model_ent->add_component<MeshRendererComponent>();
+    model_mesh->set_model(npr_model);
+    model_mesh->on_init();
+    
+    // Auto-adjust camera to model bounding box
+    auto box = npr_model->get_bounding_box();
+    Vec3 center = (box.min + box.max) * 0.5f;
+    float size = (box.max - box.min).norm();
+    
+    float dist = size * 1.5f;
+    if (dist < 1.0f) dist = 5.0f;
+    
+    cam_trans->transform.set_position(center + Vec3(-dist, size * 0.5f, 0.0f));
+    
+    INFO(LogPBRKlee, "Model bounds: min=({},{},{}), max=({},{},{}), size={}",
+         box.min.x(), box.min.y(), box.min.z(), 
+         box.max.x(), box.max.y(), box.max.z(), size);
+    
+    // Save scene
+    INFO(LogPBRKlee, "Saving scene to: {}", scene_path);
+    auto am = EngineContext::asset();
+    if (!am) {
+        ERR(LogPBRKlee, "AssetManager is null");
+        return false;
     }
     
-    EngineContext::exit();
+    am->save_asset(scene, scene_path);
+    
+    auto saved_scene = am->get_asset_immediate(scene->get_uid());
+    if (!saved_scene) {
+        ERR(LogPBRKlee, "Failed to verify saved scene");
+        return false;
+    }
+    
+    INFO(LogPBRKlee, "Scene saved successfully, UID: {}", scene->get_uid().to_string());
+    return true;
+}
+
+/**
+ * @brief Part 2: Load scene from file
+ */
+static test_utils::SceneLoadResult load_npr_scene(const std::string& scene_path) {
+    INFO(LogPBRKlee, "=== Part 2: Loading Scene ===");
+    INFO(LogPBRKlee, "Loading scene from: {}", scene_path);
+    
+    // Use SceneLoader utility
+    auto result = test_utils::SceneLoader::load(scene_path, true, false);
+    
+    if (!result.success) {
+        ERR(LogPBRKlee, "Failed to load scene: {}", result.error_msg);
+        return result;
+    }
+    
+    INFO(LogPBRKlee, "Scene loaded, entities: {}", result.scene->entities_.size());
+    
+    // Enable NPR for this scene
+    if (auto mesh_manager = EngineContext::render_system()->get_mesh_manager()) {
+        mesh_manager->set_npr_enabled(true);
+        mesh_manager->set_active_camera(result.camera);
+    }
+    EngineContext::render_system()->set_prepass_enabled(true);
+    
+    EngineContext::world()->set_active_scene(result.scene);
+    
+    return result;
+}
+
+/**
+ * @brief Part 3: Render frames and capture screenshot
+ */
+static bool render_npr_frames(CameraComponent* camera, Scene* scene, 
+                               std::vector<uint8_t>& screenshot_data, 
+                               uint32_t screenshot_width, uint32_t screenshot_height,
+                               int& out_frames) {
+    INFO(LogPBRKlee, "=== Part 3: Rendering ===");
+    
+    int frames = 0;
+    bool screenshot_taken = false;
+    
+    while (frames < 60) {
+        Input::get_instance().tick();
+        EngineContext::world()->tick(0.016f);
+        
+        RenderPacket packet;
+        packet.active_camera = camera;
+        packet.active_scene = scene;
+        packet.frame_index = frames % 2;
+        
+        bool should_continue = EngineContext::render_system()->tick(packet);
+        if (!should_continue) break;
+        
+        frames++;
+        
+        // Take screenshot on frame 45
+        if (frames == 45 && !screenshot_taken) {
+            auto swapchain = EngineContext::render_system()->get_swapchain();
+            if (swapchain) {
+                uint32_t current_frame = swapchain->get_current_frame_index();
+                RHITextureRef back_buffer = swapchain->get_texture(current_frame);
+                if (back_buffer) {
+                    auto backend = EngineContext::rhi();
+                    auto pool = backend->create_command_pool({});
+                    auto context = backend->create_command_context(pool);
+                    
+                    context->begin_command();
+                    context->end_command();
+                    auto fence = backend->create_fence(false);
+                    context->execute(fence, nullptr, nullptr);
+                    fence->wait();
+                    
+                    if (context->read_texture(back_buffer, screenshot_data.data(), screenshot_data.size())) {
+                        screenshot_taken = true;
+                        INFO(LogPBRKlee, "Screenshot captured at frame {}", frames);
+                    }
+                }
+            }
+        }
+        
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+    }
+    
+    out_frames = frames;
+    INFO(LogPBRKlee, "Rendering complete, total frames: {}", frames);
+    return screenshot_taken;
 }
 
 TEST_CASE("Render NPR Model", "[draw][npr]") {
@@ -118,208 +222,49 @@ TEST_CASE("Render NPR Model", "[draw][npr]") {
     REQUIRE(EngineContext::render_system() != nullptr);
     REQUIRE(EngineContext::world() != nullptr);
     
-    // Enable NPR toon shading
-    EngineContext::render_system()->get_mesh_manager()->set_npr_enabled(true);
+    // ============================================================================
+    // Part 1: Create Scene (Comment this out after first run to skip creation)
+    // ============================================================================
+    bool create_success = create_and_save_npr_scene(SCENE_SAVE_PATH);
+    REQUIRE(create_success);
     
-    // Create scene
-    auto scene = std::make_shared<Scene>();
+    // ============================================================================
+    // Part 2: Load Scene
+    // ============================================================================
+    auto result = load_npr_scene(SCENE_SAVE_PATH);
+    REQUIRE(result.success);
+    REQUIRE(result.camera != nullptr);
+    REQUIRE(result.scene != nullptr);
     
-    // Create camera entity
-    auto* camera_ent = scene->create_entity();
-    REQUIRE(camera_ent != nullptr);
-    
-    auto* cam_trans = camera_ent->add_component<TransformComponent>();
-    REQUIRE(cam_trans != nullptr);
-    // Place camera further away in case model is large
-    cam_trans->transform.set_position({-30.0f, 10.0f, 0.0f});
-    cam_trans->transform.set_rotation({0.0f, -15.0f, 0.0f});
-    
-    auto* cam_comp = camera_ent->add_component<CameraComponent>();
-    REQUIRE(cam_comp != nullptr);
-    cam_comp->set_fov(60.0f);
-    cam_comp->set_far(1000.0f);
-    cam_comp->on_init();
-    
-    // Create directional light entity
-    auto* light_ent = scene->create_entity();
-    REQUIRE(light_ent != nullptr);
-    
-    auto* light_trans = light_ent->add_component<TransformComponent>();
-    REQUIRE(light_trans != nullptr);
-    light_trans->transform.set_position({100.0f, 200.0f, 100.0f});
-    light_trans->transform.set_rotation({0.0f, -45.0f, -60.0f});
-    
-    auto* light_comp = light_ent->add_component<DirectionalLightComponent>();
-    REQUIRE(light_comp != nullptr);
-    light_comp->set_color({1.0f, 1.0f, 1.0f});
-    light_comp->set_intensity(100.0f); // Massive intensity for debug
-    light_comp->set_enable(true);
-    light_comp->on_init();
-    
-    // Create model entity
-    auto* model_ent = scene->create_entity();
-    REQUIRE(model_ent != nullptr);
-    
-    auto* model_trans = model_ent->add_component<TransformComponent>();
-    REQUIRE(model_trans != nullptr);
-    model_trans->transform.set_position({0.0f, 0.0f, 0.0f});
-    model_trans->transform.set_rotation({0.0f, 0.0f, 0.0f});
-    model_trans->transform.set_scale({1.0f, 1.0f, 1.0f});
-    
-    // Load NPR model with AssetManager caching
-    INFO(LogPBRKlee, "Loading NPR model from: {}", PBR_MODEL_PATH);
-    
-    // Use ModelProcessSetting to specify NPR material type
-    ModelProcessSetting npr_setting;
-    npr_setting.smooth_normal = true;
-    npr_setting.load_materials = true;
-    npr_setting.flip_uv = true;
-    npr_setting.material_type = ModelMaterialType::NPR;  // Key: use NPR material
-    
-    auto npr_model = Model::Load(PBR_MODEL_PATH, npr_setting);
-    
-    REQUIRE(npr_model->get_submesh_count() > 0);
-    
-    INFO(LogPBRKlee, "NPR model loaded: {} submeshes", npr_model->get_submesh_count());
-    
-    // Add MeshRendererComponent
-    auto* model_mesh = model_ent->add_component<MeshRendererComponent>();
-    REQUIRE(model_mesh != nullptr);
-    model_mesh->set_model(npr_model);
-    model_mesh->on_init();
-    
-    // Auto-adjust camera to model bounding box
-    auto box = npr_model->get_bounding_box();
-    Vec3 center = (box.min + box.max) * 0.5f;
-    float size = (box.max - box.min).norm();
-    
-    // Position camera so the model fits in view
-    float dist = size * 1.5f; // Heuristic
-    if (dist < 1.0f) dist = 5.0f; // Minimal distance
-    
-    cam_trans->transform.set_position(center + Vec3(-dist, size * 0.5f, 0.0f));
-    // Simple look-at (assuming camera looks along +X by default)
-    // For now just manually set a reasonable position relative to center
-    INFO(LogPBRKlee, "Model bounds: min=({},{},{}), max=({},{},{}), size={}",
-         box.min.x(), box.min.y(), box.min.z(), 
-         box.max.x(), box.max.y(), box.max.z(), size);
-    INFO(LogPBRKlee, "Adjusted camera to: ({},{},{})", 
-         cam_trans->transform.get_position().x(),
-         cam_trans->transform.get_position().y(),
-         cam_trans->transform.get_position().z());
-    
-    // Debug light direction
-    Vec3 light_front = light_trans->transform.front();
-    INFO(LogPBRKlee, "Light front: ({},{},{}), Light dir in shader will be: ({},{},{})",
-         light_front.x(), light_front.y(), light_front.z(),
-         -light_front.x(), -light_front.y(), -light_front.z());
-    
-    // Set active scene
-    EngineContext::world()->set_active_scene(scene);
-    EngineContext::render_system()->get_mesh_manager()->set_active_camera(cam_comp);
-    
-    int frames = 0;
-    auto start_time = std::chrono::steady_clock::now();
-    
+    // ============================================================================
+    // Part 3: Render
+    // ============================================================================
     const uint32_t screenshot_width = 1280;
     const uint32_t screenshot_height = 720;
     std::vector<uint8_t> screenshot_data(screenshot_width * screenshot_height * 4);
-    bool screenshot_taken = false;
     
-    while (frames < 60) {
-        Input::get_instance().tick();
-        EngineContext::world()->tick(0.016f);
-        
-        RenderPacket packet;
-        packet.active_camera = cam_comp;
-        packet.active_scene = scene.get();
-        packet.frame_index = frames % 2; // Simple ping-pong for frames in flight
-        
-        bool should_continue = EngineContext::render_system()->tick(packet);
-        if (!should_continue) {
-            break;
-        }
-        
-        frames++;
-        
-        // Take screenshot on frame 45 (give PBR time to stabilize)
-        if (frames == 45 && !screenshot_taken) {
-            auto swapchain = EngineContext::render_system()->get_swapchain();
-            if (swapchain) {
-                uint32_t current_frame = swapchain->get_current_frame_index();
-                RHITextureRef back_buffer = swapchain->get_texture(current_frame);
-                if (back_buffer) {
-                    auto backend = EngineContext::rhi();
-                    auto pool = backend->create_command_pool({});
-                    auto context = backend->create_command_context(pool);
-                    
-                    // Flush any pending commands
-                    context->begin_command();
-                    context->end_command();
-                    auto fence = backend->create_fence(false);
-                    context->execute(fence, nullptr, nullptr);
-                    fence->wait();
-                    
-                    if (context->read_texture(back_buffer, screenshot_data.data(), screenshot_data.size())) {
-                        screenshot_taken = true;
-                    }
-                }
-            }
-        }
-        
-        std::this_thread::sleep_for(std::chrono::milliseconds(16));
-    }
-    
-    auto end_time = std::chrono::steady_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+    int frames = 0;
+    bool screenshot_taken = render_npr_frames(
+        result.camera, 
+        result.scene.get(), 
+        screenshot_data, 
+        screenshot_width, 
+        screenshot_height,
+        frames
+    );
     
     CHECK(frames > 0);
     
     // Save screenshot
     if (screenshot_taken) {
         std::string screenshot_path = test_asset_dir + "/klee_npr_screenshot.png";
-        if (save_screenshot_png_klee(screenshot_path, screenshot_width, screenshot_height, screenshot_data)) {
-            float brightness = calculate_average_brightness_klee(screenshot_data);
+        if (test_utils::save_screenshot_png(screenshot_path, screenshot_width, screenshot_height, screenshot_data)) {
+            float brightness = test_utils::calculate_average_brightness(screenshot_data);
             INFO(LogPBRKlee, "Screenshot saved: {} (brightness: {:.1f})", screenshot_path, brightness);
             CHECK(brightness > 0.0f);
         }
     }
     
     EngineContext::world()->set_active_scene(nullptr);
-    EngineContext::exit();
-}
-
-TEST_CASE("NPR Forward Pass Basic", "[draw][npr]") {
-    std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Asset);
-    mode.set(EngineContext::StartMode::Window);
-    mode.set(EngineContext::StartMode::Render);
-    mode.set(EngineContext::StartMode::SingleThread);
-    
-    EngineContext::init(mode);
-    
-    std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
-    EngineContext::asset()->init(test_asset_dir);
-    
-    REQUIRE(EngineContext::rhi() != nullptr);
-    
-    // Create NPR forward pass
-    auto npr_pass = std::make_shared<render::NPRForwardPass>();
-    npr_pass->init();
-    
-    REQUIRE(npr_pass->is_initialized());
-    
-    // Test setting per-frame data
-    Mat4 view = Mat4::Identity();
-    Mat4 proj = Mat4::Identity();
-    Vec3 camera_pos(0.0f, 0.0f, 5.0f);
-    Vec3 light_dir(0.5f, -0.5f, 0.5f);
-    Vec3 light_color(1.0f, 1.0f, 1.0f);
-    
-    npr_pass->set_per_frame_data(view, proj, camera_pos, light_dir, light_color, 1.0f);
-    
-    // Must destroy pass BEFORE EngineContext::exit() to avoid accessing destroyed RHI backend
-    npr_pass.reset();
-    
     EngineContext::exit();
 }

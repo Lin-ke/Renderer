@@ -1,5 +1,5 @@
-#ifndef TRANSFORM_COMPONENT_H
-#define TRANSFORM_COMPONENT_H
+#pragma once
+
 #include "engine/function/framework/component.h"
 #include "engine/core/math/transform.h"
 #include "engine/core/reflect/serialize.h"
@@ -9,7 +9,7 @@
 class TransformComponent : public Component {
     CLASS_DEF(TransformComponent, Component)
 public:
-    virtual ~TransformComponent(); // Defined in .cpp to force linkage
+    virtual ~TransformComponent();
 
     Transform transform;
 
@@ -21,4 +21,3 @@ public:
 
 CEREAL_REGISTER_TYPE(TransformComponent);
 CEREAL_REGISTER_POLYMORPHIC_RELATION(Component, TransformComponent);
-#endif

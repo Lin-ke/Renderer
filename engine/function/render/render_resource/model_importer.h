@@ -67,7 +67,8 @@ private:
     std::shared_ptr<Material> get_or_create_material(
         const std::string& mat_name,
         aiMaterial* ai_mat,
-        const MtlMaterial* mtl_mat);
+        const MtlMaterial* mtl_mat,
+        int mesh_index);
         
     std::shared_ptr<Texture> load_material_texture(aiMaterial* mat, aiTextureType type);
     

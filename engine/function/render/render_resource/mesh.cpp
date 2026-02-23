@@ -3,6 +3,7 @@
 #include "engine/core/log/Log.h"
 #include "engine/function/asset/asset_manager.h"
 
+#include <cassert>
 #include <cereal/archives/binary.hpp>
 #include <cereal/archives/json.hpp>
 #include <fstream>
@@ -17,12 +18,9 @@ Mesh::Mesh(const std::string& name) : name_(name) {
 }
 
 Mesh::~Mesh() {
-    // GPU buffers are reference counted and will be released automatically
 }
 
 void Mesh::on_load_asset() {
-    // CPU data is already loaded via serialization
-    // Create GPU buffers
     create_gpu_buffers();
     clear_dirty();
 }
@@ -36,8 +34,6 @@ std::shared_ptr<Mesh> Mesh::Load(const std::string& path) {
         ERR(LogMesh, "AssetManager not initialized");
         return nullptr;
     }
-
-    // Use AssetManager's load_asset which handles caching
     return EngineContext::asset()->load_asset<Mesh>(path);
 }
 
@@ -69,7 +65,6 @@ void Mesh::set_data(
     color_ = colors;
     index_ = indices;
 
-    // Resize bone data to match vertex count if needed
     if (!bone_index_.empty()) {
         bone_index_.resize(position_.size(), IVec4(-1, -1, -1, -1));
         bone_weight_.resize(position_.size(), Vec4::Zero());
@@ -85,19 +80,29 @@ void Mesh::create_gpu_buffers() {
         return;
     }
 
-    // Create vertex buffer
     if (!position_.empty()) {
         vertex_buffer_ = std::make_shared<VertexBuffer>();
         vertex_buffer_->set_position(position_);
-        vertex_buffer_->set_normal(normal_);
-        vertex_buffer_->set_tangent(tangent_);
-        vertex_buffer_->set_tex_coord(tex_coord_);
-        vertex_buffer_->set_color(color_);
-        vertex_buffer_->set_bone_index(bone_index_);
-        vertex_buffer_->set_bone_weight(bone_weight_);
+        if (!normal_.empty()) {
+            vertex_buffer_->set_normal(normal_);
+        }
+        if (!tangent_.empty()) {
+            vertex_buffer_->set_tangent(tangent_);
+        }
+        if (!tex_coord_.empty()) {
+            vertex_buffer_->set_tex_coord(tex_coord_);
+        }
+        if (!color_.empty()) {
+            vertex_buffer_->set_color(color_);
+        }
+        if (!bone_index_.empty()) {
+            vertex_buffer_->set_bone_index(bone_index_);
+        }
+        if (!bone_weight_.empty()) {
+            vertex_buffer_->set_bone_weight(bone_weight_);
+        }
     }
 
-    // Create index buffer
     if (!index_.empty()) {
         index_buffer_ = std::make_shared<IndexBuffer>();
         index_buffer_->set_index(index_);
@@ -125,11 +130,10 @@ void Mesh::calculate_bounds() {
 }
 
 void Mesh::merge(const Mesh& other) {
-    if (other.position_.empty()) return;
+    assert(!other.position_.empty() && "Mesh::merge: cannot merge empty mesh");
 
     uint32_t vertex_offset = static_cast<uint32_t>(position_.size());
 
-    // Merge vertex data
     position_.insert(position_.end(), other.position_.begin(), other.position_.end());
     normal_.insert(normal_.end(), other.normal_.begin(), other.normal_.end());
     tangent_.insert(tangent_.end(), other.tangent_.begin(), other.tangent_.end());
@@ -138,15 +142,11 @@ void Mesh::merge(const Mesh& other) {
     bone_index_.insert(bone_index_.end(), other.bone_index_.begin(), other.bone_index_.end());
     bone_weight_.insert(bone_weight_.end(), other.bone_weight_.begin(), other.bone_weight_.end());
 
-    // Merge indices with offset
     for (uint32_t idx : other.index_) {
         index_.push_back(idx + vertex_offset);
     }
 
-    // Recalculate bounds
     calculate_bounds();
-    
-    // Recreate GPU buffers
     create_gpu_buffers();
     mark_dirty();
 }

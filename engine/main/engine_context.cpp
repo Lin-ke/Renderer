@@ -5,7 +5,6 @@
 #include "engine/core/utils/profiler.h"
 #include "engine/function/asset/asset_manager.h"
 #include "engine/function/input/input.h"
-#include "engine/function/render/render_system.h"
 #include "engine/function/framework/world.h"
 #include "engine/function/framework/scene.h"
 #include "engine/function/framework/entity.h"

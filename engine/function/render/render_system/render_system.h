@@ -8,6 +8,7 @@
 #include "engine/function/render/render_system/render_mesh_manager.h"
 #include "engine/function/render/render_system/gizmo_manager.h"
 #include "engine/function/render/render_pass/forward_pass.h"
+#include "engine/function/render/render_pass/depth_pre_pass.h"
 #include "engine/function/render/render_pass/depth_visualize_pass.h"
 // #include "engine/function/render/render_system/render_surface_cache_manager.h"
 #include <imgui.h>
@@ -46,6 +47,18 @@ struct RenderPacket {
     bool visualize_lights = false;
 };
 
+struct DefaultRenderResource{
+    RHITextureRef fallback_white_texture_;
+    RHITextureRef fallback_black_texture_;
+    RHITextureRef fallback_normal_texture_;
+    void init(RHIBackendRef backend);
+};
+
+struct RDGDebugInfo{
+
+};
+
+
 class RenderSystem {
 public:
     void init(void* window_handle);
@@ -57,6 +70,18 @@ public:
     // const std::array<std::shared_ptr<RenderPass>, PASS_TYPE_MAX_CNT>& get_passes() { return passes_; }
     
     void* get_window_handle() { return native_window_handle_; }
+
+    // Fallback resources
+    RHITextureRef get_fallback_white_texture() { 
+        return fallback_resources_.fallback_white_texture_;
+    }
+    RHITextureRef get_fallback_black_texture() { 
+        return fallback_resources_.fallback_black_texture_; 
+    }
+    RHITextureRef get_fallback_normal_texture() { 
+        return fallback_resources_.fallback_normal_texture_; 
+    }
+
     RHIFormat get_hdr_color_format() { return HDR_COLOR_FORMAT; }
     RHIFormat get_color_format() { return COLOR_FORMAT; }
     RHIFormat get_depth_format() { return DEPTH_FORMAT; }
@@ -71,11 +96,23 @@ public:
     // UI Methods
     void render_ui_begin();
     void render_ui(RHICommandContextRef command);
-
+    
+    // Depth Prepass accessors
+    std::shared_ptr<render::DepthPrePass> get_depth_prepass() { return depth_prepass_; }
+    RHITextureRef get_prepass_depth_texture() { return prepass_depth_texture_; }
+    RHITextureViewRef get_prepass_depth_texture_view() { return prepass_depth_texture_view_; }
+    bool is_prepass_enabled() const { return prepass_enabled_; }
+    void set_prepass_enabled(bool enable) { prepass_enabled_ = enable; }
+    
 private:
     // RDG methods
     void build_and_execute_rdg(uint32_t frame_index, const RenderPacket& packet);
     void build_fallback_rdg(RDGBuilder& builder);
+    
+    // RDG Visualization
+    void draw_rdg_visualizer();
+    void capture_rdg_info(class RDGBuilder& builder);
+    
     void render_imgui_and_gizmo(const RenderPacket& packet, const Extent2D& extent);
 
 public:
@@ -91,7 +128,11 @@ public:
     // DependencyGraphRef get_rdg_dependency_graph() { return rdg_dependency_graph_; } //####TODO####
 
 private:
+
+    void create_fallback_resources();
+
     void* native_window_handle_ = nullptr;
+    DefaultRenderResource fallback_resources_ = {};
 
     RHIBackendRef backend_;
     RHISurfaceRef surface_;
@@ -99,6 +140,9 @@ private:
     RHISwapchainRef swapchain_;
     RHITextureRef depth_texture_;
     RHITextureViewRef depth_texture_view_;
+
+    
+public:
     RHICommandPoolRef pool_;
     
     // Cached swapchain back buffer views - one per frame in flight
@@ -121,6 +165,7 @@ private:
 
     void init_passes();
     void init_base_resource();
+    void init_depth_prepass_resource();
     void update_global_setting();
     
     // UI Helpers
@@ -134,10 +179,39 @@ private:
     std::shared_ptr<RenderLightManager> light_manager_;
     std::shared_ptr<GizmoManager> gizmo_manager_;
     std::shared_ptr<render::ForwardPass> forward_pass_;
+    std::shared_ptr<render::DepthPrePass> depth_prepass_;
     std::shared_ptr<render::DepthVisualizePass> depth_visualize_pass_;
+    
+    // Depth prepass depth texture (shared with forward passes)
+    RHITextureRef prepass_depth_texture_;
+    RHITextureViewRef prepass_depth_texture_view_;
+    bool prepass_enabled_ = true;  // Enable/disable depth prepass
     
     // Depth buffer visualization
     RHITextureRef depth_visualize_texture_;
+    
+    // RDG Visualization data
+    struct RDGNodeInfo {
+        std::string name;
+        std::string type;
+        uint32_t id;
+        bool is_pass;
+        float x, y;
+        std::vector<std::string> inputs;
+        std::vector<std::string> outputs;
+    };
+    struct RDGEdgeInfo {
+        uint32_t from_id;
+        uint32_t to_id;
+        std::string label;
+    };
+    std::vector<RDGNodeInfo> last_rdg_nodes_;
+    std::vector<RDGEdgeInfo> last_rdg_edges_;
+    std::mutex rdg_info_mutex_;
+    bool show_rdg_visualizer_ = true;
+    bool rdg_graph_layout_dirty_ = true;
+    ImVec2 rdg_graph_offset_ = ImVec2(50, 50);
+    float rdg_graph_scale_ = 1.0f;
     RHITextureViewRef depth_visualize_texture_view_;
     bool depth_visualize_initialized_ = false;
 

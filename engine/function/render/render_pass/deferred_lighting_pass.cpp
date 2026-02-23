@@ -17,10 +17,6 @@ DEFINE_LOG_TAG(LogDeferredLighting, "DeferredLighting");
 
 namespace render {
 
-// Shader source is now in assets/shaders/deferred_lighting.hlsl
-
-
-
 DeferredLightingPass::DeferredLightingPass() = default;
 
 DeferredLightingPass::~DeferredLightingPass() {
@@ -116,7 +112,6 @@ void DeferredLightingPass::create_quad_geometry() {
     auto backend = EngineContext::rhi();
     if (!backend) return;
     
-    // Full-screen quad vertices (position + uv)
     float vertices[] = {
         -1.0f, -1.0f, 0.0f, 1.0f,
          1.0f, -1.0f, 1.0f, 1.0f,
@@ -126,7 +121,6 @@ void DeferredLightingPass::create_quad_geometry() {
     
     uint32_t indices[] = { 0, 1, 2, 0, 2, 3 };
     
-    // Create vertex buffer
     RHIBufferInfo vb_info = {};
     vb_info.size = sizeof(vertices);
     vb_info.stride = sizeof(float) * 4;
@@ -139,14 +133,12 @@ void DeferredLightingPass::create_quad_geometry() {
         return;
     }
     
-    // Upload vertex data
     void* mapped = quad_vertex_buffer_->map();
     if (mapped) {
         memcpy(mapped, vertices, sizeof(vertices));
         quad_vertex_buffer_->unmap();
     }
     
-    // Create index buffer
     RHIBufferInfo ib_info = {};
     ib_info.size = sizeof(indices);
     ib_info.stride = sizeof(uint32_t);
@@ -159,7 +151,6 @@ void DeferredLightingPass::create_quad_geometry() {
         return;
     }
     
-    // Upload index data
     mapped = quad_index_buffer_->map();
     if (mapped) {
         memcpy(mapped, indices, sizeof(indices));
@@ -258,15 +249,12 @@ void DeferredLightingPass::build(RDGBuilder& builder) {
     auto swapchain = render_system->get_swapchain();
     if (!swapchain) return;
     
-    // Get extent
     Extent2D extent = swapchain->get_extent();
     
-    // Update per-frame data from camera and lights
     auto mesh_manager = render_system->get_mesh_manager();
     if (mesh_manager) {
         auto* camera = mesh_manager->get_active_camera();
         if (camera) {
-            // Get light data
             Vec3 light_dir = Vec3(0.0f, -1.0f, 0.0f);
             Vec3 light_color = Vec3(1.0f, 1.0f, 1.0f);
             float light_intensity = 1.0f;
@@ -294,10 +282,6 @@ void DeferredLightingPass::build(RDGBuilder& builder) {
         }
     }
     
-    // Import G-Buffer textures (these would be created by GBufferPass)
-    // For now, we'll just output to the swapchain
-    //####TODO####: Properly read G-Buffer textures from previous pass
-    
     uint32_t current_frame = swapchain->get_current_frame_index();
     RHITextureRef back_buffer = swapchain->get_texture(current_frame);
     if (!back_buffer) return;
@@ -306,19 +290,16 @@ void DeferredLightingPass::build(RDGBuilder& builder) {
         .import(back_buffer, RESOURCE_STATE_COLOR_ATTACHMENT)
         .finish();
     
-    // Create lighting pass
     builder.create_render_pass("DeferredLighting_Pass")
         .color(0, color_target, ATTACHMENT_LOAD_OP_LOAD, ATTACHMENT_STORE_OP_STORE)
         .execute([this, extent](RDGPassContext context) {
             RHICommandListRef cmd = context.command;
             if (!cmd) return;
             
-            // Set viewport and scissor
             cmd->set_viewport({0, 0}, {extent.width, extent.height});
             cmd->set_scissor({0, 0}, {extent.width, extent.height});
             cmd->set_graphics_pipeline(pipeline_);
             
-            // Update and bind per-frame buffer
             if (per_frame_buffer_) {
                 if (per_frame_dirty_) {
                     void* mapped = per_frame_buffer_->map();
@@ -332,9 +313,6 @@ void DeferredLightingPass::build(RDGBuilder& builder) {
                     static_cast<ShaderFrequency>(SHADER_FREQUENCY_VERTEX | SHADER_FREQUENCY_FRAGMENT));
             }
             
-            //####TODO####: Bind G-Buffer textures
-            
-            // Draw full-screen quad using vertex ID (no vertex buffer needed)
             cmd->draw(3, 1, 0, 0);
         })
         .finish();

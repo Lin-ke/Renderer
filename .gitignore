@@ -9,3 +9,5 @@ logs/
 test/test_internal/
 vsxmake2026/
 RD/
+*.asset
+*.binasset

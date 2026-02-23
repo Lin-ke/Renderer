@@ -30,8 +30,8 @@ TEST_CASE("Model Loading with bunny.obj", "[render_resource]") {
     setting.flip_uv = false;
     setting.load_materials = false;
     
-    std::string model_path = std::string(ENGINE_PATH) + "/assets/models/bunny.obj";
-    auto model = std::make_shared<Model>(model_path, setting);
+    std::string model_path = "/Engine/models/bunny.obj";
+    auto model = Model::Load(model_path, setting);
     
     REQUIRE(model != nullptr);
     REQUIRE(model->get_submesh_count() > 0);
@@ -62,9 +62,10 @@ TEST_CASE("Model Multiple Submeshes", "[render_resource]") {
     ModelProcessSetting setting;
     setting.smooth_normal = true;
     
-    std::string model_path = std::string(ENGINE_PATH) + "/assets/models/bunny.obj";
-    auto model = std::make_shared<Model>(model_path, setting);
+    std::string model_path = "/Engine/models/bunny.obj";
+    auto model = Model::Load(model_path, setting);
     
+    REQUIRE(model != nullptr);
     REQUIRE(model->get_submesh_count() >= 1);
     
     for (uint32_t i = 0; i < model->get_submesh_count(); i++) {
@@ -125,8 +126,8 @@ TEST_CASE("Model Process Settings", "[render_resource]") {
     setting2.smooth_normal = false;
     setting2.flip_uv = true;
     
-    std::string model_path = std::string(ENGINE_PATH) + "/assets/models/bunny.obj";
-    auto model = std::make_shared<Model>(model_path, setting2);
+    std::string model_path = "/Engine/models/bunny.obj";
+    auto model = Model::Load(model_path, setting2);
     
     REQUIRE(model != nullptr);
     REQUIRE(model->get_submesh_count() > 0);

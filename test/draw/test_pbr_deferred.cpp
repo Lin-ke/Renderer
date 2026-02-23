@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
+#include "test/test_utils.h"
 #include "engine/main/engine_context.h"
 #include "engine/function/framework/world.h"
 #include "engine/function/framework/scene.h"
@@ -17,18 +18,12 @@
 #include <thread>
 #include <chrono>
 
-#include <stb_image_write.h>
-
 /**
  * @file test/draw/test_pbr_deferred.cpp
  * @brief Tests for PBR Deferred Rendering pipeline
  */
 
 DEFINE_LOG_TAG(LogPbrDeferred, "PbrDeferred");
-
-// Forward declarations from test_bunny.cpp
-extern bool save_screenshot_png(const std::string& filename, uint32_t width, uint32_t height, const std::vector<uint8_t>& data);
-extern float calculate_average_brightness(const std::vector<uint8_t>& data);
 
 TEST_CASE("GBuffer Pass Initialization", "[pbr][deferred]") {
     std::bitset<8> mode;
@@ -117,13 +112,14 @@ TEST_CASE("PBR Deferred Rendering - Material Ball", "[pbr][deferred]") {
     light_comp->on_init();
     
     // Load material ball model
-    std::string model_path = std::string(ENGINE_PATH) + "/assets/models/material_ball/material_ball.fbx";
+    std::string model_path = "/Engine/models/material_ball/material_ball.fbx";
     
     ModelProcessSetting setting;
     setting.smooth_normal = true;
     setting.load_materials = true;
     
-    auto model = std::make_shared<Model>(model_path, setting);
+    auto model = Model::Load(model_path, setting);
+    REQUIRE(model != nullptr);
     REQUIRE(model->get_submesh_count() > 0);
     
     // Create model entity
@@ -188,8 +184,8 @@ TEST_CASE("PBR Deferred Rendering - Material Ball", "[pbr][deferred]") {
     // Save screenshot
     if (screenshot_taken) {
         std::string screenshot_path = test_asset_dir + "/pbr_material_ball.png";
-        if (save_screenshot_png(screenshot_path, screenshot_width, screenshot_height, screenshot_data)) {
-            float brightness = calculate_average_brightness(screenshot_data);
+        if (test_utils::save_screenshot_png(screenshot_path, screenshot_width, screenshot_height, screenshot_data)) {
+            float brightness = test_utils::calculate_average_brightness(screenshot_data);
             INFO(LogPbrDeferred, "Screenshot saved: {} (brightness: {:.1f})", screenshot_path, brightness);
             CHECK(brightness > 1.0f);
             CHECK(brightness < 255.0f);

@@ -14,6 +14,8 @@
 #include <cereal/archives/json.hpp>
 #include <cereal/cereal.hpp>
 
+DECLARE_LOG_TAG(LogClassDB);
+
 /**
  * @brief Helper struct for generic serialization using Cereal.
  */
@@ -86,7 +88,9 @@ struct JsonSerializer {
 
     template<typename T>
     static void deserialize(const std::string& str, T& value) {
-        if (str.empty()) return;
+        if (str.empty()) {
+            return;
+        }
         size_t first = str.find_first_not_of(" \t\n\r");
         
         bool looks_like_json = (first != std::string::npos && (str[first] == '{' || str[first] == '['));
@@ -95,31 +99,14 @@ struct JsonSerializer {
              // Case 1: Raw primitive "500"
              // Wrap it and read as NVP "v" so Cereal has a valid root object context
              std::string wrapped = "{\"v\": " + str + "}";
-             try {
-                Serializer::deserialize_wrapped<T, InputArchive>(wrapped, value, "v");
-             } catch (...) {
-             }
+             Serializer::deserialize_wrapped<T, InputArchive>(wrapped, value, "v");
              return;
         }
 
         // Case 2: Object "{...}" or Array "[...]"
         // Could be a Class object OR a legacy wrapped primitive {"v": 500}
-        try {
-            // Try direct read first (Preferred for Class objects / new format)
-            Serializer::deserialize<T, InputArchive>(str, value);
-        } catch (...) {
-            // If direct read fails, maybe it's wrapped in "v"? (Legacy format)
-            try {
-                Serializer::deserialize_wrapped<T, InputArchive>(str, value, "v");
-            } catch (...) {
-                // Try wrapping the whole thing in "v" (handles raw {"x":0} or [1,2,3])
-                std::string wrapped = "{\"v\": " + str + "}";
-                try {
-                    Serializer::deserialize_wrapped<T, InputArchive>(wrapped, value, "v");
-                } catch (...) {
-                }
-            }
-        }
+        // Try direct read first (Preferred for Class objects / new format)
+        Serializer::deserialize<T, InputArchive>(str, value);
     }
 };
 
@@ -242,6 +229,7 @@ public:
         
         std::string cn(class_name);
         if (classes_.find(cn) == classes_.end()) {
+            FATAL(LogClassDB, "Cannot register property '{}' for unregistered class '{}'", std::string(property_name), cn);
             return;
         }
         auto& info = classes_[cn];

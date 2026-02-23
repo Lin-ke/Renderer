@@ -1,5 +1,4 @@
-#ifndef SERIRALIZE_H
-#define SERIRALIZE_H
+#pragma once
 
 #include <cereal/access.hpp>
 #include <cereal/archives/binary.hpp>
@@ -13,6 +12,3 @@
 #include <cereal/types/string.hpp>
 #include <cereal/types/utility.hpp>
 #include <cereal/types/vector.hpp>
-
-
-#endif

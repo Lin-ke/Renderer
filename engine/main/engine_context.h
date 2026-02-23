@@ -8,7 +8,7 @@
 #include <mutex>
 #include <condition_variable>
 
-#include "engine/function/render/render_system.h"
+#include "engine/function/render/render_system/render_system.h"
 #include "engine/function/render/rhi/rhi.h"
 #include "engine/function/render/render_resource/render_resource_manager.h"
 #include "engine/core/utils/timer.h"

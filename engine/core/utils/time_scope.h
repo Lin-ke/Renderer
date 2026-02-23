@@ -18,7 +18,7 @@ public:
     TimeScope() { clear(); }
     ~TimeScope() = default;
 
-    std::string name;
+    std::string name_;
 
     void clear();
     void begin();

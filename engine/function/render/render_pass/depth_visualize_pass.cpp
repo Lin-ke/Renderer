@@ -7,8 +7,6 @@ namespace render {
 
 DEFINE_LOG_TAG(LogDepthVisualizePass, "DepthVisualizePass");
 
-// Shader source is now in assets/shaders/depth_visualize.hlsl
-
 DepthVisualizePass::DepthVisualizePass() = default;
 
 DepthVisualizePass::~DepthVisualizePass() {
@@ -47,7 +45,6 @@ void DepthVisualizePass::create_shaders() {
     vertex_shader_ = std::make_shared<Shader>();
     vertex_shader_->shader_ = backend->create_shader(vs_info);
     
-    // Load pre-compiled pixel shader
     auto ps_code = ShaderUtils::load_or_compile("depth_visualize_ps.cso", nullptr, "PSMain", "ps_5_0");
     if (ps_code.empty()) {
         ERR(LogDepthVisualizePass, "Failed to load/compile pixel shader");
@@ -85,17 +82,14 @@ void DepthVisualizePass::create_pipeline() {
     pipe_info.root_signature = root_signature_;
     pipe_info.primitive_type = PRIMITIVE_TYPE_TRIANGLE_LIST;
     
-    // No vertex input
     pipe_info.vertex_input_state.vertex_elements.clear();
 
     pipe_info.rasterizer_state.cull_mode = CULL_MODE_NONE;
     pipe_info.rasterizer_state.fill_mode = FILL_MODE_SOLID;
     
-    // Disable depth test/write
     pipe_info.depth_stencil_state.enable_depth_test = false;
     pipe_info.depth_stencil_state.enable_depth_write = false;
 
-    // Output to backbuffer (R8G8B8A8_UNORM)
     // NOTE: This assumes backbuffer format is consistently R8G8B8A8_UNORM
     pipe_info.color_attachment_formats[0] = FORMAT_R8G8B8A8_UNORM; 
     pipe_info.depth_stencil_attachment_format = FORMAT_UKNOWN; // No depth buffer bound
@@ -108,7 +102,6 @@ void DepthVisualizePass::draw(RHICommandContextRef command, RHITextureRef depth_
 
     auto backend = EngineContext::rhi();
 
-    // Create a temporary render pass for drawing fullscreen quad
     RHIRenderPassInfo rp_info = {};
     rp_info.extent = extent;
     rp_info.color_attachments[0].texture_view = output_rtv;
@@ -116,13 +109,10 @@ void DepthVisualizePass::draw(RHICommandContextRef command, RHITextureRef depth_
     rp_info.color_attachments[0].store_op = ATTACHMENT_STORE_OP_STORE;
     rp_info.color_attachments[0].clear_color = {0.0f, 0.0f, 0.0f, 1.0f}; // Clear to black
     
-    // No depth attachment
-    
     RHIRenderPassRef render_pass = backend->create_render_pass(rp_info);
     
     command->begin_render_pass(render_pass);
 
-    // Update constants
     DepthVisualizeConstants constants;
     constants.near_plane = near_plane;
     constants.far_plane = far_plane;
@@ -142,10 +132,8 @@ void DepthVisualizePass::draw(RHICommandContextRef command, RHITextureRef depth_
     
     command->bind_constant_buffer(constant_buffer_, 0, SHADER_FREQUENCY_FRAGMENT);
     
-    // Bind depth texture to slot 0
     command->bind_texture(depth_texture, 0, SHADER_FREQUENCY_FRAGMENT);
     
-    // Draw 3 vertices for full screen triangle
     command->draw(3, 1, 0, 0);
     
     command->end_render_pass();

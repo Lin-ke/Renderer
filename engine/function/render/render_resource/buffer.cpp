@@ -2,9 +2,9 @@
 #include "engine/core/math/math.h"
 #include "engine/main/engine_context.h"
 #include "engine/function/render/rhi/rhi_structs.h"
-// #include "engine/function/render/render_resource/render_resource_manager.h" //####TODO####
 #include "engine/function/render/data/render_structs.h"
 
+#include <cassert>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -15,21 +15,14 @@ RHIBackendRef global_rhi_backend() {
 }
 
 VertexBuffer::VertexBuffer() {
-    // vertex_id_ = EngineContext::render_resource()->allocate_vertex_id(); //####TODO####
 }
 
 VertexBuffer::~VertexBuffer() {
-    /* //####TODO####
-    if (!EngineContext::destroyed()) {
-        if (vertex_info_.position_id != 0) EngineContext::render_resource()->release_bindless_id(vertex_info_.position_id, BINDLESS_SLOT_POSITION);
-        // ... (other releases)
-        if (vertex_id_ != 0) EngineContext::render_resource()->release_vertex_id(vertex_id_);
-    }
-    */
 }
 
 void VertexBuffer::set_buffer_data(void* data, uint32_t size, RHIBufferRef& buffer, uint32_t& id, uint32_t slot) {
-    if (size == 0) return;
+    assert(size > 0 && "VertexBuffer::set_buffer_data: size must be greater than 0");
+    assert(data != nullptr && "VertexBuffer::set_buffer_data: data cannot be null");
     if (!buffer || buffer->get_info().size < size) {
         RHIBufferInfo info = {};
         info.size = size;
@@ -38,25 +31,13 @@ void VertexBuffer::set_buffer_data(void* data, uint32_t size, RHIBufferRef& buff
         info.type = RESOURCE_TYPE_VERTEX_BUFFER;
         info.creation_flag = BUFFER_CREATION_PERSISTENT_MAP;
         buffer = EngineContext::rhi()->create_buffer(info);
-
-        /* //####TODO####
-        if (id != 0) EngineContext::render_resource()->release_bindless_id(id, (BindlessSlot)slot);
-        id = EngineContext::render_resource()->allocate_bindless_id({
-            .resource_type = RESOURCE_TYPE_RW_BUFFER,
-            .buffer = buffer,
-            .buffer_offset = 0,
-            .buffer_range = size},
-            (BindlessSlot)slot);
-        */
     }
 
     void* mapped = buffer->map();
-    if(mapped) {
-        memcpy(mapped, data, size);
-        buffer->unmap();
-    }
+    assert(mapped != nullptr && "VertexBuffer::set_buffer_data: failed to map buffer");
+    memcpy(mapped, data, size);
+    buffer->unmap();
 
-    // EngineContext::render_resource()->set_vertex_info(vertex_info_, vertex_id_); //####TODO####
 }
 
 void VertexBuffer::set_position(const std::vector<Vec3>& position) {
@@ -89,14 +70,13 @@ void VertexBuffer::set_bone_weight(const std::vector<Vec4>& bone_weight) {
 }
 
 IndexBuffer::~IndexBuffer() {
-    // if (!EngineContext::destroyed() && index_id_ != 0) EngineContext::render_resource()->release_bindless_id(index_id_, BINDLESS_SLOT_INDEX); //####TODO####
 }
 
 void IndexBuffer::set_index(const std::vector<uint32_t>& index) {
     index_num_ = index.size();
     uint32_t size = index.size() * sizeof(uint32_t);
 
-    if (size == 0) return;
+    assert(size > 0 && "IndexBuffer::set_index: index array cannot be empty");
     if (!buffer_ || buffer_->get_info().size < size) {
         RHIBufferInfo info = {};
         info.size = size;
@@ -105,21 +85,10 @@ void IndexBuffer::set_index(const std::vector<uint32_t>& index) {
         info.type = RESOURCE_TYPE_INDEX_BUFFER;
         info.creation_flag = BUFFER_CREATION_PERSISTENT_MAP;
         buffer_ = EngineContext::rhi()->create_buffer(info);
-
-        /* //####TODO####
-        if (index_id_ != 0) EngineContext::render_resource()->release_bindless_id(index_id_, BINDLESS_SLOT_INDEX);
-        index_id_ = EngineContext::render_resource()->allocate_bindless_id({
-            .resource_type = RESOURCE_TYPE_RW_BUFFER,
-            .buffer = buffer_,
-            .buffer_offset = 0,
-            .buffer_range = size},
-            BINDLESS_SLOT_INDEX);
-        */
     }
 
     void* mapped = buffer_->map();
-    if(mapped) {
-        memcpy(mapped, index.data(), size);
-        buffer_->unmap();
-    }
+    assert(mapped != nullptr && "IndexBuffer::set_index: failed to map buffer");
+    memcpy(mapped, index.data(), size);
+    buffer_->unmap();
 }

@@ -15,12 +15,10 @@ public:
     DirectionalLightComponent() = default;
     virtual ~DirectionalLightComponent() = default;
 
-    virtual void on_init(); // Renamed from OnInit
-    virtual void on_update(float delta_time); // Renamed from OnUpdate
+    virtual void on_init();
+    virtual void on_update(float delta_time);
 
-    // inline Frustum get_frustum(int index) { return light_infos_[index].frustum; }
 
-    // bool should_update(uint32_t cascade) { return update_cnts_[cascade] == 0; }
     float get_constant_bias() { return constant_bias_; }
     float get_slope_bias() { return slope_bias_; }
 
@@ -37,7 +35,7 @@ public:
     inline bool cast_shadow() const { return cast_shadow_; }
     inline bool enable() const { return enable_; }
 
-    void update_light_info(); // Changed to public to be called by manager
+    void update_light_info();
 
     static void register_class() {
         Registry::add<DirectionalLightComponent>("DirectionalLightComponent")

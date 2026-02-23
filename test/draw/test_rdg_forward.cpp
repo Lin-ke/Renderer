@@ -76,9 +76,10 @@ TEST_CASE("RDG Forward Pass - Bunny Rendering", "[draw][rdg]") {
     setting.smooth_normal = true;
     setting.load_materials = false;
     
-    std::string model_path = std::string(ENGINE_PATH) + "/assets/models/bunny.obj";
-    auto bunny_model = std::make_shared<Model>(model_path, setting);
+    std::string model_path = "/Engine/models/bunny.obj";
+    auto bunny_model = Model::Load(model_path, setting);
     
+    REQUIRE(bunny_model != nullptr);
     REQUIRE(bunny_model->get_submesh_count() > 0);
     
     bunny_mesh->set_model(bunny_model);
@@ -161,7 +162,7 @@ TEST_CASE("RDG Forward Pass - Wireframe Toggle", "[draw][rdg]") {
     setting.smooth_normal = true;
     setting.load_materials = false;
     
-    std::string model_path = std::string(ENGINE_PATH) + "/assets/models/bunny.obj";
+    std::string model_path = "/Engine/models/bunny.obj";
     auto bunny_model = std::make_shared<Model>(model_path, setting);
     bunny_mesh->set_model(bunny_model);
     bunny_mesh->on_init();

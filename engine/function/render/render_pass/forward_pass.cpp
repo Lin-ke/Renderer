@@ -18,9 +18,7 @@ DEFINE_LOG_TAG(LogForwardPass, "ForwardPass");
 
 namespace render {
 
-// Blinn-Phong vertex shader source (HLSL)
-// Shader source is now in assets/shaders/forward_pass.hlsl
-// Compiled to forward_pass_vs.cso and forward_pass_ps.cso at build time
+
 
 ForwardPass::ForwardPass() = default;
 
@@ -28,8 +26,6 @@ ForwardPass::~ForwardPass() {
     if (solid_pipeline_) solid_pipeline_->destroy();
     if (wireframe_pipeline_) wireframe_pipeline_->destroy();
     if (root_signature_) root_signature_->destroy();
-    // Shaders managed by shared_ptr
-    // Shaders managed by shared_ptr
     if (per_frame_buffer_) per_frame_buffer_->destroy();
     if (per_object_buffer_) per_object_buffer_->destroy();
 }
@@ -63,7 +59,6 @@ void ForwardPass::create_shaders() {
     auto backend = EngineContext::rhi();
     if (!backend) return;
     
-    // Load pre-compiled shader or compile from source
     auto vs_code = ShaderUtils::load_or_compile("forward_pass_vs.cso", nullptr, "VSMain", "vs_5_0");
     if (vs_code.empty()) {
         ERR(LogForwardPass, "Failed to load/compile vertex shader");
@@ -84,7 +79,6 @@ void ForwardPass::create_shaders() {
     vertex_shader_ = std::make_shared<Shader>();
     vertex_shader_->shader_ = vs;
     
-    // Load pre-compiled fragment shader or compile from source
     auto fs_code = ShaderUtils::load_or_compile("forward_pass_ps.cso", nullptr, "PSMain", "ps_5_0");
     if (fs_code.empty()) {
         ERR(LogForwardPass, "Failed to load/compile fragment shader");
@@ -112,7 +106,6 @@ void ForwardPass::create_uniform_buffers() {
     auto backend = EngineContext::rhi();
     if (!backend) return;
     
-    // Create per-frame buffer (b0)
     RHIBufferInfo frame_info = {};
     frame_info.size = sizeof(PerFrameData);
     frame_info.stride = 0;
@@ -126,7 +119,6 @@ void ForwardPass::create_uniform_buffers() {
         return;
     }
     
-    // Create per-object buffer (b1) - dynamic, updated per draw
     RHIBufferInfo object_info = {};
     object_info.size = sizeof(PerObjectData);
     object_info.stride = 0;
@@ -147,40 +139,33 @@ void ForwardPass::create_pipeline() {
     auto backend = EngineContext::rhi();
     if (!backend || !vertex_shader_ || !fragment_shader_) return;
     
-    // Create root signature with two uniform buffer slots
     RHIRootSignatureInfo root_info = {};
     root_signature_ = backend->create_root_signature(root_info);
     if (!root_signature_) return;
     
-    // Common pipeline configuration
     RHIGraphicsPipelineInfo pipe_info = {};
     pipe_info.vertex_shader = vertex_shader_->shader_;
     pipe_info.fragment_shader = fragment_shader_->shader_;
     pipe_info.root_signature = root_signature_;
     pipe_info.primitive_type = PRIMITIVE_TYPE_TRIANGLE_LIST;
     
-    // Vertex input layout: position (stream 0) + normal (stream 1)
-    // Meshes store position and normal in separate buffers
     pipe_info.vertex_input_state.vertex_elements.resize(2);
-    // Position - stream 0
     pipe_info.vertex_input_state.vertex_elements[0].stream_index = 0;
     pipe_info.vertex_input_state.vertex_elements[0].attribute_index = 0;
     pipe_info.vertex_input_state.vertex_elements[0].format = FORMAT_R32G32B32_SFLOAT;
     pipe_info.vertex_input_state.vertex_elements[0].offset = 0;
-    // Normal - stream 1
     pipe_info.vertex_input_state.vertex_elements[1].stream_index = 1;
     pipe_info.vertex_input_state.vertex_elements[1].attribute_index = 1;
     pipe_info.vertex_input_state.vertex_elements[1].format = FORMAT_R32G32B32_SFLOAT;
     pipe_info.vertex_input_state.vertex_elements[1].offset = 0;
     
-    pipe_info.rasterizer_state.cull_mode = CULL_MODE_NONE;  // Disable culling for testing
+    pipe_info.rasterizer_state.cull_mode = CULL_MODE_NONE;
     pipe_info.rasterizer_state.depth_clip_mode = DEPTH_CLIP;
     
     pipe_info.depth_stencil_state.enable_depth_test = true;
     pipe_info.depth_stencil_state.enable_depth_write = true;
     pipe_info.depth_stencil_state.depth_test = COMPARE_FUNCTION_LESS_EQUAL;
     
-    // Render targets
     auto render_system = EngineContext::render_system();
     if (render_system) {
         pipe_info.color_attachment_formats[0] = render_system->get_color_format();
@@ -190,7 +175,6 @@ void ForwardPass::create_pipeline() {
         pipe_info.depth_stencil_attachment_format = FORMAT_D32_SFLOAT;
     }
     
-    // Create solid pipeline
     pipe_info.rasterizer_state.fill_mode = FILL_MODE_SOLID;
     solid_pipeline_ = backend->create_graphics_pipeline(pipe_info);
     if (!solid_pipeline_) {
@@ -198,7 +182,6 @@ void ForwardPass::create_pipeline() {
         return;
     }
     
-    // Create wireframe pipeline
     pipe_info.rasterizer_state.fill_mode = FILL_MODE_WIREFRAME;
     wireframe_pipeline_ = backend->create_graphics_pipeline(pipe_info);
     if (!wireframe_pipeline_) {
@@ -206,7 +189,6 @@ void ForwardPass::create_pipeline() {
         return;
     }
     
-    // Start with solid pipeline
     pipeline_ = solid_pipeline_;
     
     INFO(LogForwardPass, "Solid and wireframe pipelines created successfully");
@@ -226,7 +208,6 @@ void ForwardPass::set_per_frame_data(const Mat4& view, const Mat4& proj,
                                       const Vec3& light_dir,
                                       const Vec3& light_color,
                                       float light_intensity) {
-    // HLSL uses column-major matrices with mul(matrix, vector), matching Eigen's storage
     per_frame_data_.view = view;
     per_frame_data_.proj = proj;
     per_frame_data_.camera_pos = camera_pos;
@@ -241,7 +222,6 @@ void ForwardPass::build(RDGBuilder& builder) {
         return;
     }
     
-    // Import swapchain texture (external resource)
     auto render_system = EngineContext::render_system();
     if (!render_system) return;
     
@@ -250,19 +230,16 @@ void ForwardPass::build(RDGBuilder& builder) {
         return;
     }
     
-    // Get current back buffer texture
     uint32_t current_frame = swapchain->get_current_frame_index();
     RHITextureRef back_buffer = swapchain->get_texture(current_frame);
     if (!back_buffer) {
         return;
     }
     
-    // Update per-frame data from camera and lights BEFORE creating the pass
     auto mesh_manager = render_system->get_mesh_manager();
     if (mesh_manager) {
         auto* camera = mesh_manager->get_active_camera();
         if (camera) {
-            // Get light data from world
             Vec3 light_dir = Vec3(0.0f, -1.0f, 0.0f);
             Vec3 light_color = Vec3(1.0f, 1.0f, 1.0f);
             float light_intensity = 1.0f;
@@ -294,18 +271,14 @@ void ForwardPass::build(RDGBuilder& builder) {
         }
     }
     
-    // Create or import color target
     RDGTextureHandle color_target = builder.create_texture("ForwardPass_Color")
         .import(back_buffer, RESOURCE_STATE_COLOR_ATTACHMENT)
         .finish();
     
-    // Create render pass using RDG
-    // INFO(LogForwardPass, "Building ForwardPass RDG node...");
     builder.create_render_pass("ForwardPass_Main")
         .color(0, color_target, ATTACHMENT_LOAD_OP_CLEAR, ATTACHMENT_STORE_OP_STORE, 
                Color4{0.1f, 0.2f, 0.4f, 1.0f})
         .execute([this, render_system](RDGPassContext context) {
-            // ERR(LogForwardPass, "Executing ForwardPass RDG lambda!");
             auto mesh_manager = render_system->get_mesh_manager();
             if (!mesh_manager) {
                 ERR(LogForwardPass, "Mesh manager is null!");
@@ -318,13 +291,11 @@ void ForwardPass::build(RDGBuilder& builder) {
                 return;
             }
             
-            // Set viewport and scissor
             Extent2D extent = render_system->get_swapchain()->get_extent();
             cmd->set_viewport({0, 0}, {extent.width, extent.height});
             cmd->set_scissor({0, 0}, {extent.width, extent.height});
             cmd->set_graphics_pipeline(pipeline_);
             
-            // Update and bind per-frame buffer
             if (per_frame_buffer_) {
                 if (per_frame_dirty_) {
                     void* mapped = per_frame_buffer_->map();
@@ -338,12 +309,9 @@ void ForwardPass::build(RDGBuilder& builder) {
                     static_cast<ShaderFrequency>(SHADER_FREQUENCY_VERTEX | SHADER_FREQUENCY_FRAGMENT));
             }
             
-            // Get batches from mesh manager and draw them
             std::vector<DrawBatch> batches;
             mesh_manager->collect_draw_batches(batches);
-            // ERR(LogForwardPass, "Collected {} draw batches in RDG lambda", batches.size());
             for (const auto& batch : batches) {
-                // Update and bind per-object buffer
                 if (per_object_buffer_) {
                     PerObjectData object_data;
                     object_data.model = batch.model_matrix;
@@ -356,7 +324,6 @@ void ForwardPass::build(RDGBuilder& builder) {
                     cmd->bind_constant_buffer(per_object_buffer_, 1, SHADER_FREQUENCY_VERTEX);
                 }
                 
-                // Bind vertex buffers
                 if (batch.vertex_buffer) {
                     cmd->bind_vertex_buffer(batch.vertex_buffer, 0, 0);
                 }
@@ -364,7 +331,6 @@ void ForwardPass::build(RDGBuilder& builder) {
                     cmd->bind_vertex_buffer(batch.normal_buffer, 1, 0);
                 }
                 
-                // Draw
                 if (batch.index_buffer) {
                     cmd->bind_index_buffer(batch.index_buffer, 0);
                     cmd->draw_indexed(batch.index_count, 1, batch.index_offset, 0, 0);
@@ -375,94 +341,28 @@ void ForwardPass::build(RDGBuilder& builder) {
 }
 
 void ForwardPass::draw_batch(RHICommandContextRef command, const DrawBatch& batch) {
-    if (!command) {
-        ERR(LogForwardPass, "draw_batch: command is null");
-        return;
-    }
-    if (!pipeline_) {
-        ERR(LogForwardPass, "draw_batch: pipeline is null");
-        return;
-    }
-    if (!batch.vertex_buffer) {
-        ERR(LogForwardPass, "draw_batch: vertex_buffer is null");
-        return;
-    }
-    if (!batch.index_buffer) {
-        ERR(LogForwardPass, "draw_batch: index_buffer is null");
-        return;
-    }
-    if (batch.index_count == 0) {
-        ERR(LogForwardPass, "draw_batch: index_count is 0");
+    if (!command || !pipeline_ || !batch.vertex_buffer || !batch.index_buffer || batch.index_count == 0) {
+        ERR(LogForwardPass, "draw_batch: invalid parameters");
         return;
     }
     
-    // Log draw call info once
-    static bool logged_once = false;
-    if (!logged_once) {
-        INFO(LogForwardPass, "Draw call: index_count={}, model_matrix[0]={},{},{},{}", 
-             batch.index_count,
-             batch.model_matrix(0,0), batch.model_matrix(0,1), 
-             batch.model_matrix(0,2), batch.model_matrix(0,3));
-        
-        // Log view matrix
-        INFO(LogForwardPass, "View matrix row 0: {}, {}, {}, {}",
-             per_frame_data_.view(0,0), per_frame_data_.view(0,1),
-             per_frame_data_.view(0,2), per_frame_data_.view(0,3));
-        INFO(LogForwardPass, "View matrix row 1: {}, {}, {}, {}",
-             per_frame_data_.view(1,0), per_frame_data_.view(1,1),
-             per_frame_data_.view(1,2), per_frame_data_.view(1,3));
-        INFO(LogForwardPass, "View matrix row 2: {}, {}, {}, {}",
-             per_frame_data_.view(2,0), per_frame_data_.view(2,1),
-             per_frame_data_.view(2,2), per_frame_data_.view(2,3));
-        INFO(LogForwardPass, "View matrix row 3: {}, {}, {}, {}",
-             per_frame_data_.view(3,0), per_frame_data_.view(3,1),
-             per_frame_data_.view(3,2), per_frame_data_.view(3,3));
-        
-        // Log proj matrix
-        INFO(LogForwardPass, "Proj matrix row 0: {}, {}, {}, {}",
-             per_frame_data_.proj(0,0), per_frame_data_.proj(0,1),
-             per_frame_data_.proj(0,2), per_frame_data_.proj(0,3));
-        INFO(LogForwardPass, "Proj matrix row 1: {}, {}, {}, {}",
-             per_frame_data_.proj(1,0), per_frame_data_.proj(1,1),
-             per_frame_data_.proj(1,2), per_frame_data_.proj(1,3));
-        INFO(LogForwardPass, "Proj matrix row 2: {}, {}, {}, {}",
-             per_frame_data_.proj(2,0), per_frame_data_.proj(2,1),
-             per_frame_data_.proj(2,2), per_frame_data_.proj(2,3));
-        INFO(LogForwardPass, "Proj matrix row 3: {}, {}, {}, {}",
-             per_frame_data_.proj(3,0), per_frame_data_.proj(3,1),
-             per_frame_data_.proj(3,2), per_frame_data_.proj(3,3));
-        
-        logged_once = true;
-    }
-    
-    // Set pipeline
     command->set_graphics_pipeline(pipeline_);
     
-    // Bind per-frame uniform buffer (slot b0, vertex and fragment shader)
     if (per_frame_buffer_) {
-        // Update per-frame buffer if dirty
         if (per_frame_dirty_) {
             void* mapped = per_frame_buffer_->map();
             if (mapped) {
                 memcpy(mapped, &per_frame_data_, sizeof(per_frame_data_));
                 per_frame_buffer_->unmap();
-            } else {
-                ERR(LogForwardPass, "Failed to map per_frame_buffer");
             }
             per_frame_dirty_ = false;
         }
-        
-        // Bind to both vertex and fragment shader
         command->bind_constant_buffer(per_frame_buffer_, 0, 
             static_cast<ShaderFrequency>(SHADER_FREQUENCY_VERTEX | SHADER_FREQUENCY_FRAGMENT));
-    } else {
-        ERR(LogForwardPass, "per_frame_buffer is null");
     }
     
-    // Update and bind per-object buffer (slot b1)
     if (per_object_buffer_) {
         PerObjectData object_data;
-        // HLSL uses column-major matrices with mul(matrix, vector), matching Eigen's storage
         object_data.model = batch.model_matrix;
         object_data.inv_model = batch.inv_model_matrix;
         
@@ -470,17 +370,11 @@ void ForwardPass::draw_batch(RHICommandContextRef command, const DrawBatch& batc
         if (mapped) {
             memcpy(mapped, &object_data, sizeof(object_data));
             per_object_buffer_->unmap();
-        } else {
-            ERR(LogForwardPass, "Failed to map per_object_buffer");
         }
         
-        // Bind to vertex shader only (model matrix usually not needed in fragment)
         command->bind_constant_buffer(per_object_buffer_, 1, SHADER_FREQUENCY_VERTEX);
-    } else {
-        ERR(LogForwardPass, "per_object_buffer is null");
     }
     
-    // Bind vertex buffers (position at stream 0, normal at stream 1)
     if (batch.vertex_buffer) {
         command->bind_vertex_buffer(batch.vertex_buffer, 0, 0);
     }
@@ -491,9 +385,6 @@ void ForwardPass::draw_batch(RHICommandContextRef command, const DrawBatch& batc
     if (batch.index_buffer) {
         command->bind_index_buffer(batch.index_buffer, 0);
         command->draw_indexed(batch.index_count, 1, batch.index_offset, 0, 0);
-    } else {
-        // Non-indexed draw not supported for now
-        WARN(LogForwardPass, "Non-indexed draw not supported");
     }
 }
 

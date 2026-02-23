@@ -45,7 +45,7 @@ public:
     }
 
 private:
-    SerializerRegistry(); // Private constructor to enforce singleton
+    SerializerRegistry();
 
     std::unordered_map<std::type_index, JsonSerializerFn> json_serializers_;
     std::unordered_map<std::type_index, JsonDeserializerFn> json_deserializers_;

@@ -1,12 +1,14 @@
 {
     "uid": "91727551-e94d-a2b1-f7d9-cf8f68717dd4",
     "deps": [
-        "33a92291-8769-43c2-2a40-16a9f7884eb0",
-        "2229a457-65e3-b00c-50ed-31130dbbd4fc",
-        "ec45b049-aa0a-7104-addd-f33c99f706cf",
-        "fedeb073-47b8-b2ac-b484-1e92fac87492",
-        "b8bc7522-a41a-4cf8-6ccc-d64e539aa1cd",
-        "8d49071b-3218-4500-2e07-780a678fac1a"
+        "f1502937-d203-6d1b-7a6c-50323a330f05",
+        "a5a18129-8c4d-0492-d107-79a50ea10ff9",
+        "763c8a3c-a2f5-b4b6-e1de-b8091bb88cbd",
+        "18ac8863-366b-94c8-1994-1f26ab5f9268",
+        "84efc49d-94d6-58cd-c2be-150e9dfb21d4",
+        "ebb1dd9a-9e83-b060-21ff-d28ffc2a240b",
+        "45553c2d-b1ff-d51a-bc92-7fff304a772f",
+        "e0592b02-569e-ca71-f510-36653a666349"
     ],
     "asset": {
         "polymorphic_id": 2147483649,
@@ -18,16 +20,16 @@
                     "uid": "91727551-e94d-a2b1-f7d9-cf8f68717dd4"
                 },
                 "mesh_deps_": [
-                    "33a92291-8769-43c2-2a40-16a9f7884eb0",
-                    "2229a457-65e3-b00c-50ed-31130dbbd4fc",
-                    "ec45b049-aa0a-7104-addd-f33c99f706cf",
-                    "fedeb073-47b8-b2ac-b484-1e92fac87492"
+                    "f1502937-d203-6d1b-7a6c-50323a330f05",
+                    "a5a18129-8c4d-0492-d107-79a50ea10ff9",
+                    "763c8a3c-a2f5-b4b6-e1de-b8091bb88cbd",
+                    "18ac8863-366b-94c8-1994-1f26ab5f9268"
                 ],
                 "material_deps_": [
-                    "b8bc7522-a41a-4cf8-6ccc-d64e539aa1cd",
-                    "8d49071b-3218-4500-2e07-780a678fac1a",
-                    "8d49071b-3218-4500-2e07-780a678fac1a",
-                    "8d49071b-3218-4500-2e07-780a678fac1a"
+                    "84efc49d-94d6-58cd-c2be-150e9dfb21d4",
+                    "ebb1dd9a-9e83-b060-21ff-d28ffc2a240b",
+                    "45553c2d-b1ff-d51a-bc92-7fff304a772f",
+                    "e0592b02-569e-ca71-f510-36653a666349"
                 ],
                 "material_slots": [
                     {
@@ -51,7 +53,7 @@
                         "slot_index": 3
                     }
                 ],
-                "path": "C:\\renderer\\assets\\models\\Klee\\klee.fbx",
+                "path": "D:\\Renderer\\assets\\models\\Klee\\klee.fbx",
                 "process_setting": {
                     "smooth_normal": true,
                     "flip_uv": true,
@@ -62,7 +64,7 @@
                     "generate_virtual_mesh": false,
                     "cache_cluster": false,
                     "force_png_texture": false,
-                    "material_type": 0
+                    "material_type": 1
                 }
             }
         }

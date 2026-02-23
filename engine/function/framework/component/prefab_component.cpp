@@ -15,8 +15,7 @@ void PrefabComponent::generate_modifications() {
     auto& instance_comps = instance->get_components();
     auto& prefab_comps = prefab_root->get_components();
 
-    // 简单对比：假设组件顺序和类型一一对应，或者按类型匹配
-    // 这里的逻辑：遍历 Instance 的组件，在 Prefab 中找对应组件，对比属性
+
     for (const auto& inst_comp : instance_comps) {
         // Skip PrefabComponent itself
         if (inst_comp.get() == this) continue;
@@ -37,13 +36,10 @@ void PrefabComponent::generate_modifications() {
             for (const auto* prop : props) {
                 std::string val_inst = prop->getter(inst_comp.get());
                 std::string val_prefab = prop->getter(prefab_match);
-                
                 if (val_inst != val_prefab) {
                     modifications.push_back({type_name, prop->name, val_inst});
                 }
             }
-        } else {
-            // New component added to instance? Not handled in this simple prefab system yet.
         }
     }
 }
@@ -60,10 +56,6 @@ void PrefabComponent::apply_modifications(Entity* root_entity) {
                 } else {
                     WARN(LogAsset, "Failed to set property {} on component {}", mod.field_path, mod.target_component);
                 }
-                // Don't break, multiple components of same type might exist? 
-                // For now assuming we target the first one or we match all?
-                // Unity matches by specific identification, but here we only have type name. 
-                // We'll apply to the first one found for simplicity.
                 break;
             }
         }

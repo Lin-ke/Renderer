@@ -19,7 +19,6 @@ RDGBufferPool::PooledBuffer RDGBufferPool::allocate(const RHIBufferInfo& info) {
         }
     }
 
-    //####TODO####: DEBUG only - INFO(LogRDG, "RHIBuffer not found in cache, creating new.");
     ret = {.buffer = EngineContext::rhi()->create_buffer(info), .state = RESOURCE_STATE_UNDEFINED};
     allocated_size_++;
 
@@ -45,7 +44,6 @@ RDGTexturePool::PooledTexture RDGTexturePool::allocate(const RHITextureInfo& inf
         return ret;
     }
 
-    //####TODO####: DEBUG only - INFO(LogRDG, "RHITexture not found in cache, creating new.");
     ret = {
         .texture = EngineContext::rhi()->create_texture(temp_info),
         .state = RESOURCE_STATE_UNDEFINED,
@@ -75,7 +73,6 @@ RDGTextureViewPool::PooledTextureView RDGTextureViewPool::allocate(const RHIText
         return ret;
     }
 
-    //####TODO####: DEBUG only - INFO(LogRDG, "RHITextureView not found in cache, creating new.");
     ret = {.texture_view = EngineContext::rhi()->create_texture_view(actual_info)};
     allocated_size_++;
 
@@ -98,7 +95,6 @@ RDGDescriptorSetPool::PooledDescriptor RDGDescriptorSetPool::allocate(const RHIR
         return ret;
     }
 
-    //####TODO####: DEBUG only - INFO(LogRDG, "RHIDescriptorSet not found in cache, creating new.");
     ret = {.descriptor = root_signature->create_descriptor_set(set)};
     allocated_size_++;
 

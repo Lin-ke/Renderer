@@ -8,8 +8,7 @@
 
 #define PI 3.14159265358979323846
 
-// 注意:    Eigen的矩阵是行优先 row
-//          glm的矩阵是列优先 column
+// Note: Eigen matrices are row-major, GLM matrices are column-major
 
 typedef Eigen::Matrix2f Mat2;
 typedef Eigen::Matrix3f Mat3;

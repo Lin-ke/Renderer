@@ -13,10 +13,6 @@ DEFINE_LOG_TAG(LogGBufferPass, "GBufferPass");
 
 namespace render {
 
-// Shader source is now in assets/shaders/g_buffer.hlsl
-
-
-
 GBufferPass::GBufferPass() = default;
 
 GBufferPass::~GBufferPass() {
@@ -55,7 +51,6 @@ void GBufferPass::create_shaders() {
     auto backend = EngineContext::rhi();
     if (!backend) return;
     
-    // Load pre-compiled vertex shader
     auto vs_code = ShaderUtils::load_or_compile("g_buffer_vs.cso", nullptr, "VSMain", "vs_5_0");
     if (vs_code.empty()) {
         ERR(LogGBufferPass, "Failed to load/compile vertex shader");
@@ -76,7 +71,6 @@ void GBufferPass::create_shaders() {
     vertex_shader_ = std::make_shared<Shader>();
     vertex_shader_->shader_ = vs;
     
-    // Load pre-compiled pixel shader
     auto ps_code = ShaderUtils::load_or_compile("g_buffer_ps.cso", nullptr, "PSMain", "ps_5_0");
     if (ps_code.empty()) {
         ERR(LogGBufferPass, "Failed to load/compile pixel shader");
@@ -104,7 +98,6 @@ void GBufferPass::create_uniform_buffers() {
     auto backend = EngineContext::rhi();
     if (!backend) return;
     
-    // Per-frame buffer
     RHIBufferInfo frame_info = {};
     frame_info.size = sizeof(GBufferPerFrameData);
     frame_info.stride = 0;
@@ -118,7 +111,6 @@ void GBufferPass::create_uniform_buffers() {
         return;
     }
     
-    // Per-object buffer
     RHIBufferInfo object_info = {};
     object_info.size = sizeof(GBufferPerObjectData);
     object_info.stride = 0;
@@ -139,31 +131,25 @@ void GBufferPass::create_pipeline() {
     auto backend = EngineContext::rhi();
     if (!backend || !vertex_shader_ || !fragment_shader_) return;
     
-    // Create root signature
     RHIRootSignatureInfo root_info = {};
     root_signature_ = backend->create_root_signature(root_info);
     if (!root_signature_) return;
     
-    // Pipeline configuration
     RHIGraphicsPipelineInfo pipe_info = {};
     pipe_info.vertex_shader = vertex_shader_->shader_;
     pipe_info.fragment_shader = fragment_shader_->shader_;
     pipe_info.root_signature = root_signature_;
     pipe_info.primitive_type = PRIMITIVE_TYPE_TRIANGLE_LIST;
     
-    // Vertex input: position + normal + texcoord
     pipe_info.vertex_input_state.vertex_elements.resize(3);
-    // Position
     pipe_info.vertex_input_state.vertex_elements[0].stream_index = 0;
     pipe_info.vertex_input_state.vertex_elements[0].attribute_index = 0;
     pipe_info.vertex_input_state.vertex_elements[0].format = FORMAT_R32G32B32_SFLOAT;
     pipe_info.vertex_input_state.vertex_elements[0].offset = 0;
-    // Normal
     pipe_info.vertex_input_state.vertex_elements[1].stream_index = 1;
     pipe_info.vertex_input_state.vertex_elements[1].attribute_index = 1;
     pipe_info.vertex_input_state.vertex_elements[1].format = FORMAT_R32G32B32_SFLOAT;
     pipe_info.vertex_input_state.vertex_elements[1].offset = 0;
-    // Texcoord
     pipe_info.vertex_input_state.vertex_elements[2].stream_index = 2;
     pipe_info.vertex_input_state.vertex_elements[2].attribute_index = 2;
     pipe_info.vertex_input_state.vertex_elements[2].format = FORMAT_R32G32_SFLOAT;
@@ -177,7 +163,6 @@ void GBufferPass::create_pipeline() {
     pipe_info.depth_stencil_state.enable_depth_write = true;
     pipe_info.depth_stencil_state.depth_test = COMPARE_FUNCTION_LESS_EQUAL;
     
-    // MRT render targets
     pipe_info.color_attachment_formats[0] = get_albedo_ao_format();
     pipe_info.color_attachment_formats[1] = get_normal_roughness_format();
     pipe_info.color_attachment_formats[2] = get_material_emission_format();
@@ -211,10 +196,8 @@ void GBufferPass::build(RDGBuilder& builder) {
     auto swapchain = render_system->get_swapchain();
     if (!swapchain) return;
     
-    // Get extent
     Extent2D extent = swapchain->get_extent();
     
-    // Update per-frame data from camera
     auto mesh_manager = render_system->get_mesh_manager();
     if (mesh_manager) {
         auto* camera = mesh_manager->get_active_camera();
@@ -227,7 +210,6 @@ void GBufferPass::build(RDGBuilder& builder) {
         }
     }
     
-    // Create G-Buffer textures
     Extent3D tex_extent = {extent.width, extent.height, 1};
     
     RDGTextureHandle gbuffer_albedo_ao = builder.create_texture("GBuffer_AlbedoAO")
@@ -260,14 +242,13 @@ void GBufferPass::build(RDGBuilder& builder) {
         .allow_depth_stencil()
         .finish();
     
-    // Create render pass
     builder.create_render_pass("GBuffer_Pass")
         .color(GBufferData::ALBEDO_AO_INDEX, gbuffer_albedo_ao, 
                ATTACHMENT_LOAD_OP_CLEAR, ATTACHMENT_STORE_OP_STORE, 
                Color4{0.0f, 0.0f, 0.0f, 1.0f})
         .color(GBufferData::NORMAL_ROUGHNESS_INDEX, gbuffer_normal_roughness,
                ATTACHMENT_LOAD_OP_CLEAR, ATTACHMENT_STORE_OP_STORE,
-               Color4{0.5f, 0.5f, 1.0f, 1.0f})  // Default normal pointing up
+               Color4{0.5f, 0.5f, 1.0f, 1.0f})
         .color(GBufferData::MATERIAL_EMISSION_INDEX, gbuffer_material,
                ATTACHMENT_LOAD_OP_CLEAR, ATTACHMENT_STORE_OP_STORE,
                Color4{0.0f, 0.0f, 0.5f, 1.0f})
@@ -280,12 +261,10 @@ void GBufferPass::build(RDGBuilder& builder) {
             RHICommandListRef cmd = context.command;
             if (!cmd) return;
             
-            // Set viewport and scissor
             cmd->set_viewport({0, 0}, {extent.width, extent.height});
             cmd->set_scissor({0, 0}, {extent.width, extent.height});
             cmd->set_graphics_pipeline(pipeline_);
             
-            // Update and bind per-frame buffer
             if (per_frame_buffer_) {
                 if (per_frame_dirty_) {
                     void* mapped = per_frame_buffer_->map();
@@ -299,7 +278,6 @@ void GBufferPass::build(RDGBuilder& builder) {
                     static_cast<ShaderFrequency>(SHADER_FREQUENCY_VERTEX | SHADER_FREQUENCY_FRAGMENT));
             }
             
-            // Get batches and draw
             std::vector<DrawBatch> batches;
             auto mesh_manager = render_system->get_mesh_manager();
             if (mesh_manager) {
@@ -307,7 +285,6 @@ void GBufferPass::build(RDGBuilder& builder) {
             }
             
             for (const auto& batch : batches) {
-                // Update per-object buffer
                 if (per_object_buffer_) {
                     GBufferPerObjectData object_data;
                     object_data.model = batch.model_matrix;
@@ -320,16 +297,13 @@ void GBufferPass::build(RDGBuilder& builder) {
                     cmd->bind_constant_buffer(per_object_buffer_, 1, SHADER_FREQUENCY_VERTEX);
                 }
                 
-                // Bind vertex buffers
                 if (batch.vertex_buffer) {
                     cmd->bind_vertex_buffer(batch.vertex_buffer, 0, 0);
                 }
                 if (batch.normal_buffer) {
                     cmd->bind_vertex_buffer(batch.normal_buffer, 1, 0);
                 }
-                //####TODO####: Bind texcoord buffer when available
                 
-                // Draw
                 if (batch.index_buffer) {
                     cmd->bind_index_buffer(batch.index_buffer, 0);
                     cmd->draw_indexed(batch.index_count, 1, batch.index_offset, 0, 0);
