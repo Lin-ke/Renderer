@@ -328,9 +328,9 @@ std::shared_ptr<Mesh> ModelImporter::process_mesh(
         extract_bone_weights(mesh_asset, mesh, scene);
     }
     
-    // Save Mesh Asset
-    // Using save_asset will write to disk AND register in AssetManager
-    EngineContext::asset()->save_asset(mesh_asset, mesh_asset_path);
+    // Mesh asset will be saved automatically when Model is saved via ASSET_DEPS
+    // Just mark it dirty so it will be included in the save
+    mesh_asset->mark_dirty();
     
     // Get or create material
     out_material = nullptr;
@@ -397,52 +397,74 @@ std::shared_ptr<Material> ModelImporter::get_or_create_material(
         }
     }
     
-    // Create new PBR material
-    auto material = std::make_shared<PBRMaterial>();
+    // Create material based on settings
+    std::shared_ptr<Material> material;
+    if (settings_.material_type == ModelMaterialType::NPR) {
+        auto npr_mat = std::make_shared<NPRMaterial>();
+        // Set default NPR parameters
+        npr_mat->set_lambert_clamp(0.5f);
+        npr_mat->set_ramp_offset(0.0f);
+        npr_mat->set_rim_threshold(0.1f);
+        npr_mat->set_rim_strength(1.0f);
+        npr_mat->set_rim_width(0.5f);
+        npr_mat->set_rim_color(Vec3(1.0f, 1.0f, 1.0f));
+        material = npr_mat;
+    } else {
+        material = std::make_shared<PBRMaterial>();
+    }
     material->set_uid(mat_uid);
     
-    if (mtl_mat) {
-        // Use MTL data (preferred, no encoding issues)
-        material->set_diffuse(Vec4(1.0f, 1.0f, 1.0f, 1.0f)); // Use white to see texture clearly
-        material->set_roughness(0.5f); // Use moderate roughness
-        material->set_metallic(0.0f); // MTL doesn't have metallic
-        
-        // Load diffuse texture from MTL path
-        if (!mtl_mat->diffuse_map.empty()) {
-            try {
-                std::filesystem::path tex_path = output_dir_ / mtl_mat->diffuse_map;
-                if (settings_.force_png_texture) {
-                    tex_path.replace_extension(".png");
-                }
-                if (std::filesystem::exists(tex_path)) {
-                    auto texture = std::make_shared<Texture>(tex_path.string());
-                    material->set_diffuse_texture(texture);
-                }
-            } catch (...) {}
+    // Common material setup (diffuse color and texture)
+    material->set_diffuse(Vec4(1.0f, 1.0f, 1.0f, 1.0f)); // Use white to see texture clearly
+    
+    if (settings_.material_type == ModelMaterialType::PBR) {
+        auto pbr_mat = std::dynamic_pointer_cast<PBRMaterial>(material);
+        if (pbr_mat) {
+            pbr_mat->set_roughness(0.5f);
+            pbr_mat->set_metallic(0.0f);
         }
-    } else {
-        // Fall back to FBX material data
-        float metallic = 0.0f, roughness = 0.5f;
+    }
+    
+    // Load diffuse texture from MTL or FBX
+    if (mtl_mat && !mtl_mat->diffuse_map.empty()) {
+        try {
+            std::filesystem::path tex_path = output_dir_ / mtl_mat->diffuse_map;
+            if (settings_.force_png_texture) {
+                tex_path.replace_extension(".png");
+            }
+            if (std::filesystem::exists(tex_path)) {
+                auto texture = std::make_shared<Texture>(tex_path.string());
+                material->set_diffuse_texture(texture);
+            }
+        } catch (...) {}
+    } else if (!mtl_mat) {
+        // Fall back to FBX material data for texture
+        auto tex = load_material_texture(ai_mat, (aiTextureType)1 /* aiTextureType_DIFFUSE */);
+        if (tex) material->set_diffuse_texture(tex);
+        
+        // For PBR, also load metallic/roughness from FBX
+        if (settings_.material_type == ModelMaterialType::PBR) {
+            auto pbr_mat = std::dynamic_pointer_cast<PBRMaterial>(material);
+            if (pbr_mat) {
+                float metallic = 0.0f, roughness = 0.5f;
+                ai_mat->Get(AI_MATKEY_METALLIC_FACTOR, metallic);
+                ai_mat->Get(AI_MATKEY_ROUGHNESS_FACTOR, roughness);
+                if (roughness < 0.001f) roughness = 0.5f;
+                pbr_mat->set_metallic(metallic);
+                pbr_mat->set_roughness(roughness);
+            }
+        }
+        
+        // Load diffuse color from FBX
         aiColor4D base_color;
-        
-        ai_mat->Get(AI_MATKEY_METALLIC_FACTOR, metallic);
-        ai_mat->Get(AI_MATKEY_ROUGHNESS_FACTOR, roughness);
-        
-        if (roughness < 0.001f) roughness = 0.5f;
-        
-        material->set_metallic(metallic);
-        material->set_roughness(roughness);
-        
         if (AI_SUCCESS == ai_mat->Get(AI_MATKEY_COLOR_DIFFUSE, base_color)) {
             material->set_diffuse(Vec4(base_color.r, base_color.g, base_color.b, base_color.a));
         }
-        
-        auto tex = load_material_texture(ai_mat, (aiTextureType)1 /* aiTextureType_DIFFUSE */);
-        if (tex) material->set_diffuse_texture(tex);
     }
     
-    // Save Material Asset
-    EngineContext::asset()->save_asset(material, mat_asset_path);
+    // Material asset will be saved automatically when Model is saved via ASSET_DEPS
+    // Just mark it dirty so it will be included in the save
+    material->mark_dirty();
     
     material_cache_[mat_name] = material;
     return material;

@@ -81,6 +81,32 @@ auto model = Model::Load("/Engine/models/bunny.obj");  // 自动缓存，返回�
 
 **依赖处理（Deps）**：Asset通过`traverse_deps()`声明依赖，Scene/Prefab序列化时自动处理嵌套资源。
 
+**ASSET_DEPS宏**：简化依赖管理，自动生成`traverse_deps`、`load_asset_deps`、`save_asset_deps`和序列化代码。
+
+```cpp
+// 在Asset子类中使用ASSET_DEPS宏声明依赖
+class Material : public Asset {
+    ASSET_DEPS(
+        (TextureRef, texture_diffuse),              // 单一依赖
+        (TextureRef, texture_normal),
+        (std::vector<TextureRef>, texture_2d)       // 数组依赖
+    )
+    
+    // 宏自动生成：
+    // - traverse_deps()：遍历所有依赖
+    // - load_asset_deps()：从UID加载指针
+    // - save_asset_deps()：同步指针到UID
+    // - serialize_deps()：序列化UID列表
+};
+```
+
+**宏原理**：
+- `DECL_ENTRY`：声明`AssetRef ptr`和`UID ptr_uid`成员
+- `LOAD_ENTRY`：`ptr = AssetManager::load_asset<PtrType>(ptr_uid)`
+- `SYNC_ENTRY`：`ptr_uid = ptr ? ptr->get_uid() : UID::empty()`
+- `VISIT_ENTRY`：`if (ptr) callback(ptr)`
+
+**手动实现（旧方式）**：
 ```cpp
 class Scene : public Asset {
     void traverse_deps(std::function<void(std::shared_ptr<Asset>)> cb) const override {
@@ -93,10 +119,76 @@ class Scene : public Asset {
 };
 ```
 
-**Model序列化优化**：Model不再嵌入Mesh几何数据，而是通过UID引用Mesh和Material。
-- 序列化：保存 `mesh_uid` 和 `material_uid`。
-- 反序列化：自动调用 `AssetManager::load_asset` 恢复引用。
-- 注意：手动创建的Mesh如果未注册到AssetManager，在Model保存时将无法正确持久化引用。
+**Model序列化架构**：Model是资源组合容器，通过`ASSET_DEPS`宏管理Mesh和Material依赖。
+
+**资源层级关系**：
+```
+Model (场景对象容器)
+├── Mesh[] (几何数据)
+│   ├── VertexBuffer (顶点数据：位置/法线/切线/UV)
+│   ├── IndexBuffer (索引数据)
+│   └── BoundingBox (包围盒)
+├── Material[] (渲染材质)
+│   ├── Shader (VS/GS/PS)
+│   ├── Texture[] (纹理贴图)
+│   │   ├── Diffuse (漫反射)
+│   │   ├── Normal (法线)
+│   │   └── ARM (AO/Roughness/Metallic)
+│   └── MaterialParams (参数：roughness/metallic/color)
+└── MaterialSlot[] (Mesh-Material绑定关系)
+```
+
+**代码结构**：
+```cpp
+class Model : public Asset {
+    ASSET_DEPS(
+        (std::vector<MeshRef>, mesh_deps_),       // 几何数据依赖
+        (std::vector<MaterialRef>, material_deps_) // 材质依赖
+    )
+    
+    // 运行时结构 - Slot定义渲染批次
+    struct MaterialSlot {
+        MeshRef mesh;           // 指向mesh_deps_[mesh_index]
+        MaterialRef material;   // 指向material_deps_[material_index]
+        uint32_t mesh_index;
+        uint32_t material_index;
+    };
+    std::vector<MaterialSlot> material_slots_;
+};
+
+class Material : public Asset {
+    ASSET_DEPS(
+        (TextureRef, texture_diffuse),
+        (TextureRef, texture_normal),
+        (TextureRef, texture_arm),
+        (ShaderRef, vertex_shader),
+        (ShaderRef, fragment_shader)
+    )
+    
+    MaterialType type_;  // PBR / NPR / Base
+    Vec4 diffuse_;
+    float roughness_, metallic_;
+};
+```
+
+**渲染流程中的资源使用**：
+1. **Culling阶段**：使用`Mesh.bounding_box`进行视锥剔除
+2. **RenderBatch构建**：遍历`Model.material_slots_`，每个Slot生成一个DrawCall
+3. **渲染阶段**：
+   - `Mesh.vertex_buffer` / `index_buffer` → 绑定到GPU输入
+   - `Material.shader` → 绑定Pipeline
+   - `Material.texture_*` → 绑定到Shader Resource
+   - `Material.params` → 更新Constant Buffer
+
+**依赖同步流程**：
+- `sync_slots_to_deps()`：保存前收集`material_slots_`中的指针到`mesh_deps_`/`material_deps_`
+- `sync_deps_to_slots()`：加载后将依赖指针分配到`material_slots_`
+- 保存Model时，ASSET_DEPS自动级联保存所有Mesh和Material
+
+**性能考虑**：
+- Mesh和Material可被多个Model共享（如实例化渲染）
+- 实际顶点数据存储在GPU Buffer，Asset只存CPU端引用
+- 材质参数变化不影响其他使用相同Material的Model
 
 ### Reflection System
 

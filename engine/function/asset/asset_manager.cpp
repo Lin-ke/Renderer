@@ -385,7 +385,11 @@ void AssetManager::collect_save_dependencies_recursive(AssetRef asset, std::vect
 		return;
 	}
 	UID uid = asset->get_uid();
-	if (uid.is_empty() || visited.count(uid)) {
+	if (uid.is_empty()) {
+		INFO(LogAsset, "Asset {} has empty UID, skipping", asset->get_asset_type_name());
+		return;
+	}
+	if (visited.count(uid)) {
 		return;
 	}
 
@@ -397,6 +401,9 @@ void AssetManager::collect_save_dependencies_recursive(AssetRef asset, std::vect
     visiting.insert(uid);
 	
 	asset->traverse_deps([&](AssetRef dep_asset) {
+			if (dep_asset) {
+				INFO(LogAsset, "Asset {} depends on {}", uid.to_string(), dep_asset->get_uid().to_string());
+			}
 			collect_save_dependencies_recursive(dep_asset, sorted_assets, visited, visiting);
 	});
 
@@ -437,11 +444,12 @@ void AssetManager::save_asset(AssetRef asset, const std::string &virtual_path) {
 	std::unordered_set<UID> visited_uids;
     std::unordered_set<UID> visiting_uids;
 	collect_save_dependencies_recursive(asset, sorted_assets, visited_uids, visiting_uids);
-	for (auto &asset : sorted_assets) {
-		asset->on_save_asset();
-	}
 
-	INFO(LogAsset, "Saving asset {} and {} dependencies.", asset->get_uid().to_string(), sorted_assets.size() - 1);
+	INFO(LogAsset, "Saving asset {} ({}) to {} with {} dependencies.", 
+         asset->get_uid().to_string(), 
+         asset->get_asset_type_name(),
+         virtual_path,
+         sorted_assets.size() - 1);
 
 	// 3. Parallel Save
 	auto *pool = EngineContext::thread_pool();
@@ -453,6 +461,8 @@ void AssetManager::save_asset(AssetRef asset, const std::string &virtual_path) {
 
 		if (asset_to_save == asset) {
 			save_path = root_phys_path;
+			INFO(LogAsset, "Root asset {} save_path: {}, is_dirty: {}", 
+			     asset_to_save->get_uid().to_string(), save_path.string(), asset_to_save->is_dirty());
 		} else {
 			// Look up existing path for dependencies
 			std::scoped_lock lock(asset_mutex_);
@@ -472,8 +482,12 @@ void AssetManager::save_asset(AssetRef asset, const std::string &virtual_path) {
 
 		// Check if save is needed
 		if (!is_new && !asset_to_save->is_dirty()) {
+			INFO(LogAsset, "Skipping save for {} (not new and not dirty)", asset_to_save->get_uid().to_string());
 			continue;
 		}
+
+		// Call on_save_asset to sync internal state before saving
+		asset_to_save->on_save_asset();
 
 		auto task = [this, asset_to_save, save_path]() {
 			this->perform_save_to_disk(asset_to_save, save_path);

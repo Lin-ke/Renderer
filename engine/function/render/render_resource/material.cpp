@@ -38,6 +38,9 @@ void Material::on_load_asset() {
 }
 
 void Material::on_save_asset() {
+    INFO(LogMaterial, "Material::on_save_asset - texture_diffuse: {}, texture_normal: {}",
+         texture_diffuse ? texture_diffuse->get_uid().to_string() : "null",
+         texture_normal ? texture_normal->get_uid().to_string() : "null");
     save_asset_deps();
 }
 

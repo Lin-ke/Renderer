@@ -42,6 +42,8 @@ typedef std::vector<ShaderRef> ShaderRefList;
  */
 class Material : public Asset {
 public:
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+    
     Material();
     Material(const Material& other) = default;
     virtual ~Material();
@@ -185,6 +187,8 @@ protected:
  */
 class PBRMaterial : public Material {
 public:
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+    
     PBRMaterial();
     virtual ~PBRMaterial() override = default;
 
@@ -229,6 +233,8 @@ protected:
  */
 class NPRMaterial : public Material {
 public:
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+    
     NPRMaterial();
     virtual ~NPRMaterial() override = default;
 

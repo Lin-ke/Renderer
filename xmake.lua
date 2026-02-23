@@ -22,6 +22,9 @@ if is_mode("release") then
     set_options("optimize", "O3")
 end
 
+-- Disable Eigen alignment to fix alignment assertions
+add_defines("EIGEN_DONT_ALIGN")
+
 target("engine")
     set_kind("static")
     set_languages("c++20")
@@ -146,6 +149,5 @@ target("utest")
     add_deps("engine")
     add_packages("catch2", "stb")
 
--- xmake f -c --vs=2022 --mode=debug
 -- xmake require --info gflags
 -- xmake project -k vsxmake -m "debug,release"

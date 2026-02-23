@@ -25,19 +25,30 @@ cbuffer Material : register(b2) {
     float4 albedo;
     float4 emission;
     
-    // NPR specific parameters
-    float lambert_clamp;    // Half lambert clamp threshold (default: 0.5)
-    float ramp_tex_offset;  // Ramp texture vertical offset for material type
-    float rim_threshold;    // Rim light depth threshold (default: 0.1)
-    float rim_strength;     // Rim light intensity (default: 1.0)
-    float rim_width;        // Rim light screen space width (default: 0.5)
-    float use_albedo_map;
-    float use_normal_map;
-    float use_light_map;    // LightMap (RGBA: metallic, ao, specular, materialType)
-    float use_ramp_map;     // Ramp texture for toon shading
-    float3 rim_color;
-    float _padding_mat;
+    // NPR specific parameters packed into vec4 for alignment
+    // npr_params1: lambert_clamp, ramp_tex_offset, rim_threshold, rim_strength
+    float4 npr_params1;
+    
+    // npr_params2: rim_width, use_albedo_map, use_normal_map, use_light_map
+    float4 npr_params2;
+    
+    // rim_color_and_use_ramp: rim_color (xyz), use_ramp_map (w)
+    float4 rim_color_and_use_ramp;
+    
+    float4 _padding_mat;
 };
+
+// Helper macros to access packed parameters
+#define lambert_clamp      npr_params1.x
+#define ramp_tex_offset    npr_params1.y
+#define rim_threshold      npr_params1.z
+#define rim_strength       npr_params1.w
+#define rim_width          npr_params2.x
+#define use_albedo_map     npr_params2.y
+#define use_normal_map     npr_params2.z
+#define use_light_map      npr_params2.w
+#define rim_color          rim_color_and_use_ramp.xyz
+#define use_ramp_map       rim_color_and_use_ramp.w
 
 // ============================================================================
 // Textures and Samplers

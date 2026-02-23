@@ -1,0 +1,70 @@
+{
+    "uid": "91727551-e94d-a2b1-f7d9-cf8f68717dd4",
+    "deps": [
+        "33a92291-8769-43c2-2a40-16a9f7884eb0",
+        "2229a457-65e3-b00c-50ed-31130dbbd4fc",
+        "ec45b049-aa0a-7104-addd-f33c99f706cf",
+        "fedeb073-47b8-b2ac-b484-1e92fac87492",
+        "b8bc7522-a41a-4cf8-6ccc-d64e539aa1cd",
+        "8d49071b-3218-4500-2e07-780a678fac1a"
+    ],
+    "asset": {
+        "polymorphic_id": 2147483649,
+        "polymorphic_name": "Model",
+        "ptr_wrapper": {
+            "id": 2147483649,
+            "data": {
+                "value0": {
+                    "uid": "91727551-e94d-a2b1-f7d9-cf8f68717dd4"
+                },
+                "mesh_deps_": [
+                    "33a92291-8769-43c2-2a40-16a9f7884eb0",
+                    "2229a457-65e3-b00c-50ed-31130dbbd4fc",
+                    "ec45b049-aa0a-7104-addd-f33c99f706cf",
+                    "fedeb073-47b8-b2ac-b484-1e92fac87492"
+                ],
+                "material_deps_": [
+                    "b8bc7522-a41a-4cf8-6ccc-d64e539aa1cd",
+                    "8d49071b-3218-4500-2e07-780a678fac1a",
+                    "8d49071b-3218-4500-2e07-780a678fac1a",
+                    "8d49071b-3218-4500-2e07-780a678fac1a"
+                ],
+                "material_slots": [
+                    {
+                        "mesh_index": 0,
+                        "material_index": 0,
+                        "slot_index": 0
+                    },
+                    {
+                        "mesh_index": 1,
+                        "material_index": 1,
+                        "slot_index": 1
+                    },
+                    {
+                        "mesh_index": 2,
+                        "material_index": 2,
+                        "slot_index": 2
+                    },
+                    {
+                        "mesh_index": 3,
+                        "material_index": 3,
+                        "slot_index": 3
+                    }
+                ],
+                "path": "C:\\renderer\\assets\\models\\Klee\\klee.fbx",
+                "process_setting": {
+                    "smooth_normal": true,
+                    "flip_uv": true,
+                    "load_materials": true,
+                    "tangent_space": false,
+                    "generate_bvh": false,
+                    "generate_cluster": false,
+                    "generate_virtual_mesh": false,
+                    "cache_cluster": false,
+                    "force_png_texture": false,
+                    "material_type": 0
+                }
+            }
+        }
+    }
+}

@@ -394,36 +394,46 @@ void NPRForwardPass::draw_batch(RHICommandContextRef cmd, const DrawBatch& batch
 
     // Update material buffer
     if (material_buffer_ && batch.material) {
-        NPRMaterialData mat_data;
+        NPRMaterialData mat_data = {};
         mat_data.albedo = batch.material->get_diffuse();
         mat_data.emission = batch.material->get_emission();
         
         // NPR parameters (use defaults if not NPR material)
         auto npr_mat = std::dynamic_pointer_cast<NPRMaterial>(batch.material);
+        float lambert_clamp, ramp_tex_offset, rim_threshold, rim_strength;
+        float rim_width, use_light_map, use_ramp_map;
+        Vec3 rim_color;
+        
         if (npr_mat) {
-            mat_data.lambert_clamp = npr_mat->get_lambert_clamp();
-            mat_data.ramp_tex_offset = npr_mat->get_ramp_offset();
-            mat_data.rim_threshold = npr_mat->get_rim_threshold();
-            mat_data.rim_strength = npr_mat->get_rim_strength();
-            mat_data.rim_width = npr_mat->get_rim_width();
-            mat_data.rim_color = npr_mat->get_rim_color();
-            mat_data.use_light_map = npr_mat->get_light_map_texture() ? 1 : 0;
-            mat_data.use_ramp_map = npr_mat->get_ramp_texture() ? 1 : 0;
+            lambert_clamp = npr_mat->get_lambert_clamp();
+            ramp_tex_offset = npr_mat->get_ramp_offset();
+            rim_threshold = npr_mat->get_rim_threshold();
+            rim_strength = npr_mat->get_rim_strength();
+            rim_width = npr_mat->get_rim_width();
+            rim_color = npr_mat->get_rim_color();
+            use_light_map = npr_mat->get_light_map_texture() ? 1.0f : 0.0f;
+            use_ramp_map = npr_mat->get_ramp_texture() ? 1.0f : 0.0f;
         } else {
             // Default NPR values
-            mat_data.lambert_clamp = 0.5f;
-            mat_data.ramp_tex_offset = 0.0f;
-            mat_data.rim_threshold = 0.1f;
-            mat_data.rim_strength = 1.0f;
-            mat_data.rim_width = 0.5f;
-            mat_data.rim_color = Vec3(1.0f, 1.0f, 1.0f);
-            mat_data.use_light_map = 0;
-            mat_data.use_ramp_map = 0;
+            lambert_clamp = 0.5f;
+            ramp_tex_offset = 0.0f;
+            rim_threshold = 0.1f;
+            rim_strength = 1.0f;
+            rim_width = 0.5f;
+            rim_color = Vec3(1.0f, 1.0f, 1.0f);
+            use_light_map = 0.0f;
+            use_ramp_map = 0.0f;
         }
         
         auto diffuse_tex = batch.material->get_diffuse_texture();
-        mat_data.use_albedo_map = diffuse_tex ? 1 : 0;
-        mat_data.use_normal_map = batch.material->get_normal_texture() ? 1 : 0;
+        float use_albedo_map = diffuse_tex ? 1.0f : 0.0f;
+        float use_normal_map = batch.material->get_normal_texture() ? 1.0f : 0.0f;
+        
+        // Use helper to set all NPR params
+        set_npr_params(mat_data, 
+            lambert_clamp, ramp_tex_offset, rim_threshold, rim_strength,
+            rim_width, use_albedo_map, use_normal_map, use_light_map,
+            rim_color, use_ramp_map);
         
         void* mapped = material_buffer_->map();
         if (mapped) {
@@ -529,35 +539,45 @@ void NPRForwardPass::execute_batches(RHICommandListRef cmd, const std::vector<Dr
 
         // Update material buffer
         if (material_buffer_ && batch.material) {
-            NPRMaterialData mat_data;
+            NPRMaterialData mat_data = {};
             mat_data.albedo = batch.material->get_diffuse();
             mat_data.emission = batch.material->get_emission();
             
             // NPR parameters (use defaults if not NPR material)
             auto npr_mat = std::dynamic_pointer_cast<NPRMaterial>(batch.material);
+            float lambert_clamp, ramp_tex_offset, rim_threshold, rim_strength;
+            float rim_width, use_light_map, use_ramp_map;
+            Vec3 rim_color;
+            
             if (npr_mat) {
-                mat_data.lambert_clamp = npr_mat->get_lambert_clamp();
-                mat_data.ramp_tex_offset = npr_mat->get_ramp_offset();
-                mat_data.rim_threshold = npr_mat->get_rim_threshold();
-                mat_data.rim_strength = npr_mat->get_rim_strength();
-                mat_data.rim_width = npr_mat->get_rim_width();
-                mat_data.rim_color = npr_mat->get_rim_color();
-                mat_data.use_light_map = npr_mat->get_light_map_texture() ? 1 : 0;
-                mat_data.use_ramp_map = npr_mat->get_ramp_texture() ? 1 : 0;
+                lambert_clamp = npr_mat->get_lambert_clamp();
+                ramp_tex_offset = npr_mat->get_ramp_offset();
+                rim_threshold = npr_mat->get_rim_threshold();
+                rim_strength = npr_mat->get_rim_strength();
+                rim_width = npr_mat->get_rim_width();
+                rim_color = npr_mat->get_rim_color();
+                use_light_map = npr_mat->get_light_map_texture() ? 1.0f : 0.0f;
+                use_ramp_map = npr_mat->get_ramp_texture() ? 1.0f : 0.0f;
             } else {
                 // Default NPR values
-                mat_data.lambert_clamp = 0.5f;
-                mat_data.ramp_tex_offset = 0.0f;
-                mat_data.rim_threshold = 0.1f;
-                mat_data.rim_strength = 1.0f;
-                mat_data.rim_width = 0.5f;
-                mat_data.rim_color = Vec3(1.0f, 1.0f, 1.0f);
-                mat_data.use_light_map = 0;
-                mat_data.use_ramp_map = 0;
+                lambert_clamp = 0.5f;
+                ramp_tex_offset = 0.0f;
+                rim_threshold = 0.1f;
+                rim_strength = 1.0f;
+                rim_width = 0.5f;
+                rim_color = Vec3(1.0f, 1.0f, 1.0f);
+                use_light_map = 0.0f;
+                use_ramp_map = 0.0f;
             }
             
-            mat_data.use_albedo_map = batch.material->get_diffuse_texture() ? 1 : 0;
-            mat_data.use_normal_map = batch.material->get_normal_texture() ? 1 : 0;
+            float use_albedo_map = batch.material->get_diffuse_texture() ? 1.0f : 0.0f;
+            float use_normal_map = batch.material->get_normal_texture() ? 1.0f : 0.0f;
+            
+            // Use helper to set all NPR params
+            set_npr_params(mat_data, 
+                lambert_clamp, ramp_tex_offset, rim_threshold, rim_strength,
+                rim_width, use_albedo_map, use_normal_map, use_light_map,
+                rim_color, use_ramp_map);
             
             void* mapped = material_buffer_->map();
             if (mapped) {

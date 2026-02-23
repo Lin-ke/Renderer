@@ -1,0 +1,70 @@
+{
+    "uid": "8d49071b-3218-4500-2e07-780a678fac1a",
+    "deps": [],
+    "asset": {
+        "polymorphic_id": 2147483649,
+        "polymorphic_name": "PBRMaterial",
+        "ptr_wrapper": {
+            "id": 2147483649,
+            "data": {
+                "value0": {
+                    "value0": {
+                        "uid": "8d49071b-3218-4500-2e07-780a678fac1a"
+                    },
+                    "texture_diffuse": "81eb723f-aad3-4810-830b-dfc95c7ef7b2",
+                    "texture_normal": "bde739a3-b0b2-4365-b894-a005d9c00567",
+                    "texture_specular": "2a463751-1241-4933-ad13-928c3436c801",
+                    "texture_2d": [],
+                    "texture_cube": [],
+                    "texture_3d": [],
+                    "shaders": [],
+                    "diffuse": "1.000000 1.000000 1.000000 1.000000",
+                    "emission": "0.000000 0.000000 0.000000 0.000000",
+                    "alpha_clip": 0.0,
+                    "ints": {
+                        "value0": 0,
+                        "value1": 0,
+                        "value2": 0,
+                        "value3": 0,
+                        "value4": 0,
+                        "value5": 0,
+                        "value6": 0,
+                        "value7": 0
+                    },
+                    "floats": {
+                        "value0": 0.0,
+                        "value1": 0.0,
+                        "value2": 0.0,
+                        "value3": 0.0,
+                        "value4": 0.0,
+                        "value5": 0.0,
+                        "value6": 0.0,
+                        "value7": 0.0
+                    },
+                    "colors": {
+                        "value0": "0.000000 0.000000 0.000000 0.000000",
+                        "value1": "0.000000 0.000000 0.000000 0.000000",
+                        "value2": "0.000000 0.000000 0.000000 0.000000",
+                        "value3": "0.000000 0.000000 0.000000 0.000000",
+                        "value4": "0.000000 0.000000 0.000000 0.000000",
+                        "value5": "0.000000 0.000000 0.000000 0.000000",
+                        "value6": "0.000000 0.000000 0.000000 0.000000",
+                        "value7": "0.000000 0.000000 0.000000 0.000000"
+                    },
+                    "render_queue": 1000,
+                    "render_pass_mask": 2,
+                    "cull_mode": 2,
+                    "fill_mode": 2,
+                    "depth_test": true,
+                    "depth_write": true,
+                    "depth_compare": 1,
+                    "use_for_depth_pass": true,
+                    "cast_shadow": true
+                },
+                "texture_arm": "00000000-0000-0000-0000-000000000000",
+                "roughness": 0.5,
+                "metallic": 0.0
+            }
+        }
+    }
+}

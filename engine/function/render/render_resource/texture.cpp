@@ -33,6 +33,8 @@ Texture::Texture(const std::string& path)
     : texture_type_(TextureType::Texture2D), format_(FORMAT_R8G8B8A8_SRGB), array_layer_(1) {
     paths_.push_back(path);
     name_ = std::filesystem::path(path).filename().string();
+    // Generate deterministic UID from path for asset management
+    set_uid(UID::from_hash(path));
     load_from_file();
 }
 

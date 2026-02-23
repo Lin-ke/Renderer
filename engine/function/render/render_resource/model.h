@@ -5,12 +5,21 @@
 #include "engine/function/render/render_resource/material.h"
 #include "engine/function/render/render_resource/mesh.h"
 #include "engine/function/asset/asset.h"
+#include "engine/function/asset/asset_macros.h"
 
 #include <vector>
 #include <string>
 #include <memory>
 #include <unordered_map>
 #include <functional>
+
+/**
+ * @brief Material type for model import
+ */
+enum class ModelMaterialType {
+    PBR = 0,    // Physically Based Rendering
+    NPR = 1,    // Non-Photorealistic Rendering (Toon/Cel shading)
+};
 
 /**
  * @brief Settings for model import processing
@@ -25,6 +34,7 @@ struct ModelProcessSetting {
     bool generate_virtual_mesh = false;   // Generate virtual geometry (Nanite-like)
     bool cache_cluster = false;           // Cache cluster data to avoid regeneration
     bool force_png_texture = false;       // Force texture to use .png extension (for unsupported formats)
+    ModelMaterialType material_type = ModelMaterialType::PBR;  // Material type to create
     
     template<class Archive>
     void serialize(Archive& ar) {
@@ -37,6 +47,7 @@ struct ModelProcessSetting {
         ar(cereal::make_nvp("generate_virtual_mesh", generate_virtual_mesh));
         ar(cereal::make_nvp("cache_cluster", cache_cluster));
         ar(cereal::make_nvp("force_png_texture", force_png_texture));
+        ar(cereal::make_nvp("material_type", material_type));
     }
 };
 
@@ -50,19 +61,20 @@ struct IndexRange {
 
 /**
  * @brief Material slot that binds a Material to a Mesh
+ * Runtime structure - pointers are resolved from deps after loading
  */
 struct MaterialSlot {
-    MeshRef mesh;           // The mesh geometry (can be shared)
-    UID mesh_uid;           // UID for serialization
-    MaterialRef material;   // The material to render with (can be shared)
-    UID material_uid;       // UID for serialization
-    uint32_t mesh_index = 0; // Original index for tracking
+    MeshRef mesh;           // The mesh geometry (resolved from model's mesh_deps)
+    MaterialRef material;   // The material to render with (resolved from model's material_deps)
+    uint32_t mesh_index = 0;     // Index into mesh_deps
+    uint32_t material_index = 0; // Index into material_deps
+    uint32_t slot_index = 0;     // Original slot index for tracking
     
     template<class Archive>
     void serialize(Archive& ar) {
-        ar(cereal::make_nvp("mesh_uid", mesh_uid));
-        ar(cereal::make_nvp("material_uid", material_uid));
         ar(cereal::make_nvp("mesh_index", mesh_index));
+        ar(cereal::make_nvp("material_index", material_index));
+        ar(cereal::make_nvp("slot_index", slot_index));
     }
 };
 
@@ -72,6 +84,8 @@ struct MaterialSlot {
  * Model is a lightweight container that references:
  * - Mesh assets (geometry data, GPU buffers)
  * - Material assets (shaders, textures, parameters)
+ * 
+ * Dependencies are managed via ASSET_DEPS macro for automatic serialization
  */
 class Model : public Asset {
 public:
@@ -85,10 +99,11 @@ public:
     virtual void on_load_asset() override;
     virtual void on_save_asset() override;
 
-    // Asset Dependencies
-    virtual void load_asset_deps() override;
-    virtual void save_asset_deps() override;
-    virtual void traverse_deps(std::function<void(std::shared_ptr<Asset>)> callback) const override;
+    // Asset Dependencies - managed by ASSET_DEPS macro
+    ASSET_DEPS(
+        (std::vector<MeshRef>, mesh_deps_),
+        (std::vector<MaterialRef>, material_deps_)
+    )
     
     /**
      * @brief Load a model from file path with caching via AssetManager
@@ -142,6 +157,10 @@ public:
     inline const std::string& get_source_path() const { return path_; }
 
 protected:
+    // Sync material_slots_ with mesh_deps_/material_deps_
+    void sync_slots_to_deps();
+    void sync_deps_to_slots();
+
     // Core data - just references to other assets
     std::vector<MaterialSlot> material_slots_;
     
@@ -156,7 +175,8 @@ protected:
     template<class Archive>
     void serialize(Archive& ar) {
         ar(cereal::base_class<Asset>(this));
-        ar(cereal::make_nvp("material_slots", material_slots_));
+        serialize_deps(ar);  // Serialize mesh_deps_ and material_deps_ UIDs via ASSET_DEPS
+        ar(cereal::make_nvp("material_slots", material_slots_));  // Slot indices
         ar(cereal::make_nvp("path", path_));
         ar(cereal::make_nvp("process_setting", process_setting_));
     }
@@ -165,3 +185,6 @@ protected:
 };
 
 using ModelRef = std::shared_ptr<Model>;
+
+CEREAL_REGISTER_TYPE(Model)
+CEREAL_REGISTER_POLYMORPHIC_RELATION(Asset, Model)

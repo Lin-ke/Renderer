@@ -13,7 +13,7 @@
 #include "engine/function/render/render_resource/texture.h"
 #include "engine/function/render/render_system/render_system.h"
 #include "engine/function/render/render_system/render_mesh_manager.h"
-#include "engine/function/render/render_pass/pbr_forward_pass.h"
+#include "engine/function/render/render_pass/npr_forward_pass.h"
 #include "engine/function/input/input.h"
 #include "engine/core/log/Log.h"
 
@@ -28,7 +28,7 @@
 
 /**
  * @file test/draw/test_pbr_klee.cpp
- * @brief PBR rendering test using Klee model
+ * @brief NPR rendering test using Klee model
  */
 
 DEFINE_LOG_TAG(LogPBRKlee, "PBRKlee");
@@ -58,7 +58,7 @@ static float calculate_average_brightness_klee(const std::vector<uint8_t>& data)
     return static_cast<float>(total) / static_cast<float>(pixel_count);
 }
 
-TEST_CASE("Load PBR FBX Model", "[draw][pbr]") {
+TEST_CASE("Load NPR FBX Model", "[draw][npr]") {
     std::bitset<8> mode;
     mode.set(EngineContext::StartMode::Asset);
     mode.set(EngineContext::StartMode::Window);
@@ -76,32 +76,24 @@ TEST_CASE("Load PBR FBX Model", "[draw][pbr]") {
     REQUIRE(EngineContext::world() != nullptr);
     
     // Load model with materials (using AssetManager for caching)
-    INFO(LogPBRKlee, "Loading PBR model from: {}", PBR_MODEL_PATH);
+    INFO(LogPBRKlee, "Loading NPR model from: {}", PBR_MODEL_PATH);
     
     // Note: load_materials=true to load textures from MTL/FBX
-    auto pbr_model = Model::Load(PBR_MODEL_PATH, true, true, true);
+    auto npr_model = Model::Load(PBR_MODEL_PATH, true, true, true);
     
-    REQUIRE(pbr_model->get_submesh_count() > 0);
+    REQUIRE(npr_model->get_submesh_count() > 0);
     
-    INFO(LogPBRKlee, "PBR model loaded: {} submeshes", pbr_model->get_submesh_count());
+    INFO(LogPBRKlee, "NPR model loaded: {} submeshes", npr_model->get_submesh_count());
     
     // Debug: Check materials
-    for (uint32_t i = 0; i < pbr_model->get_submesh_count(); i++) {
-        auto mat = pbr_model->get_material(i);
+    for (uint32_t i = 0; i < npr_model->get_submesh_count(); i++) {
+        auto mat = npr_model->get_material(i);
         if (mat) {
             auto diffuse = mat->get_diffuse();
             uint32_t tex_id = mat->get_diffuse_texture() ? mat->get_diffuse_texture()->texture_id_ : 0;
             
-            float roughness = 0.5f;
-            float metallic = 0.0f;
-            if (auto pbr_mat = std::dynamic_pointer_cast<PBRMaterial>(mat)) {
-                roughness = pbr_mat->get_roughness();
-                metallic = pbr_mat->get_metallic();
-            }
-            
-            INFO(LogPBRKlee, "Submesh[{}] material: diffuse=({},{},{},{}), roughness={}, metallic={}, texture_id={}",
-                 i, diffuse.x(), diffuse.y(), diffuse.z(), diffuse.w(),
-                 roughness, metallic, tex_id);
+            INFO(LogPBRKlee, "Submesh[{}] material: diffuse=({},{},{},{}), texture_id={}",
+                 i, diffuse.x(), diffuse.y(), diffuse.z(), diffuse.w(), tex_id);
         } else {
             INFO(LogPBRKlee, "Submesh[{}] has no material", i);
         }
@@ -110,7 +102,7 @@ TEST_CASE("Load PBR FBX Model", "[draw][pbr]") {
     EngineContext::exit();
 }
 
-TEST_CASE("Render PBR Model", "[draw][pbr]") {
+TEST_CASE("Render NPR Model", "[draw][npr]") {
     std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
     
     std::bitset<8> mode;
@@ -126,8 +118,8 @@ TEST_CASE("Render PBR Model", "[draw][pbr]") {
     REQUIRE(EngineContext::render_system() != nullptr);
     REQUIRE(EngineContext::world() != nullptr);
     
-    // Enable PBR for better quality
-    EngineContext::render_system()->get_mesh_manager()->set_pbr_enabled(true);
+    // Enable NPR toon shading
+    EngineContext::render_system()->get_mesh_manager()->set_npr_enabled(true);
     
     // Create scene
     auto scene = std::make_shared<Scene>();
@@ -174,24 +166,30 @@ TEST_CASE("Render PBR Model", "[draw][pbr]") {
     model_trans->transform.set_rotation({0.0f, 0.0f, 0.0f});
     model_trans->transform.set_scale({1.0f, 1.0f, 1.0f});
     
-    // Load PBR model with AssetManager caching
-    INFO(LogPBRKlee, "Loading PBR model from: {}", PBR_MODEL_PATH);
+    // Load NPR model with AssetManager caching
+    INFO(LogPBRKlee, "Loading NPR model from: {}", PBR_MODEL_PATH);
     
-    // Note: load_materials=true to load textures from MTL/FBX
-    auto pbr_model = Model::Load(PBR_MODEL_PATH, true, true, true);
+    // Use ModelProcessSetting to specify NPR material type
+    ModelProcessSetting npr_setting;
+    npr_setting.smooth_normal = true;
+    npr_setting.load_materials = true;
+    npr_setting.flip_uv = true;
+    npr_setting.material_type = ModelMaterialType::NPR;  // Key: use NPR material
     
-    REQUIRE(pbr_model->get_submesh_count() > 0);
+    auto npr_model = Model::Load(PBR_MODEL_PATH, npr_setting);
     
-    INFO(LogPBRKlee, "PBR model loaded: {} submeshes", pbr_model->get_submesh_count());
+    REQUIRE(npr_model->get_submesh_count() > 0);
+    
+    INFO(LogPBRKlee, "NPR model loaded: {} submeshes", npr_model->get_submesh_count());
     
     // Add MeshRendererComponent
     auto* model_mesh = model_ent->add_component<MeshRendererComponent>();
     REQUIRE(model_mesh != nullptr);
-    model_mesh->set_model(pbr_model);
+    model_mesh->set_model(npr_model);
     model_mesh->on_init();
     
     // Auto-adjust camera to model bounding box
-    auto box = pbr_model->get_bounding_box();
+    auto box = npr_model->get_bounding_box();
     Vec3 center = (box.min + box.max) * 0.5f;
     float size = (box.max - box.min).norm();
     
@@ -210,6 +208,12 @@ TEST_CASE("Render PBR Model", "[draw][pbr]") {
          cam_trans->transform.get_position().y(),
          cam_trans->transform.get_position().z());
     
+    // Debug light direction
+    Vec3 light_front = light_trans->transform.front();
+    INFO(LogPBRKlee, "Light front: ({},{},{}), Light dir in shader will be: ({},{},{})",
+         light_front.x(), light_front.y(), light_front.z(),
+         -light_front.x(), -light_front.y(), -light_front.z());
+    
     // Set active scene
     EngineContext::world()->set_active_scene(scene);
     EngineContext::render_system()->get_mesh_manager()->set_active_camera(cam_comp);
@@ -222,7 +226,7 @@ TEST_CASE("Render PBR Model", "[draw][pbr]") {
     std::vector<uint8_t> screenshot_data(screenshot_width * screenshot_height * 4);
     bool screenshot_taken = false;
     
-    while (frames < 60000) {
+    while (frames < 60) {
         Input::get_instance().tick();
         EngineContext::world()->tick(0.016f);
         
@@ -273,7 +277,7 @@ TEST_CASE("Render PBR Model", "[draw][pbr]") {
     
     // Save screenshot
     if (screenshot_taken) {
-        std::string screenshot_path = test_asset_dir + "/klee_pbr_screenshot.png";
+        std::string screenshot_path = test_asset_dir + "/klee_npr_screenshot.png";
         if (save_screenshot_png_klee(screenshot_path, screenshot_width, screenshot_height, screenshot_data)) {
             float brightness = calculate_average_brightness_klee(screenshot_data);
             INFO(LogPBRKlee, "Screenshot saved: {} (brightness: {:.1f})", screenshot_path, brightness);
@@ -285,7 +289,7 @@ TEST_CASE("Render PBR Model", "[draw][pbr]") {
     EngineContext::exit();
 }
 
-TEST_CASE("PBR Forward Pass Basic", "[draw][pbr]") {
+TEST_CASE("NPR Forward Pass Basic", "[draw][npr]") {
     std::bitset<8> mode;
     mode.set(EngineContext::StartMode::Asset);
     mode.set(EngineContext::StartMode::Window);
@@ -299,11 +303,11 @@ TEST_CASE("PBR Forward Pass Basic", "[draw][pbr]") {
     
     REQUIRE(EngineContext::rhi() != nullptr);
     
-    // Create PBR forward pass
-    auto pbr_pass = std::make_shared<render::PBRForwardPass>();
-    pbr_pass->init();
+    // Create NPR forward pass
+    auto npr_pass = std::make_shared<render::NPRForwardPass>();
+    npr_pass->init();
     
-    REQUIRE(pbr_pass->is_initialized());
+    REQUIRE(npr_pass->is_initialized());
     
     // Test setting per-frame data
     Mat4 view = Mat4::Identity();
@@ -312,14 +316,10 @@ TEST_CASE("PBR Forward Pass Basic", "[draw][pbr]") {
     Vec3 light_dir(0.5f, -0.5f, 0.5f);
     Vec3 light_color(1.0f, 1.0f, 1.0f);
     
-    pbr_pass->set_per_frame_data(view, proj, camera_pos, light_dir, light_color, 1.0f);
-    
-    // Test point lights
-    pbr_pass->add_point_light(Vec3(1.0f, 1.0f, 1.0f), Vec3(1.0f, 0.5f, 0.0f), 1.0f, 10.0f);
-    pbr_pass->add_point_light(Vec3(-1.0f, 1.0f, -1.0f), Vec3(0.0f, 0.5f, 1.0f), 0.5f, 5.0f);
+    npr_pass->set_per_frame_data(view, proj, camera_pos, light_dir, light_color, 1.0f);
     
     // Must destroy pass BEFORE EngineContext::exit() to avoid accessing destroyed RHI backend
-    pbr_pass.reset();
+    npr_pass.reset();
     
     EngineContext::exit();
 }

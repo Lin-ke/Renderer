@@ -11,6 +11,8 @@
 
 class Transform {
  public:
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+  
   Transform() = default;
 
   // 从矩阵构造 (显式构造，防止隐式转换)

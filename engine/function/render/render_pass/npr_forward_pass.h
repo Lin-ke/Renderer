@@ -33,23 +33,46 @@ struct NPRPerObjectData {
 };
 
 // NPR Material data structure (matches HLSL cbuffer)
+// Size must be 16-byte aligned for DX11 constant buffers
 struct NPRMaterialData {
-    Vec4 albedo;           // base color
-    Vec4 emission;
+    Vec4 albedo;           // 16 bytes - base color
+    Vec4 emission;         // 16 bytes
     
-    // NPR specific parameters
-    float lambert_clamp;   // Half lambert clamp threshold
-    float ramp_tex_offset; // Ramp texture vertical offset (for material type)
-    float rim_threshold;   // Rim light depth threshold
-    float rim_strength;    // Rim light intensity
-    float rim_width;       // Rim light screen space width
-    float use_albedo_map;  // Use float for boolean flags
-    float use_normal_map;
-    float use_light_map;   // LightMap (metallic, ao, specular, materialType)
-    float use_ramp_map;    // Ramp texture for toon shading
-    Vec3 rim_color;        // Rim light color
-    float _padding;
+    // Pack floats into Vec4 for better alignment (16 bytes)
+    // lambert_clamp, ramp_tex_offset, rim_threshold, rim_strength
+    Vec4 npr_params1;
+    
+    // rim_width, use_albedo_map, use_normal_map, use_light_map
+    Vec4 npr_params2;
+    
+    // use_ramp_map + rim_color (3 floats) = fits in one Vec4
+    // use_ramp_map is in w component
+    Vec4 rim_color_and_use_ramp;
+    
+    // Additional padding to ensure 16-byte alignment (80 bytes so far, need 16 more)
+    float _padding[4];     // 16 bytes padding
 };
+
+// Helper to access NPRMaterialData fields
+inline float get_lambert_clamp(const NPRMaterialData& data) { return data.npr_params1.x(); }
+inline float get_ramp_tex_offset(const NPRMaterialData& data) { return data.npr_params1.y(); }
+inline float get_rim_threshold(const NPRMaterialData& data) { return data.npr_params1.z(); }
+inline float get_rim_strength(const NPRMaterialData& data) { return data.npr_params1.w(); }
+inline float get_rim_width(const NPRMaterialData& data) { return data.npr_params2.x(); }
+inline float get_use_albedo_map(const NPRMaterialData& data) { return data.npr_params2.y(); }
+inline float get_use_normal_map(const NPRMaterialData& data) { return data.npr_params2.z(); }
+inline float get_use_light_map(const NPRMaterialData& data) { return data.npr_params2.w(); }
+inline Vec3 get_rim_color(const NPRMaterialData& data) { return Vec3(data.rim_color_and_use_ramp.x(), data.rim_color_and_use_ramp.y(), data.rim_color_and_use_ramp.z()); }
+inline float get_use_ramp_map(const NPRMaterialData& data) { return data.rim_color_and_use_ramp.w(); }
+
+inline void set_npr_params(NPRMaterialData& data, 
+    float lambert_clamp, float ramp_tex_offset, float rim_threshold, float rim_strength,
+    float rim_width, float use_albedo_map, float use_normal_map, float use_light_map,
+    const Vec3& rim_color, float use_ramp_map) {
+    data.npr_params1 = Vec4(lambert_clamp, ramp_tex_offset, rim_threshold, rim_strength);
+    data.npr_params2 = Vec4(rim_width, use_albedo_map, use_normal_map, use_light_map);
+    data.rim_color_and_use_ramp = Vec4(rim_color.x(), rim_color.y(), rim_color.z(), use_ramp_map);
+}
 
 class NPRForwardPass : public RenderPass {
 public:
