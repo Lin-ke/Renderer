@@ -38,7 +38,6 @@ target("engine")
 
     -- Compile shaders before building the engine
     before_build(function (target)
-        import("lib.detect.find_tool")
         
         local shader_dir = path.join(os.projectdir(), "assets", "shaders")
         local output_dir = path.join(target:targetdir(), "shaders")
@@ -52,21 +51,13 @@ target("engine")
         os.mkdir(output_dir)
         
         -- Find fxc compiler
-        local fxc = find_tool("fxc")
-        if not fxc then
-            -- Try to find fxc in Windows SDK
-            local windows_sdk_path = os.getenv("WindowsSdkDir")
-            if windows_sdk_path then
-                local fxc_path = path.join(windows_sdk_path, "bin", "x64", "fxc.exe")
-                if os.exists(fxc_path) then
-                    fxc = {program = fxc_path}
-                else
-                    fxc_path = path.join(windows_sdk_path, "bin", "fxc.exe")
-                    if os.exists(fxc_path) then
-                        fxc = {program = fxc_path}
-                    end
-                end
-            end
+        local windows_sdk_path = os.getenv("WindowsSdkDir")
+        if not windows_sdk_path then
+            windows_sdk_path ="C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.26100.0\\x64"
+        end
+        local fxc_path = path.join(windows_sdk_path, "fxc.exe")
+        if os.exists(fxc_path) then
+            fxc = {program = fxc_path}
         end
         
         if not fxc then
@@ -94,8 +85,7 @@ target("engine")
             end
             
             if needs_vs_compile then
-                local vs_cmd = string.format('"%s" /T vs_5_0 /E VSMain /Fo "%s" /O3 "%s" 2>&1', 
-                    fxc.program, vs_output, hlsl_file)
+                local vs_cmd = string.format('"%s" /T vs_5_0 /E VSMain /Fo "%s" /O3 "%s"', fxc.program, vs_output, hlsl_file)
                 print("Compiling VS: " .. filename)
                 local out = os.iorun(vs_cmd)
                 if out and #out > 0 then
@@ -117,8 +107,7 @@ target("engine")
             end
             
             if needs_ps_compile then
-                local ps_cmd = string.format('"%s" /T ps_5_0 /E PSMain /Fo "%s" /O3 "%s" 2>&1', 
-                    fxc.program, ps_output, hlsl_file)
+                local ps_cmd = string.format('"%s" /T ps_5_0 /E PSMain /Fo "%s" /O3 "%s"', fxc.program, ps_output, hlsl_file)
                 print("Compiling PS: " .. filename)
                 local out = os.iorun(ps_cmd)
                 if out and #out > 0 then

@@ -193,9 +193,8 @@ float4 PSMain(PSInput input) : SV_TARGET {
         float4 sampled = albedo_map.Sample(default_sampler, input.texcoord);
         base_color *= sampled.rgb;
     }
-    // return float4(input.texcoord, 0.0, 1.0);
     
-    // // Get normal
+    // Get normal
     // float3 N = GetNormal(input);
     
     // // Get LightMap data (default values if no light map)

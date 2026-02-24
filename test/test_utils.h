@@ -207,8 +207,8 @@ public:
         uint32_t height = 720;
         int max_frames = 60;
         int capture_frame = 30; // 0 to disable
-        SceneCreateFunc create_scene_func;
-        SceneLoadedFunc on_scene_loaded_func;
+        SceneCreateFunc create_scene_func = nullptr;
+        SceneLoadedFunc on_scene_loaded_func = nullptr;
     };
 
     static bool run(const Config& config, std::vector<uint8_t>& out_screenshot_data, int* out_frames = nullptr);

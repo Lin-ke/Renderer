@@ -5,10 +5,10 @@
         "a5a18129-8c4d-0492-d107-79a50ea10ff9",
         "763c8a3c-a2f5-b4b6-e1de-b8091bb88cbd",
         "18ac8863-366b-94c8-1994-1f26ab5f9268",
-        "84efc49d-94d6-58cd-c2be-150e9dfb21d4",
-        "ebb1dd9a-9e83-b060-21ff-d28ffc2a240b",
-        "45553c2d-b1ff-d51a-bc92-7fff304a772f",
-        "e0592b02-569e-ca71-f510-36653a666349"
+        "1b2d0ccb-ecfd-0d4a-59ee-154817b07ebb",
+        "6fa766de-e78d-eba0-9a97-5fee8e19da1c",
+        "be0624e8-0b57-79bd-9289-21a14cacebce",
+        "541c12f0-6a35-3d77-38ab-ccb2014f9abd"
     ],
     "asset": {
         "polymorphic_id": 2147483649,
@@ -26,10 +26,10 @@
                     "18ac8863-366b-94c8-1994-1f26ab5f9268"
                 ],
                 "material_deps_": [
-                    "84efc49d-94d6-58cd-c2be-150e9dfb21d4",
-                    "ebb1dd9a-9e83-b060-21ff-d28ffc2a240b",
-                    "45553c2d-b1ff-d51a-bc92-7fff304a772f",
-                    "e0592b02-569e-ca71-f510-36653a666349"
+                    "1b2d0ccb-ecfd-0d4a-59ee-154817b07ebb",
+                    "6fa766de-e78d-eba0-9a97-5fee8e19da1c",
+                    "be0624e8-0b57-79bd-9289-21a14cacebce",
+                    "541c12f0-6a35-3d77-38ab-ccb2014f9abd"
                 ],
                 "material_slots": [
                     {
@@ -56,7 +56,7 @@
                 "path": "D:\\Renderer\\assets\\models\\Klee\\klee.fbx",
                 "process_setting": {
                     "smooth_normal": true,
-                    "flip_uv": true,
+                    "flip_uv": false,
                     "load_materials": true,
                     "tangent_space": false,
                     "generate_bvh": false,

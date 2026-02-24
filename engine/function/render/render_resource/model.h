@@ -26,7 +26,7 @@ enum class ModelMaterialType {
  */
 struct ModelProcessSetting {
     bool smooth_normal = false;           // Generate smooth normals
-    bool flip_uv = false;                 // Flip UV coordinates
+    bool flip_uv = true;                  // Flip UV coordinates (default true for DirectX)
     bool load_materials = false;          // Load materials from file
     bool tangent_space = false;           // Generate tangent space
     bool generate_bvh = false;            // Generate BVH acceleration structure

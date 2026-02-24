@@ -9,7 +9,7 @@
 #include "engine/function/render/render_system/render_system.h"
 #include "engine/function/render/render_system/render_mesh_manager.h"
 #include "engine/function/input/input.h"
-
+#include "engine/core/window/window.h"
 #include <fstream>
 #include <thread>
 #include <chrono>
@@ -187,7 +187,14 @@ bool RenderTestApp::run(const Config& config, std::vector<uint8_t>& out_screensh
     int frames = 0;
     bool screenshot_taken = false;
     
+    auto* window = EngineContext::window();
+    
     while (frames < config.max_frames) {
+        // Process window messages for input events
+        if (window && !window->process_messages()) {
+            break;
+        }
+        
         Input::get_instance().tick();
         EngineContext::world()->tick(0.016f);
         

@@ -10,15 +10,10 @@
 # Can be overridden per-material
 MaterialType NPR
 
-# ============================================
-# Face material (m0, m1)
-# ============================================
+# 脸
 newmtl m0
 map_Kd Texture\face.jpg
-Ka 0.7529412 0.7529412 0.7529412
 Kd 0.8 0.8 0.8
-Ks 0 0 0
-Ns 5
 d 1
 map_Ke Texture\face_lightmap.png
 map_Ramp Texture\body_shadow_ramp.png
@@ -29,31 +24,10 @@ RimColor 1.0 0.9 0.8
 LambertClamp 0.6
 RampOffset 0.0
 
+# 头发
 newmtl m1
-map_Kd Texture\face.jpg
-Ka 0.7529412 0.7529412 0.7529412
-Kd 0.8 0.8 0.8
-Ks 0 0 0
-Ns 5
-d 1
-map_Ke Texture\face_lightmap.png
-map_Ramp Texture\body_shadow_ramp.png
-RimWidth 0.3
-RimThreshold 0.15
-RimStrength 1.2
-RimColor 1.0 0.9 0.8
-LambertClamp 0.6
-RampOffset 0.0
-
-# ============================================
-# Hair material (m2, m4)
-# ============================================
-newmtl m2
 map_Kd Texture\hair.jpg
-Ka 0.7529412 0.7529412 0.7529412
 Kd 0.8 0.8 0.8
-Ks 0 0 0
-Ns 5
 d 1
 map_Ke Texture\hair_lightmap.png
 map_Ramp Texture\hair_shadow_ramp.png
@@ -65,151 +39,25 @@ RimColor 1.0 1.0 1.0
 LambertClamp 0.5
 RampOffset 0.0
 
-newmtl m4
-map_Kd Texture\hair.jpg
-Ka 0.7529412 0.7529412 0.7529412
+# 衣服
+newmtl m2
+map_Kd Texture\dressing.jpg
 Kd 0.8 0.8 0.8
-Ks 0 0 0
-Ns 5
 d 1
-map_Ke Texture\hair_lightmap.png
-map_Ramp Texture\hair_shadow_ramp.png
-RimWidth 0.5
-RimThreshold 0.1
-RimStrength 1.5
-RimColor 1.0 1.0 1.0
-LambertClamp 0.5
+map_Ke Texture\dressing_lightmap.png
+map_Ramp Texture\body_shadow_ramp.png
+RimWidth 0.4
+RimThreshold 0.12
+RimStrength 1.0
+RimColor 1.0 0.95 0.9
+LambertClamp 0.55
 RampOffset 0.0
 
-# ============================================
-# Dressing/Body material (m3, m5, m6, m7, m8, m9, m10)
-# ============================================
+# 表情
 newmtl m3
-map_Kd Texture\dressing.jpg
-Ka 0.7529412 0.7529412 0.7529412
-Kd 0.8 0.8 0.8
-Ks 0 0 0
-Ns 5
-d 1
-# NPR LightMap
-map_Ke Texture\dressing_lightmap.png
-# NPR Ramp texture
-map_Ramp Texture\body_shadow_ramp.png
-# RIM parameters
-RimWidth 0.4
-RimThreshold 0.12
-RimStrength 1.0
-RimColor 1.0 0.95 0.9
-LambertClamp 0.55
-RampOffset 0.0
-
-newmtl m5
-map_Kd Texture\dressing.jpg
-Ka 0.7529412 0.7529412 0.7529412
-Kd 0.8 0.8 0.8
-Ks 0 0 0
-Ns 5
-d 1
-map_Ke Texture\dressing_lightmap.png
-map_Ramp Texture\body_shadow_ramp.png
-RimWidth 0.4
-RimThreshold 0.12
-RimStrength 1.0
-RimColor 1.0 0.95 0.9
-LambertClamp 0.55
-RampOffset 0.0
-
-newmtl m6
-map_Kd Texture\dressing.jpg
-Ka 0.7529412 0.7529412 0.7529412
-Kd 0.8 0.8 0.8
-Ks 0 0 0
-Ns 5
-d 1
-map_Ke Texture\dressing_lightmap.png
-map_Ramp Texture\body_shadow_ramp.png
-RimWidth 0.4
-RimThreshold 0.12
-RimStrength 1.0
-RimColor 1.0 0.95 0.9
-LambertClamp 0.55
-RampOffset 0.0
-
-newmtl m7
-map_Kd Texture\dressing.jpg
-Ka 0.7529412 0.7529412 0.7529412
-Kd 0.8 0.8 0.8
-Ks 0 0 0
-Ns 5
-d 1
-map_Ke Texture\dressing_lightmap.png
-map_Ramp Texture\body_shadow_ramp.png
-RimWidth 0.4
-RimThreshold 0.12
-RimStrength 1.0
-RimColor 1.0 0.95 0.9
-LambertClamp 0.55
-RampOffset 0.0
-
-newmtl m8
-map_Kd Texture\dressing.jpg
-Ka 0.7529412 0.7529412 0.7529412
-Kd 0.8 0.8 0.8
-Ks 0 0 0
-Ns 5
-d 1
-map_Ke Texture\dressing_lightmap.png
-map_Ramp Texture\body_shadow_ramp.png
-RimWidth 0.4
-RimThreshold 0.12
-RimStrength 1.0
-RimColor 1.0 0.95 0.9
-LambertClamp 0.55
-RampOffset 0.0
-
-newmtl m9
-map_Kd Texture\dressing.jpg
-Ka 0.7529412 0.7529412 0.7529412
-Kd 0.8 0.8 0.8
-Ks 0 0 0
-Ns 5
-d 1
-map_Ke Texture\dressing_lightmap.png
-map_Ramp Texture\body_shadow_ramp.png
-RimWidth 0.4
-RimThreshold 0.12
-RimStrength 1.0
-RimColor 1.0 0.95 0.9
-LambertClamp 0.55
-RampOffset 0.0
-
-newmtl m10
-map_Kd Texture\dressing.jpg
-Ka 0.7529412 0.7529412 0.7529412
-Kd 0.8 0.8 0.8
-Ks 0 0 0
-Ns 5
-d 1
-map_Ke Texture\dressing_lightmap.png
-map_Ramp Texture\body_shadow_ramp.png
-RimWidth 0.4
-RimThreshold 0.12
-RimStrength 1.0
-RimColor 1.0 0.95 0.9
-LambertClamp 0.55
-RampOffset 0.0
-
-# ============================================
-# Emoji material (m11)
-# ============================================
-newmtl m11
 map_Kd Texture\emoji.png
-Ka 0.5 0.5 0.5
-Kd 1 1 1
-Ks 0 0 0
-Ns 15.3
+Kd 0.8 0.8 0.8
 d 1
-# Use face lightmap for emoji
 map_Ke Texture\face_lightmap.png
 map_Ramp Texture\body_shadow_ramp.png
 RimWidth 0.25

@@ -93,7 +93,7 @@ public:
     std::shared_ptr<GizmoManager> get_gizmo_manager() { return gizmo_manager_; }
     RHITextureViewRef get_depth_texture_view() { return depth_texture_view_; }
     RHITextureRef get_depth_texture() { return depth_texture_; }
-    RHITextureRef get_prepass_depth_texture() { return prepass_depth_texture_; }
+    RHITextureRef get_prepass_depth_texture() { return depth_texture_; }
 
     /**
      * @brief Cleanup runtime state for testing (keeps system initialized)
@@ -168,7 +168,6 @@ public:
 
     void init_passes();
     void init_base_resource();
-    void init_depth_prepass_resource();
     void update_global_setting();
     
     // UI Helpers
@@ -184,10 +183,6 @@ public:
     std::shared_ptr<render::ForwardPass> forward_pass_;
     std::shared_ptr<render::DepthPrePass> depth_prepass_;
     std::shared_ptr<render::DepthVisualizePass> depth_visualize_pass_;
-    
-    // Depth prepass depth texture (shared with forward passes)
-    RHITextureRef prepass_depth_texture_;
-    RHITextureViewRef prepass_depth_texture_view_;
     
     // Depth buffer visualization
     RHITextureRef depth_visualize_texture_;

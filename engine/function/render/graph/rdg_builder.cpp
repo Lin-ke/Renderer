@@ -832,7 +832,13 @@ RDGRenderPassBuilder& RDGRenderPassBuilder::depth_stencil(RDGTextureHandle textu
     edge->read_only_depth = read_only_depth;
     edge->view_type = subresource.layer_count > 1 ? VIEW_TYPE_2D_ARRAY : VIEW_TYPE_2D;
 
-    graph_->Link(pass_, graph_->GetNode(texture.id()), edge);
+    // For read-only depth, create edge from resource to pass (like read())
+    // For writable depth, create edge from pass to resource (write)
+    if (read_only_depth) {
+        graph_->Link(graph_->GetNode(texture.id()), pass_, edge);
+    } else {
+        graph_->Link(pass_, graph_->GetNode(texture.id()), edge);
+    }
 
     return *this;
 }

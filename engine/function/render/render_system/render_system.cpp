@@ -249,40 +249,6 @@ void RenderSystem::init_passes() {
 	}
 
 	// Initialize depth prepass resources
-	init_depth_prepass_resource();
-}
-
-void RenderSystem::init_depth_prepass_resource() {
-	if (!backend_) {
-		return;
-	}
-
-	// Create depth texture for prepass (separate from main depth texture)
-	// This allows the prepass to write depth, and forward passes to read it
-	RHITextureInfo depth_info = {};
-	depth_info.format = DEPTH_FORMAT;
-	depth_info.extent = { WINDOW_EXTENT.width, WINDOW_EXTENT.height, 1 };
-	depth_info.mip_levels = 1;
-	depth_info.array_layers = 1;
-	depth_info.memory_usage = MEMORY_USAGE_GPU_ONLY;
-	depth_info.type = RESOURCE_TYPE_DEPTH_STENCIL | RESOURCE_TYPE_TEXTURE;
-
-	prepass_depth_texture_ = backend_->create_texture(depth_info);
-
-	if (prepass_depth_texture_) {
-		RHITextureViewInfo depth_view_info = {};
-		depth_view_info.texture = prepass_depth_texture_;
-		depth_view_info.format = DEPTH_FORMAT;
-		depth_view_info.view_type = VIEW_TYPE_2D;
-		depth_view_info.subresource.aspect = TEXTURE_ASPECT_DEPTH;
-		depth_view_info.subresource.level_count = 1;
-		depth_view_info.subresource.layer_count = 1;
-
-		prepass_depth_texture_view_ = backend_->create_texture_view(depth_view_info);
-		INFO(LogRenderSystem, "Depth prepass resources created");
-	} else {
-		WARN(LogRenderSystem, "Failed to create depth prepass texture");
-	}
 }
 
 
@@ -478,11 +444,14 @@ void RenderSystem::capture_rdg_info(RDGBuilder &builder) {
 
 			size_t tex_idx = node_index_map[tex_id];
 
-			if (edge->as_color || edge->as_depth_stencil || edge->as_output_read || edge->as_output_read_write) {
+			// Check if this is a read-only depth attachment
+			bool is_readonly_depth = edge->as_depth_stencil && edge->read_only_depth;
+			
+			if (edge->as_color || (edge->as_depth_stencil && !is_readonly_depth) || edge->as_output_read || edge->as_output_read_write) {
 				// Pass writes to resource: Pass -> Resource
 				last_rdg_nodes_[pass_idx].outputs.push_back(res_name);
 				last_rdg_nodes_[tex_idx].inputs.push_back(pass->name());
-				last_rdg_edges_.push_back({ pass->ID(), tex_id, edge->as_depth_stencil ? "depth" : "" });
+				last_rdg_edges_.push_back({ pass->ID(), tex_id, "" });
 			} else {
 				// Pass reads from resource: Resource -> Pass
 				last_rdg_nodes_[pass_idx].inputs.push_back(res_name);
@@ -580,7 +549,7 @@ bool RenderSystem::tick(const RenderPacket &packet) {
 				};
 				depth_visualize_pass_->draw(
 						command,
-						prepass_depth_texture_,
+						depth_texture_,
 						depth_visualize_texture_view_,
 						viz_extent,
 						camera->get_near(),
@@ -697,12 +666,6 @@ void RenderSystem::cleanup_for_test() {
 		if (mesh_manager_) {
 			mesh_manager_->cleanup_for_test();
 		}
-		if (light_manager_) {
-			light_manager_->destroy();
-		}
-		if (gizmo_manager_) {
-			gizmo_manager_->shutdown();
-		}
 		selected_entity_ = nullptr;
 		return;
 	}
@@ -717,16 +680,6 @@ void RenderSystem::cleanup_for_test() {
 	// Cleanup mesh manager state (keeps passes initialized)
 	if (mesh_manager_) {
 		mesh_manager_->cleanup_for_test();
-	}
-	
-	// Cleanup light manager
-	if (light_manager_) {
-		light_manager_->destroy();
-	}
-	
-	// Cleanup gizmo manager
-	if (gizmo_manager_) {
-		gizmo_manager_->shutdown();
 	}
 	
 	// Reset selected entity
@@ -998,25 +951,9 @@ void RenderSystem::draw_rdg_visualizer() {
 		return;
 	}
 
-	ImGui::Begin("RDG Visualizer", &show_rdg_visualizer_, ImGuiWindowFlags_MenuBar);
+	ImGui::Begin("RDG Visualizer", &show_rdg_visualizer_);
 
 	std::lock_guard<std::mutex> lock(rdg_info_mutex_);
-
-	// View mode tabs
-	static int view_mode = 0; // 0 = List, 1 = Graph
-
-	if (ImGui::BeginMenuBar()) {
-		if (ImGui::BeginMenu("View")) {
-			if (ImGui::MenuItem("List View", nullptr, view_mode == 0)) {
-				view_mode = 0;
-			}
-			if (ImGui::MenuItem("Graph View", nullptr, view_mode == 1)) {
-				view_mode = 1;
-			}
-			ImGui::EndMenu();
-		}
-		ImGui::EndMenuBar();
-	}
 
 	if (last_rdg_nodes_.empty()) {
 		ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "No RDG data captured yet.");
@@ -1074,59 +1011,7 @@ void RenderSystem::draw_rdg_visualizer() {
 		return IM_COL32(60, 60, 60, 255);
 	};
 
-	if (view_mode == 0) {
-		// List View (original)
-		ImGui::Text("Total Passes: %zu",
-				std::count_if(last_rdg_nodes_.begin(), last_rdg_nodes_.end(),
-						[](const auto &n) { return n.is_pass; }));
-		ImGui::Separator();
-
-		for (const auto &node : last_rdg_nodes_) {
-			if (!node.is_pass) {
-				continue; // Only show passes in list view
-			}
-
-			ImVec4 type_color = get_type_color(node.type);
-			std::string header = "[" + node.type + "] " + node.name;
-			ImGui::TextColored(type_color, "%s", header.c_str());
-
-			if (!node.inputs.empty()) {
-				ImGui::Indent();
-				ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Inputs:");
-				ImGui::Indent();
-				for (const auto &input : node.inputs) {
-					ImGui::BulletText("%s", input.c_str());
-				}
-				ImGui::Unindent();
-				ImGui::Unindent();
-			}
-
-			if (!node.outputs.empty()) {
-				ImGui::Indent();
-				ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Outputs:");
-				ImGui::Indent();
-				for (const auto &output : node.outputs) {
-					ImGui::BulletText("%s", output.c_str());
-				}
-				ImGui::Unindent();
-				ImGui::Unindent();
-			}
-
-			ImGui::Spacing();
-		}
-
-		// Legend
-		ImGui::Separator();
-		ImGui::Text("Legend:");
-		ImGui::TextColored(get_type_color("Render"), "Render");
-		ImGui::SameLine();
-		ImGui::TextColored(get_type_color("Compute"), "Compute");
-		ImGui::SameLine();
-		ImGui::TextColored(get_type_color("Copy"), "Copy");
-		ImGui::SameLine();
-		ImGui::TextColored(get_type_color("Present"), "Present");
-	} else {
-		// Graph View
+	// Graph View
 		ImVec2 canvas_p0 = ImGui::GetCursorScreenPos();
 		ImVec2 canvas_sz = ImGui::GetContentRegionAvail();
 		if (canvas_sz.x < 50.0f) {
@@ -1185,12 +1070,16 @@ void RenderSystem::draw_rdg_visualizer() {
 				ImVec2 cp1 = ImVec2(p1.x, p1.y + 30);
 				ImVec2 cp2 = ImVec2(p2.x, p2.y - 30);
 
-				ImU32 edge_color = edge.label == "depth" ? IM_COL32(255, 200, 100, 180) : edge.label == "buf" ? IM_COL32(100, 200, 255, 180)
-																											  : IM_COL32(150, 150, 150, 150);
+				// Determine color based on edge direction
+				ImU32 edge_color = IM_COL32(150, 150, 150, 150);
+				if (from_it->is_pass && !to_it->is_pass) {
+					edge_color = IM_COL32(255, 100, 100, 180);  // Pass -> Resource (Write): Red
+				} else if (!from_it->is_pass && to_it->is_pass) {
+					edge_color = IM_COL32(100, 200, 255, 180);  // Resource -> Pass (Read): Blue
+				}
 
 				draw_list->AddBezierCubic(p1, cp1, cp2, p2, edge_color, 2.0f);
 
-				// Arrow head
 				ImVec2 dir = ImVec2(p2.x - cp2.x, p2.y - cp2.y);
 				float len = sqrtf(dir.x * dir.x + dir.y * dir.y);
 				if (len > 0) {
@@ -1254,7 +1143,6 @@ void RenderSystem::draw_rdg_visualizer() {
 		ImGui::TextColored(get_type_color("Texture"), "Texture");
 		ImGui::SameLine();
 		ImGui::TextColored(get_type_color("Buffer"), "Buffer");
-	}
 
 	ImGui::End();
 }

@@ -37,18 +37,16 @@ struct MtlGlobalSettings {
     ModelMaterialType default_material_type = ModelMaterialType::PBR;
 };
 
-// MTL material data structure for manual parsing
+// MTL material data structure for manual parsing (PBR Roughness-Metallic workflow)
 struct MtlMaterial {
     std::string name;
     std::string diffuse_map;
     std::string light_map;      // NPR LightMap (map_Ke)
     std::string ramp_map;       // NPR Ramp texture (map_Ramp)
-    Vec4 ambient_color{0.2f, 0.2f, 0.2f, 1.0f};
-    Vec4 diffuse_color{0.8f, 0.8f, 0.8f, 1.0f};
-    Vec4 specular_color{0.0f, 0.0f, 0.0f, 1.0f};
-    float shininess = 32.0f;
+    Vec4 diffuse_color{0.8f, 0.8f, 0.8f, 1.0f};  // Kd (BaseColor)
     float opacity = 1.0f;
-    float roughness = 0.5f;
+    float roughness = 0.5f;     // R field in PBR workflow
+    float metallic = 0.0f;      // M field in PBR workflow
     // Material type (overrides global setting if specified)
     MtlMaterialTypeHint material_type_hint = MtlMaterialTypeHint::Default;
     // NPR parameters
@@ -118,20 +116,20 @@ static bool parse_mtl_file(const std::filesystem::path& mtl_path,
             if (start != std::string::npos) {
                 current->diffuse_map = rest.substr(start);
             }
-        } else if (keyword == "Ka" && current) {
-            float r, g, b;
-            if (iss >> r >> g >> b) current->ambient_color = Vec4(r, g, b, 1.0f);
         } else if (keyword == "Kd" && current) {
             float r, g, b;
             if (iss >> r >> g >> b) current->diffuse_color = Vec4(r, g, b, 1.0f);
-        } else if (keyword == "Ks" && current) {
-            float r, g, b;
-            if (iss >> r >> g >> b) current->specular_color = Vec4(r, g, b, 1.0f);
-        } else if (keyword == "Ns" && current) {
-            float ns;
-            if (iss >> ns) {
-                current->shininess = ns;
-                current->roughness = std::clamp(std::sqrt(2.0f / (ns + 2.0f)), 0.01f, 1.0f);
+        // PBR workflow: R = roughness
+        } else if (keyword == "R" && current) {
+            float r;
+            if (iss >> r) {
+                current->roughness = std::clamp(r, 0.0f, 1.0f);
+            }
+        // PBR workflow: M = metallic
+        } else if (keyword == "M" && current) {
+            float m;
+            if (iss >> m) {
+                current->metallic = std::clamp(m, 0.0f, 1.0f);
             }
         } else if (keyword == "d" && current) {
             float d;
@@ -340,6 +338,7 @@ std::shared_ptr<Mesh> ModelImporter::process_mesh(
     const std::unordered_map<std::string, size_t>& mtl_name_to_index,
     std::shared_ptr<Material>& out_material) {
     
+    std::string mesh_name_safe = safe_ai_string(mesh->mName);
     std::string mesh_sub_name = "mesh_" + std::to_string(index);
     UID mesh_uid = generate_sub_asset_uid(mesh_sub_name, "mesh");
     
@@ -413,6 +412,33 @@ std::shared_ptr<Mesh> ModelImporter::process_mesh(
         ai_mat->Get(AI_MATKEY_NAME, mat_name);
         std::string mat_name_str = safe_ai_string(mat_name);
         
+        // Log mesh-material mapping and material info
+        INFO(LogModelImporter, "  Mesh[{}] '{}' -> Material[{}] '{}'", 
+             index, mesh_name_safe, mesh->mMaterialIndex, mat_name_str);
+        
+        // Query material properties from FBX
+        aiColor4D base_color;
+        float metallic = 0.0f, roughness = 0.5f;
+        aiString tex_path;
+        
+        if (AI_SUCCESS == ai_mat->Get(AI_MATKEY_COLOR_DIFFUSE, base_color)) {
+            INFO(LogModelImporter, "    BaseColor: ({:.3f}, {:.3f}, {:.3f}, {:.3f})",
+                 base_color.r, base_color.g, base_color.b, base_color.a);
+        }
+        if (AI_SUCCESS == ai_mat->Get(AI_MATKEY_METALLIC_FACTOR, metallic)) {
+            INFO(LogModelImporter, "    Metallic: {:.3f}", metallic);
+        }
+        if (AI_SUCCESS == ai_mat->Get(AI_MATKEY_ROUGHNESS_FACTOR, roughness)) {
+            INFO(LogModelImporter, "    Roughness: {:.3f}", roughness);
+        }
+        // Query diffuse texture from FBX
+        if (ai_mat->GetTextureCount(aiTextureType_DIFFUSE) > 0) {
+            aiString tex_path;
+            if (AI_SUCCESS == ai_mat->GetTexture(aiTextureType_DIFFUSE, 0, &tex_path)) {
+                INFO(LogModelImporter, "    DiffuseTexture: {}", tex_path.C_Str());
+            }
+        }
+        
         // Look up MTL data
         const MtlMaterial* mtl_mat = nullptr;
         if (!mtl_materials.empty()) {
@@ -430,7 +456,11 @@ std::shared_ptr<Mesh> ModelImporter::process_mesh(
             }
         }
         
-        out_material = get_or_create_material(mat_name_str, ai_mat, mtl_mat, index);
+
+        
+        // Use mesh's material index for consistent material caching
+        int mat_index = (mesh->mMaterialIndex >= 0) ? static_cast<int>(mesh->mMaterialIndex) : index;
+        out_material = get_or_create_material(mat_name_str, ai_mat, mtl_mat, mat_index);
     }
     
     return mesh_asset;
@@ -449,7 +479,9 @@ std::shared_ptr<Material> ModelImporter::get_or_create_material(
     const MtlMaterial* mtl_mat,
     int mesh_index) {
     
-    std::string cache_key = mat_name + "_mesh_" + std::to_string(mesh_index);
+    // Use material index from aiMesh for cache key to ensure consistent mapping
+    // This ensures meshes with the same material share the same material instance
+    std::string cache_key = mat_name + "_mat_" + std::to_string(mesh_index);
     
     // Check cache first (importer-local cache)
     auto cache_it = material_cache_.find(cache_key);
@@ -457,7 +489,7 @@ std::shared_ptr<Material> ModelImporter::get_or_create_material(
         return cache_it->second;
     }
     
-    // Deterministic UID for material (include mesh_index for uniqueness)
+    // Deterministic UID for material (based on material index for consistency)
     UID mat_uid = generate_sub_asset_uid(cache_key, "material");
     
     std::string base_path = !virtual_path_.empty() ? virtual_path_ : source_path_.string();
@@ -516,8 +548,14 @@ std::shared_ptr<Material> ModelImporter::get_or_create_material(
     if (mat_type == ModelMaterialType::PBR) {
         auto pbr_mat = std::dynamic_pointer_cast<PBRMaterial>(material);
         if (pbr_mat) {
-            pbr_mat->set_roughness(0.5f);
-            pbr_mat->set_metallic(0.0f);
+            // Use R and M fields from PBR workflow
+            if (mtl_mat) {
+                pbr_mat->set_roughness(mtl_mat->roughness);
+                pbr_mat->set_metallic(mtl_mat->metallic);
+            } else {
+                pbr_mat->set_roughness(0.5f);
+                pbr_mat->set_metallic(0.0f);
+            }
         }
     }
     if (mtl_mat && !mtl_mat->diffuse_map.empty()) {
@@ -638,17 +676,34 @@ std::shared_ptr<Texture> ModelImporter::load_material_texture(aiMaterial* mat, a
             return cache_it->second;
         }
 
-        // Try find file
         std::filesystem::path found_path;
         if (auto p = safe_path_from_string(texture_name)) {
-            std::filesystem::path try_path = output_dir_ / *p;
-            if (std::filesystem::exists(try_path)) found_path = try_path;
+            // FBX 路径策略：准备多种可能的路径进行尝试
+            std::vector<std::filesystem::path> try_paths = {
+                *p,                              // 1. 尝试原始路径 (如果是相对路径或是恰好存在的绝对路径)
+                output_dir_ / *p,                // 2. 尝试相对于模型所在目录
+                output_dir_ / p->filename()      // 3. [FBX关键] 忽略原路径的目录，只用文件名在模型同级目录找
+            };
+
+            for (auto try_path : try_paths) {
+                // 补上缺失的 PNG 强制转换逻辑
+                if (settings_.force_png_texture) {
+                    try_path.replace_extension(".png");
+                }
+                
+                if (std::filesystem::exists(try_path)) {
+                    found_path = try_path;
+                    break; // 找到了就跳出
+                }
+            }
         }
 
-        if (found_path.empty()) continue;
+        if (found_path.empty()) {
+            WARN(LogModelImporter, "Failed to find texture for: {}", texture_name);
+            continue; // 尝试下一个索引
+        }
         
         auto texture = std::make_shared<Texture>(found_path.string());
-        // Texture constructor already sets UID from path and marks dirty
         texture_cache_[texture_name] = texture;
         return texture;
     }
