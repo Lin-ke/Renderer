@@ -18,7 +18,7 @@ struct CommandListInfo {
     RHICommandPoolRef pool;
     RHICommandContextRef context;
 
-    bool bypass = true;
+    bool bypass = false;
 };
 
 // RHICommand Base Structs

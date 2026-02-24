@@ -244,6 +244,7 @@ RHIGraphicsPipelineRef pipeline = backend->create_graphics_pipeline(info);
 
 ## Agent工作流
 
+0.  按需读取./docs
 1. **编码**：遵循代码风格，禁止占位符
 2. **测试**：在 `test/` 编写测试用例
 3. **验证**：`xmake run utest` 直到通过
@@ -251,3 +252,8 @@ RHIGraphicsPipelineRef pipeline = backend->create_graphics_pipeline(info);
    - "I have": 做了什么
    - "I omitted": 省略了什么及理由
    - 更新AGENTS.md（如必要）
+
+
+## Docs
+Test格式（写Test前必看）
+Asset 系统（写Asset前必看）

@@ -32,6 +32,7 @@ enum class MaterialType {
     Base = 0,
     PBR = 1,
     NPR = 2,
+    Skybox = 3,
 };
 
 class Texture;
