@@ -33,6 +33,9 @@ World& World::get() {
 }
 
 void World::set_active_scene(std::shared_ptr<Scene> scene) {
+    if (active_scene_ == scene) {
+        return;
+    }
     active_scene_ = scene;
     INFO(LogWorld, "Active scene set, entity count: {}", 
          scene ? scene->entities_.size() : 0);

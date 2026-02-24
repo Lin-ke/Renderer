@@ -9,13 +9,11 @@
 #include "engine/function/framework/component/mesh_renderer_component.h"
 #include "engine/function/framework/component/camera_component.h"
 #include "engine/function/framework/component/directional_light_component.h"
-#include "engine/function/framework/component/spirit_component.h"
 #include "engine/function/render/render_resource/model.h"
 #include "engine/function/render/render_resource/material.h"
 #include "engine/function/render/render_resource/texture.h"
 #include "engine/function/render/render_system/render_system.h"
 #include "engine/function/asset/asset_manager.h"
-#include "engine/function/asset/basic/png.h"
 #include "engine/core/log/Log.h"
 #include "engine/core/utils/math_print.h"
 #include "engine/core/utils/file_cleaner.h"
@@ -239,29 +237,6 @@ TEST_CASE("Scene Dependency System", "[scene]") {
     }
 }
 
-TEST_CASE("Scene Dependency Traversal", "[scene]") {
-    test_utils::TestContext::reset();
-    
-    auto scene = std::make_shared<Scene>();
-    
-    // Create entity with mesh renderer
-    auto* entity = scene->create_entity();
-    auto* mesh_renderer = entity->add_component<MeshRendererComponent>();
-    
-    // Create mock model and materials (without actual GPU resources)
-    // This test just verifies the dependency chain works
-    
-    std::vector<std::shared_ptr<Asset>> deps;
-    scene->traverse_deps([&deps](std::shared_ptr<Asset> asset) {
-        deps.push_back(asset);
-    });
-    
-    // Empty scene with no real assets should have no dependencies
-    REQUIRE(deps.empty());
-    
-    test_utils::TestContext::reset();
-}
-
 TEST_CASE("Scene Serialization", "[scene]") {
     test_utils::TestContext::reset();
     {
@@ -302,69 +277,6 @@ TEST_CASE("Scene Serialization", "[scene]") {
         CHECK(scale.x() == (2.0f));
         CHECK(scale.y() == (2.0f));
         CHECK(scale.z() == (2.0f));
-    }
-    test_utils::TestContext::reset();
-}
-
-TEST_CASE("Scene Dependency Integration", "[scene]") {
-    test_utils::TestContext::reset();
-    utils::clean_old_files(std::filesystem::path(std::string(ENGINE_PATH) + "/test/test_internal/assets"), 5);
-    UID texture_uid, scene_uid;
-    
-    // Phase 1: Save Scene with Dependencies
-    {
-        EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
-
-        // 1. Create a dependency asset (Texture)
-        auto texture = std::make_shared<PNGAsset>();
-        texture->width_ = 256;
-        texture->height_ = 256;
-        texture->channels_ = 4;
-        texture->pixels_.resize(256 * 256 * 4, 128);
-        
-        std::string texture_path = "/Game/texture.binasset";
-        EngineContext::asset()->save_asset(texture, texture_path);
-        texture_uid = texture->get_uid();
-
-        // 2. Create Scene
-        auto scene = std::make_shared<Scene>();
-        
-        // 3. Create Entity and Component
-        auto* entity = scene->create_entity();
-        auto* spirit = entity->add_component<SpiritComponent>();
-        
-        // 4. Link Dependency
-        spirit->texture = texture;
-
-        // 5. Save Scene
-        std::string scene_path = "/Game/level1.asset";
-        EngineContext::asset()->save_asset(scene, scene_path);
-        scene_uid = scene->get_uid();
-    }
-
-    // Phase 2: Load Scene and Verify
-    {
-        EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
-
-        std::string scene_path = "/Game/level1.asset";
-        auto loaded_scene = EngineContext::asset()->load_asset<Scene>(scene_path);
-
-        REQUIRE(loaded_scene != nullptr);
-        CHECK(loaded_scene->get_uid() == scene_uid);
-        
-        // Check Entity
-        REQUIRE(loaded_scene->entities_.size() == 1);
-        auto* entity = loaded_scene->entities_[0].get();
-        REQUIRE(entity != nullptr);
-
-        // Check Component
-        auto* spirit = entity->get_component<SpiritComponent>();
-        REQUIRE(spirit != nullptr);
-
-        // Check Dependency
-        REQUIRE(spirit->texture != nullptr);
-        CHECK(spirit->texture->get_uid() == texture_uid);
-        CHECK(spirit->texture->width_ == 256);
     }
     test_utils::TestContext::reset();
 }

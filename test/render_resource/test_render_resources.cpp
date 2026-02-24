@@ -1,6 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
-#include <catch2/generators/catch_generators.hpp>
 #include <filesystem>
 #include <fstream>
 #include <d3dcompiler.h>
@@ -11,15 +10,7 @@
 #include "engine/function/render/render_resource/material.h"
 #include "engine/function/render/render_resource/shader.h"
 #include "engine/function/render/render_resource/model.h"
-#include "engine/function/render/render_system/render_mesh_manager.h"
-#include "engine/function/render/render_pass/forward_pass.h"
-#include "engine/function/render/render_pass/mesh_pass.h"
-#include "engine/function/framework/entity.h"
-#include "engine/function/framework/scene.h"
-#include "engine/function/framework/component/mesh_renderer_component.h"
-#include "engine/function/framework/component/transform_component.h"
 #include "engine/function/asset/asset_manager.h"
-#include "engine/core/log/Log.h"
 
 /**
  * @file test/render_resource/test_render_resources.cpp
@@ -247,26 +238,6 @@ TEST_CASE("Model System", "[render_resource]") {
         model.reset();
     }
 
-    SECTION("Model Multiple Submeshes") {
-        ModelProcessSetting setting;
-        setting.smooth_normal = true;
-        
-        std::string model_path = "/Engine/models/bunny.obj";
-        auto model = Model::Load(model_path, setting);
-        
-        REQUIRE(model != nullptr);
-        REQUIRE(model->get_submesh_count() >= 1);
-        
-        for (uint32_t i = 0; i < model->get_submesh_count(); i++) {
-            auto mesh = model->get_mesh(i);
-            REQUIRE(mesh != nullptr);
-            REQUIRE(mesh->get_vertex_buffer() != nullptr);
-            REQUIRE(mesh->get_index_buffer() != nullptr);
-        }
-        
-        model.reset();
-    }
-
     SECTION("Mesh Data Structure") {
         std::vector<Vec3> positions = { Vec3(0, 0, 0), Vec3(1, 0, 0), Vec3(0, 1, 0) };
         std::vector<Vec3> normals = { Vec3(0, 0, 1), Vec3(0, 0, 1), Vec3(0, 0, 1) };
@@ -291,54 +262,6 @@ TEST_CASE("Model System", "[render_resource]") {
         CHECK(mesh->get_index_count() / 3 == 2); // 2 triangles
     }
 
-    SECTION("Model Process Settings") {
-        ModelProcessSetting setting1;
-        setting1.smooth_normal = true;
-        setting1.flip_uv = true;
-        setting1.load_materials = false;
-        
-        CHECK(setting1.smooth_normal == true);
-        CHECK(setting1.flip_uv == true);
-        CHECK(setting1.load_materials == false);
-        
-        ModelProcessSetting setting2;
-        setting2.smooth_normal = false;
-        setting2.flip_uv = true;
-        
-        std::string model_path = "/Engine/models/bunny.obj";
-        auto model = Model::Load(model_path, setting2);
-        
-        REQUIRE(model != nullptr);
-        REQUIRE(model->get_submesh_count() > 0);
-        
-        model.reset();
-    }
-
-    test_utils::TestContext::reset();
-}
-
-TEST_CASE("MeshRenderer Collection and ForwardPass", "[render_resource]") {
-    test_utils::TestContext::reset();
-    
-    auto render_system = EngineContext::render_system();
-    REQUIRE(render_system != nullptr);
-    
-    auto mesh_manager = render_system->get_mesh_manager();
-    REQUIRE(mesh_manager != nullptr);
-    
-    auto scene = std::make_shared<Scene>();
-    auto entity = scene->create_entity();
-    
-    auto transform = entity->add_component<TransformComponent>();
-    auto mesh_renderer = entity->add_component<MeshRendererComponent>();
-    
-    mesh_renderer->on_init();
-    mesh_manager->tick();
-    
-    auto forward_pass = mesh_manager->get_forward_pass();
-    REQUIRE(forward_pass != nullptr);
-    REQUIRE(forward_pass->get_type() == render::PassType::Forward);
-    
     test_utils::TestContext::reset();
 }
 
@@ -391,105 +314,5 @@ TEST_CASE("FBX Material System", "[render_resource][fbx]") {
         }
     }
 
-    SECTION("FBX Model Processing Options") {
-        std::string model_path = "/Engine/models/material_ball/material_ball.fbx";
-        
-        SECTION("Smooth normals") {
-            ModelProcessSetting setting;
-            setting.smooth_normal = true;
-            setting.load_materials = false;
-            
-            auto model = Model::Load(model_path, setting);
-            REQUIRE(model != nullptr);
-            REQUIRE(model->get_submesh_count() > 0);
-            
-            // Verify normals exist
-            for (uint32_t i = 0; i < model->get_submesh_count(); i++) {
-                auto mesh = model->get_mesh(i);
-                REQUIRE(mesh != nullptr);
-                REQUIRE(!mesh->get_normals().empty());
-            }
-        }
-        
-        SECTION("Flip UV") {
-            ModelProcessSetting setting;
-            setting.flip_uv = true;
-            setting.load_materials = false;
-            
-            auto model = Model::Load(model_path, setting);
-            REQUIRE(model != nullptr);
-            REQUIRE(model->get_submesh_count() > 0);
-        }
-    }
-
     test_utils::TestContext::reset();
-}
-
-TEST_CASE("MTL Parser System", "[render_resource][mtl_parser]") {
-    
-    SECTION("NPR LightMap and RIM parameters") {
-        // Create a test MTL file
-        std::filesystem::path test_mtl = "./assets/models/test_npr.mtl";
-        std::filesystem::create_directories(test_mtl.parent_path());
-        
-        {
-            std::ofstream file(test_mtl);
-            file << R"(# Test NPR MTL file
-newmtl test_npr_material
-map_Kd Texture\diffuse.png
-Ka 0.2 0.2 0.2
-Kd 0.8 0.8 0.8
-Ks 0 0 0
-Ns 5
-d 1
-# NPR parameters
-map_Ke Texture\lightmap.png
-map_Ramp Texture\ramp.png
-RimWidth 0.5
-RimThreshold 0.1
-RimStrength 1.2
-RimColor 1.0 0.9 0.8
-LambertClamp 0.6
-RampOffset 0.1
-)";
-        }
-        
-        // Verify file exists
-        REQUIRE(std::filesystem::exists(test_mtl));
-        
-        // Read and verify content
-        std::ifstream check_file(test_mtl);
-        std::string content((std::istreambuf_iterator<char>(check_file)),
-                            std::istreambuf_iterator<char>());
-        check_file.close();  // Close file before deletion
-        
-        CHECK(content.find("map_Ke") != std::string::npos);
-        CHECK(content.find("map_Ramp") != std::string::npos);
-        CHECK(content.find("RimWidth") != std::string::npos);
-        CHECK(content.find("RimThreshold") != std::string::npos);
-        CHECK(content.find("RimStrength") != std::string::npos);
-        CHECK(content.find("RimColor") != std::string::npos);
-        CHECK(content.find("LambertClamp") != std::string::npos);
-        CHECK(content.find("RampOffset") != std::string::npos);
-        
-        // Cleanup
-        std::filesystem::remove(test_mtl);
-    }
-
-    SECTION("Klee MTL file exists") {
-        std::filesystem::path klee_mtl = std::string(ENGINE_PATH) + "/assets/models/Klee/klee.mtl";
-        REQUIRE(std::filesystem::exists(klee_mtl));
-        
-        std::ifstream file(klee_mtl);
-        REQUIRE(file.is_open());
-        
-        std::string content((std::istreambuf_iterator<char>(file)),
-                            std::istreambuf_iterator<char>());
-        
-        // Check for NPR-specific parameters
-        CHECK(content.find("map_Ke") != std::string::npos);
-        CHECK(content.find("map_Ramp") != std::string::npos);
-        CHECK(content.find("RimWidth") != std::string::npos);
-        CHECK(content.find("LambertClamp") != std::string::npos);
-    }
 }

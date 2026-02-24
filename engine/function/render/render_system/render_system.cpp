@@ -688,11 +688,11 @@ bool RenderSystem::tick(const RenderPacket &packet) {
 }
 
 void RenderSystem::cleanup_for_test() {
-	WARN(LogRenderSystem, "cleanup_for_test() called, backend_={}", (void*)backend_.get());
+	// WARN(LogRenderSystem, "cleanup_for_test() called, backend_={}", (void*)backend_.get());
 	
 	// Check if backend is valid (device not destroyed)
 	if (!backend_ || !backend_->is_valid()) {
-		WARN(LogRenderSystem, "Backend is null or invalid, skipping GPU cleanup");
+		// WARN(LogRenderSystem, "Backend is null or invalid, skipping GPU cleanup");
 		// Still cleanup non-GPU state
 		if (mesh_manager_) {
 			mesh_manager_->cleanup_for_test();
