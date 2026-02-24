@@ -45,7 +45,6 @@ static bool create_and_save_npr_scene(const std::string& scene_path) {
     auto* camera = camera_ent->add_component<CameraComponent>();
     camera->set_fov(60.0f);
     camera->set_far(1000.0f);
-    camera->on_init();
     
     // Create directional light entity
     auto* light_ent = scene->create_entity();
@@ -57,7 +56,6 @@ static bool create_and_save_npr_scene(const std::string& scene_path) {
     light->set_color({1.0f, 1.0f, 1.0f});
     light->set_intensity(100.0f);
     light->set_enable(true);
-    light->on_init();
     
     // Create model entity
     auto* model_ent = scene->create_entity();
@@ -82,7 +80,6 @@ static bool create_and_save_npr_scene(const std::string& scene_path) {
     // Add MeshRendererComponent
     auto* model_mesh = model_ent->add_component<MeshRendererComponent>();
     model_mesh->set_model(npr_model);
-    model_mesh->on_init();
     
     // Auto-adjust camera to model bounding box
     auto box = npr_model->get_bounding_box();
@@ -118,153 +115,46 @@ static bool create_and_save_npr_scene(const std::string& scene_path) {
     return true;
 }
 
-/**
- * @brief Part 2: Load scene from file
- */
-static test_utils::SceneLoadResult load_npr_scene(const std::string& scene_path) {
-    INFO(LogPBRKlee, "=== Part 2: Loading Scene ===");
-    INFO(LogPBRKlee, "Loading scene from: {}", scene_path);
-    
-    // Use SceneLoader utility
-    auto result = test_utils::SceneLoader::load(scene_path, true, false);
-    
-    if (!result.success) {
-        ERR(LogPBRKlee, "Failed to load scene: {}", result.error_msg);
-        return result;
-    }
-    
-    INFO(LogPBRKlee, "Scene loaded, entities: {}", result.scene->entities_.size());
-    
-    // Enable NPR for this scene
-    if (auto mesh_manager = EngineContext::render_system()->get_mesh_manager()) {
-        mesh_manager->set_npr_enabled(true);
-        mesh_manager->set_active_camera(result.camera);
-    }
-    EngineContext::render_system()->set_prepass_enabled(true);
-    
-    EngineContext::world()->set_active_scene(result.scene);
-    
-    return result;
-}
-
-/**
- * @brief Part 3: Render frames and capture screenshot
- */
-static bool render_npr_frames(CameraComponent* camera, Scene* scene, 
-                               std::vector<uint8_t>& screenshot_data, 
-                               uint32_t screenshot_width, uint32_t screenshot_height,
-                               int& out_frames) {
-    INFO(LogPBRKlee, "=== Part 3: Rendering ===");
-    
-    int frames = 0;
-    bool screenshot_taken = false;
-    
-    while (frames < 60) {
-        Input::get_instance().tick();
-        EngineContext::world()->tick(0.016f);
-        
-        RenderPacket packet;
-        packet.active_camera = camera;
-        packet.active_scene = scene;
-        packet.frame_index = frames % 2;
-        
-        bool should_continue = EngineContext::render_system()->tick(packet);
-        if (!should_continue) break;
-        
-        frames++;
-        
-        // Take screenshot on frame 45
-        if (frames == 45 && !screenshot_taken) {
-            auto swapchain = EngineContext::render_system()->get_swapchain();
-            if (swapchain) {
-                uint32_t current_frame = swapchain->get_current_frame_index();
-                RHITextureRef back_buffer = swapchain->get_texture(current_frame);
-                if (back_buffer) {
-                    auto backend = EngineContext::rhi();
-                    auto pool = backend->create_command_pool({});
-                    auto context = backend->create_command_context(pool);
-                    
-                    context->begin_command();
-                    context->end_command();
-                    auto fence = backend->create_fence(false);
-                    context->execute(fence, nullptr, nullptr);
-                    fence->wait();
-                    
-                    if (context->read_texture(back_buffer, screenshot_data.data(), screenshot_data.size())) {
-                        screenshot_taken = true;
-                        INFO(LogPBRKlee, "Screenshot captured at frame {}", frames);
-                    }
-                }
-            }
-        }
-        
-        std::this_thread::sleep_for(std::chrono::milliseconds(16));
-    }
-    
-    out_frames = frames;
-    INFO(LogPBRKlee, "Rendering complete, total frames: {}", frames);
-    return screenshot_taken;
-}
-
 TEST_CASE("Render NPR Model", "[draw][npr]") {
+    // Reset test state (Engine is already initialized by test_main.cpp)
+    test_utils::TestContext::reset();
+    
     std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
-    
-    std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Asset);
-    mode.set(EngineContext::StartMode::Window);
-    mode.set(EngineContext::StartMode::Render);
-    mode.set(EngineContext::StartMode::SingleThread);
-    
-    EngineContext::init(mode);
-    EngineContext::asset()->init(test_asset_dir);
     
     REQUIRE(EngineContext::rhi() != nullptr);
     REQUIRE(EngineContext::render_system() != nullptr);
     REQUIRE(EngineContext::world() != nullptr);
     
-    // ============================================================================
-    // Part 1: Create Scene (Comment this out after first run to skip creation)
-    // ============================================================================
-    // bool create_success = create_and_save_npr_scene(SCENE_SAVE_PATH);
-    // REQUIRE(create_success);
-    
-    // ============================================================================
-    // Part 2: Load Scene
-    // ============================================================================
-    auto result = load_npr_scene(SCENE_SAVE_PATH);
-    REQUIRE(result.success);
-    REQUIRE(result.camera != nullptr);
-    REQUIRE(result.scene != nullptr);
-    
-    // ============================================================================
-    // Part 3: Render
-    // ============================================================================
-    const uint32_t screenshot_width = 1280;
-    const uint32_t screenshot_height = 720;
-    std::vector<uint8_t> screenshot_data(screenshot_width * screenshot_height * 4);
-    
+    test_utils::RenderTestApp::Config config;
+    config.scene_path = SCENE_SAVE_PATH;
+    config.width = 1280;
+    config.height = 720;
+    config.max_frames = 60;
+    config.capture_frame = 45;
+    config.create_scene_func = create_and_save_npr_scene;
+    config.on_scene_loaded_func = [](test_utils::SceneLoadResult& result) {
+        if (auto mesh_manager = EngineContext::render_system()->get_mesh_manager()) {
+            mesh_manager->set_npr_enabled(true);
+            mesh_manager->set_active_camera(result.camera);
+        }
+    };
+
+    std::vector<uint8_t> screenshot_data;
     int frames = 0;
-    bool screenshot_taken = render_npr_frames(
-        result.camera, 
-        result.scene.get(), 
-        screenshot_data, 
-        screenshot_width, 
-        screenshot_height,
-        frames
-    );
+    bool screenshot_taken = test_utils::RenderTestApp::run(config, screenshot_data, &frames);
     
     CHECK(frames > 0);
     
     // Save screenshot
     if (screenshot_taken) {
         std::string screenshot_path = test_asset_dir + "/klee_npr_screenshot.png";
-        if (test_utils::save_screenshot_png(screenshot_path, screenshot_width, screenshot_height, screenshot_data)) {
+        if (test_utils::save_screenshot_png(screenshot_path, config.width, config.height, screenshot_data)) {
             float brightness = test_utils::calculate_average_brightness(screenshot_data);
             INFO(LogPBRKlee, "Screenshot saved: {} (brightness: {:.1f})", screenshot_path, brightness);
             CHECK(brightness > 0.0f);
         }
     }
     
-    EngineContext::world()->set_active_scene(nullptr);
-    EngineContext::exit();
+    // Reset state for next test
+    test_utils::TestContext::reset();
 }

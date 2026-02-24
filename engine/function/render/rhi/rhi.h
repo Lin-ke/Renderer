@@ -106,6 +106,9 @@ public:
     virtual std::vector<uint8_t> compile_shader(const char* source, const char* entry, const char* profile) = 0;
 
     const RHIBackendInfo& get_backend_info() const { return backend_info_; }
+    
+    // Check if backend is valid (device/context not destroyed)
+    virtual bool is_valid() const { return true; }
 
 protected:
     RHIBackend() = delete;

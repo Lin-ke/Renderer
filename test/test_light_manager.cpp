@@ -2,6 +2,7 @@
 #include <catch2/catch_approx.hpp>
 #include "engine/main/engine_context.h"
 #include "engine/function/render/render_system/render_light_manager.h"
+#include "test/test_utils.h"
 #include "engine/function/framework/component/directional_light_component.h"
 #include "engine/function/framework/component/point_light_component.h"
 #include "engine/function/framework/component/transform_component.h"
@@ -15,6 +16,7 @@
  */
 
 TEST_CASE("RenderLightManager Basic Lifecycle", "[light]") {
+    test_utils::TestContext::reset();
     auto light_manager = std::make_shared<RenderLightManager>();
     
     // Test initialization
@@ -31,10 +33,11 @@ TEST_CASE("RenderLightManager Basic Lifecycle", "[light]") {
     
     // Test destroy
     light_manager->destroy();
+    test_utils::TestContext::reset();
 }
 
 TEST_CASE("DirectionalLightComponent Creation and Properties", "[light]") {
-    EngineContext::init(1 << EngineContext::StartMode::Asset);
+    test_utils::TestContext::reset();
     
     auto scene = std::make_shared<Scene>();
     auto entity = scene->create_entity();
@@ -76,12 +79,11 @@ TEST_CASE("DirectionalLightComponent Creation and Properties", "[light]") {
     // Test bias getters
     CHECK(light->get_constant_bias() == Catch::Approx(1.0f));
     CHECK(light->get_slope_bias() == Catch::Approx(5.0f));
-    
-    EngineContext::exit();
+    test_utils::TestContext::reset();
 }
 
 TEST_CASE("PointLightComponent Creation and Properties", "[light]") {
-    EngineContext::init(1 << EngineContext::StartMode::Asset);
+    test_utils::TestContext::reset();
     
     auto scene = std::make_shared<Scene>();
     auto entity = scene->create_entity();
@@ -131,16 +133,15 @@ TEST_CASE("PointLightComponent Creation and Properties", "[light]") {
     
     light->set_point_shadow_id(5);
     CHECK(light->point_shadow_id_ == 5);
-    
-    EngineContext::exit();
+    test_utils::TestContext::reset();
 }
 
 TEST_CASE("Light Component Serialization", "[light]") {
+    test_utils::TestContext::reset();
     std::string scene_path = "/Game/test_light_scene.asset";
     
     // Phase 1: Save scene with lights
     {
-        EngineContext::init(1 << EngineContext::StartMode::Asset);
         EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
         
         auto scene = std::make_shared<Scene>();
@@ -168,12 +169,10 @@ TEST_CASE("Light Component Serialization", "[light]") {
         point_light->set_scale(20.0f);
         
         EngineContext::asset()->save_asset(scene, scene_path);
-        EngineContext::exit();
     }
     
     // Phase 2: Load and verify
     {
-        EngineContext::init(1 << EngineContext::StartMode::Asset);
         EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
         
         auto loaded_scene = EngineContext::asset()->load_asset<Scene>(scene_path);
@@ -211,13 +210,12 @@ TEST_CASE("Light Component Serialization", "[light]") {
         CHECK(point_color.z() == Catch::Approx(1.0f).margin(0.05f));
         CHECK(loaded_point_light->get_intensity() == Catch::Approx(2.5f).margin(0.01f));
         CHECK(loaded_point_light->cast_shadow() == false);
-        
-        EngineContext::exit();
     }
+    test_utils::TestContext::reset();
 }
 
 TEST_CASE("Light Component Update Methods", "[light]") {
-    EngineContext::init(1 << EngineContext::StartMode::Asset);
+    test_utils::TestContext::reset();
     
     auto scene = std::make_shared<Scene>();
     auto entity = scene->create_entity();
@@ -246,12 +244,11 @@ TEST_CASE("Light Component Update Methods", "[light]") {
     CHECK(bounding_sphere.center.x() == Catch::Approx(4.0f));
     CHECK(bounding_sphere.center.y() == Catch::Approx(5.0f));
     CHECK(bounding_sphere.center.z() == Catch::Approx(6.0f));
-    
-    EngineContext::exit();
+    test_utils::TestContext::reset();
 }
 
 TEST_CASE("Multiple Point Lights Management", "[light]") {
-    EngineContext::init(1 << EngineContext::StartMode::Asset);
+    test_utils::TestContext::reset();
     
     auto scene = std::make_shared<Scene>();
     std::vector<PointLightComponent*> point_lights;
@@ -286,6 +283,5 @@ TEST_CASE("Multiple Point Lights Management", "[light]") {
         CHECK(color.z() == Catch::Approx(0.5f));
         CHECK(point_lights[i]->get_intensity() == Catch::Approx(1.0f + static_cast<float>(i)));
     }
-    
-    EngineContext::exit();
+    test_utils::TestContext::reset();
 }

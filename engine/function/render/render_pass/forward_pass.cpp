@@ -340,6 +340,77 @@ void ForwardPass::build(RDGBuilder& builder) {
         .finish();
 }
 
+void ForwardPass::build(RDGBuilder& builder, RDGTextureHandle color_target,
+                        std::optional<RDGTextureHandle> depth_target,
+                        const std::vector<DrawBatch>& batches) {
+    if (!initialized_ || !pipeline_ || batches.empty()) {
+        return;
+    }
+    
+    // Update per-frame buffer if dirty
+    if (per_frame_buffer_ && per_frame_dirty_) {
+        void* mapped = per_frame_buffer_->map();
+        if (mapped) {
+            memcpy(mapped, &per_frame_data_, sizeof(per_frame_data_));
+            per_frame_buffer_->unmap();
+        }
+        per_frame_dirty_ = false;
+    }
+    
+    // Create render pass
+    auto rp_builder = builder.create_render_pass("ForwardPass_RDG")
+        .color(0, color_target, ATTACHMENT_LOAD_OP_LOAD, ATTACHMENT_STORE_OP_STORE);
+    
+    // Add depth attachment if available
+    if (depth_target.has_value()) {
+        rp_builder.depth_stencil(depth_target.value(), ATTACHMENT_LOAD_OP_LOAD,
+                                 ATTACHMENT_STORE_OP_DONT_CARE, 1.0f, 0);
+    }
+    
+    // Capture batches and this pointer for execute lambda
+    rp_builder.execute([this, batches](RDGPassContext context) {
+        RHICommandListRef cmd = context.command;
+        if (!cmd) return;
+        
+        cmd->set_graphics_pipeline(pipeline_);
+        
+        if (per_frame_buffer_) {
+            cmd->bind_constant_buffer(per_frame_buffer_, 0,
+                static_cast<ShaderFrequency>(SHADER_FREQUENCY_VERTEX | SHADER_FREQUENCY_FRAGMENT));
+        }
+        
+        for (const auto& batch : batches) {
+            // Per-object data
+            if (per_object_buffer_) {
+                PerObjectData object_data;
+                object_data.model = batch.model_matrix;
+                object_data.inv_model = batch.inv_model_matrix;
+                void* mapped = per_object_buffer_->map();
+                if (mapped) {
+                    memcpy(mapped, &object_data, sizeof(object_data));
+                    per_object_buffer_->unmap();
+                }
+                cmd->bind_constant_buffer(per_object_buffer_, 1, SHADER_FREQUENCY_VERTEX);
+            }
+            
+            // Bind vertex buffers
+            if (batch.vertex_buffer) {
+                cmd->bind_vertex_buffer(batch.vertex_buffer, 0, 0);
+            }
+            if (batch.normal_buffer) {
+                cmd->bind_vertex_buffer(batch.normal_buffer, 1, 0);
+            }
+            
+            // Draw
+            if (batch.index_buffer) {
+                cmd->bind_index_buffer(batch.index_buffer, 0);
+                cmd->draw_indexed(batch.index_count, 1, batch.index_offset, 0, 0);
+            }
+        }
+    })
+    .finish();
+}
+
 void ForwardPass::draw_batch(RHICommandContextRef command, const DrawBatch& batch) {
     if (!command || !pipeline_ || !batch.vertex_buffer || !batch.index_buffer || batch.index_count == 0) {
         ERR(LogForwardPass, "draw_batch: invalid parameters");

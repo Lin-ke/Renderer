@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include "test/test_utils.h"
 #include "engine/main/engine_context.h"
 #include "engine/function/render/render_system/render_mesh_manager.h"
 #include "engine/function/render/render_pass/forward_pass.h"
@@ -14,13 +15,7 @@
  */
 
 TEST_CASE("MeshRenderer Collection and ForwardPass", "[render_resource]") {
-    std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Asset);
-    mode.set(EngineContext::StartMode::Window);
-    mode.set(EngineContext::StartMode::Render);
-    mode.set(EngineContext::StartMode::SingleThread);
-    
-    EngineContext::init(mode);
+    test_utils::TestContext::reset();
     
     auto render_system = EngineContext::render_system();
     REQUIRE(render_system != nullptr);
@@ -41,5 +36,5 @@ TEST_CASE("MeshRenderer Collection and ForwardPass", "[render_resource]") {
     REQUIRE(forward_pass != nullptr);
     REQUIRE(forward_pass->get_type() == render::PassType::Forward);
     
-    EngineContext::exit();
+    test_utils::TestContext::reset();
 }

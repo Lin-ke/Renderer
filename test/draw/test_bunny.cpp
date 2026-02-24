@@ -39,7 +39,6 @@ static bool create_and_save_bunny_scene(const std::string& scene_path) {
     
     auto* camera = camera_ent->add_component<CameraComponent>();
     camera->set_fov(60.0f);
-    camera->on_init();
     
     // Create directional light entity
     auto* light_ent = scene->create_entity();
@@ -51,7 +50,6 @@ static bool create_and_save_bunny_scene(const std::string& scene_path) {
     light->set_color({1.0f, 1.0f, 1.0f});
     light->set_intensity(1.5f);
     light->set_enable(true);
-    light->on_init();
     
     // Create bunny entity
     auto* bunny_ent = scene->create_entity();
@@ -84,7 +82,6 @@ static bool create_and_save_bunny_scene(const std::string& scene_path) {
     bunny_mat->set_roughness(0.2f);
     bunny_mat->set_metallic(0.8f);
     bunny_renderer->set_material(bunny_mat);
-    bunny_renderer->on_init();
     
     // Save scene
     INFO(LogBunnyRender, "Saving scene to: {}", scene_path);
@@ -106,152 +103,47 @@ static bool create_and_save_bunny_scene(const std::string& scene_path) {
     return true;
 }
 
-/**
- * @brief Part 2: Load scene from file and render
- */
-static test_utils::SceneLoadResult load_bunny_scene(const std::string& scene_path) {
-    INFO(LogBunnyRender, "=== Part 2: Loading Scene ===");
-    INFO(LogBunnyRender, "Loading scene from: {}", scene_path);
-    
-    // Use SceneLoader utility for all loading logic
-    auto result = test_utils::SceneLoader::load(scene_path, true, true);
-    
-    if (!result.success) {
-        ERR(LogBunnyRender, "Failed to load scene: {}", result.error_msg);
-    } else {
-        INFO(LogBunnyRender, "Scene loaded successfully, entities: {}", result.scene->entities_.size());
-    }
-    
-    return result;
-}
-
-/**
- * @brief Part 3: Render frames and capture screenshot
- */
-static bool render_bunny_frames(CameraComponent* camera, Scene* scene,
-                                 std::vector<uint8_t>& screenshot_data,
-                                 uint32_t screenshot_width, uint32_t screenshot_height,
-                                 int& out_frames) {
-    INFO(LogBunnyRender, "=== Part 3: Rendering ===");
-    
-    int frames = 0;
-    bool screenshot_taken = false;
-    
-    while (frames < 60) {
-        Input::get_instance().tick();
-        EngineContext::world()->tick(0.016f);
-        
-        RenderPacket packet;
-        packet.active_camera = camera;
-        packet.active_scene = scene;
-        
-        bool should_continue = EngineContext::render_system()->tick(packet);
-        if (!should_continue) break;
-        
-        frames++;
-        
-        // Take screenshot on frame 30
-        if (frames == 30 && !screenshot_taken) {
-            auto swapchain = EngineContext::render_system()->get_swapchain();
-            if (swapchain) {
-                uint32_t current_frame = swapchain->get_current_frame_index();
-                RHITextureRef back_buffer = swapchain->get_texture(current_frame);
-                if (back_buffer) {
-                    auto backend = EngineContext::rhi();
-                    auto pool = backend->create_command_pool({});
-                    auto context = backend->create_command_context(pool);
-                    
-                    context->begin_command();
-                    context->end_command();
-                    auto fence = backend->create_fence(false);
-                    context->execute(fence, nullptr, nullptr);
-                    fence->wait();
-                    
-                    if (context->read_texture(back_buffer, screenshot_data.data(), screenshot_data.size())) {
-                        screenshot_taken = true;
-                        INFO(LogBunnyRender, "Screenshot captured at frame {}", frames);
-                    }
-                }
-            }
-        }
-        
-        std::this_thread::sleep_for(std::chrono::milliseconds(16));
-    }
-    
-    out_frames = frames;
-    INFO(LogBunnyRender, "Rendering complete, total frames: {}", frames);
-    return screenshot_taken;
-}
-
 TEST_CASE("Render Bunny Model", "[draw][bunny]") {
+    // Reset test state (Engine is already initialized by test_main.cpp)
+    test_utils::TestContext::reset();
+    
     std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
-    
-    std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Asset);
-    mode.set(EngineContext::StartMode::Window);
-    mode.set(EngineContext::StartMode::Render);
-    mode.set(EngineContext::StartMode::SingleThread);
-    
-    EngineContext::init(mode);
-    EngineContext::asset()->init(test_asset_dir);
     
     REQUIRE(EngineContext::rhi() != nullptr);
     REQUIRE(EngineContext::render_system() != nullptr);
     REQUIRE(EngineContext::world() != nullptr);
     
-    // ============================================================================
-    // Part 1: Create Scene (Comment this out after first run to skip creation)
-    // ============================================================================
-    bool create_success = create_and_save_bunny_scene(SCENE_PATH);
-    REQUIRE(create_success);
+    test_utils::RenderTestApp::Config config;
+    config.scene_path = SCENE_PATH;
+    config.width = 1280;
+    config.height = 720;
+    config.max_frames = 60;
+    config.capture_frame = 30;
+    config.create_scene_func = create_and_save_bunny_scene;
     
-    // ============================================================================
-    // Part 2: Load Scene
-    // ============================================================================
-    auto result = load_bunny_scene(SCENE_PATH);
-    REQUIRE(result.success);
-    REQUIRE(result.camera != nullptr);
-    REQUIRE(result.scene != nullptr);
-    
-    // ============================================================================
-    // Part 3: Render
-    // ============================================================================
-    const uint32_t screenshot_width = 1280;
-    const uint32_t screenshot_height = 720;
-    std::vector<uint8_t> screenshot_data(screenshot_width * screenshot_height * 4);
-    
+    std::vector<uint8_t> screenshot_data;
     int frames = 0;
-    bool screenshot_taken = render_bunny_frames(
-        result.camera,
-        result.scene.get(),
-        screenshot_data,
-        screenshot_width,
-        screenshot_height,
-        frames
-    );
+    bool screenshot_taken = test_utils::RenderTestApp::run(config, screenshot_data, &frames);
     
     CHECK(frames > 0);
     
     // Save screenshot
     if (screenshot_taken) {
         std::string screenshot_path = test_asset_dir + "/bunny_screenshot.png";
-        if (test_utils::save_screenshot_png(screenshot_path, screenshot_width, screenshot_height, screenshot_data)) {
+        if (test_utils::save_screenshot_png(screenshot_path, config.width, config.height, screenshot_data)) {
             float brightness = test_utils::calculate_average_brightness(screenshot_data);
             INFO(LogBunnyRender, "Screenshot saved: {} (brightness: {:.1f})", screenshot_path, brightness);
             CHECK(brightness > 1.0f);
         }
     }
     
-    EngineContext::world()->set_active_scene(nullptr);
-    EngineContext::exit();
+    // Reset state for next test
+    test_utils::TestContext::reset();
 }
 
 TEST_CASE("Camera Movement", "[draw][bunny]") {
-    std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Asset);
-    mode.set(EngineContext::StartMode::SingleThread);
-    
-    EngineContext::init(mode);
+    // Reset test state (Engine is already initialized by test_main.cpp)
+    test_utils::TestContext::reset();
     
     auto scene = std::make_shared<Scene>();
     
@@ -268,5 +160,6 @@ TEST_CASE("Camera Movement", "[draw][bunny]") {
     
     REQUIRE(cam_comp->get_position() == final_pos);
     
-    EngineContext::exit();
+    // Reset state for next test
+    test_utils::TestContext::reset();
 }

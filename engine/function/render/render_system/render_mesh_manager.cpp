@@ -6,6 +6,7 @@
 #include "engine/function/framework/world.h"
 #include "engine/main/engine_context.h"
 #include "engine/function/render/render_system/render_system.h"
+#include "engine/function/render/render_pass/forward_pass.h"
 #include "engine/function/render/render_pass/pbr_forward_pass.h"
 #include "engine/function/render/render_pass/npr_forward_pass.h"
 #include "engine/function/render/render_resource/material.h"
@@ -130,104 +131,19 @@ void RenderMeshManager::collect_draw_batches(std::vector<render::DrawBatch>& bat
     }
 }
 
-void RenderMeshManager::render_batches(RHICommandContextRef context, RHITextureViewRef back_buffer_view, Extent2D extent) {
-    if (!context || !back_buffer_view) {
-        ERR(LogRenderMeshManager, "Invalid context or back buffer view");
-        return;
-    }
+void RenderMeshManager::cleanup_for_test() {
+    // Clear registered mesh renderers
+    mesh_renderers_.clear();
     
-    if (!active_camera_) {
-        WARN(LogRenderMeshManager, "No active camera, skipping render");
-        return;
-    }
+    // Clear current batches
+    current_batches_.clear();
     
-    Vec3 light_dir = Vec3(0.0f, -1.0f, 0.0f);
-    Vec3 light_color = Vec3(1.0f, 1.0f, 1.0f);
-    float light_intensity = 1.0f;
+    // Reset active camera
+    active_camera_ = nullptr;
     
-    auto* world = EngineContext::world();
-    if (world && world->get_active_scene()) {
-        for (auto& entity : world->get_active_scene()->entities_) {
-            if (!entity) continue;
-            auto* light = entity->get_component<DirectionalLightComponent>();
-            if (light && light->enable()) {
-                auto* transform = entity->get_component<TransformComponent>();
-                if (transform) {
-                    light_dir = -transform->transform.front();
-                }
-                light_color = light->get_color();
-                light_intensity = light->get_intensity();
-                break;
-            }
-        }
-    }
-    
-    context->set_viewport({0, 0}, {extent.width, extent.height});
-    context->set_scissor({0, 0}, {extent.width, extent.height});
-
-    std::vector<render::DrawBatch> npr_batches;
-    std::vector<render::DrawBatch> pbr_batches;
-    std::vector<render::DrawBatch> forward_batches;
-    
-    for (const auto& batch : current_batches_) {
-        if (batch.material) {
-            auto mask = batch.material->render_pass_mask();
-            if (mask & PASS_MASK_NPR_FORWARD) {
-                npr_batches.push_back(batch);
-            } else if (mask & PASS_MASK_PBR_FORWARD) {
-                pbr_batches.push_back(batch);
-            } else {
-                forward_batches.push_back(batch);
-            }
-        } else {
-            forward_batches.push_back(batch);
-        }
-    }
-    
-    if (!npr_batches.empty() && npr_forward_pass_ && npr_forward_pass_->is_ready()) {
-        npr_forward_pass_->set_per_frame_data(
-            active_camera_->get_view_matrix(),
-            active_camera_->get_projection_matrix(),
-            active_camera_->get_position(),
-            light_dir,
-            light_color,
-            light_intensity
-        );
-        for (const auto& batch : npr_batches) {
-            npr_forward_pass_->draw_batch(context, batch);
-        }
-    }
-    
-    if (!pbr_batches.empty() && pbr_forward_pass_ && pbr_forward_pass_->is_ready()) {
-        pbr_forward_pass_->set_per_frame_data(
-            active_camera_->get_view_matrix(),
-            active_camera_->get_projection_matrix(),
-            active_camera_->get_position(),
-            light_dir,
-            light_color,
-            light_intensity
-        );
-        if (world && world->get_active_scene()) {
-            pbr_forward_pass_->clear_point_lights();
-        }
-        for (const auto& batch : pbr_batches) {
-            pbr_forward_pass_->draw_batch(context, batch);
-        }
-    }
-    
-    if (!forward_batches.empty() && forward_pass_ && forward_pass_->is_ready()) {
-        forward_pass_->set_per_frame_data(
-            active_camera_->get_view_matrix(),
-            active_camera_->get_projection_matrix(),
-            active_camera_->get_position(),
-            light_dir,
-            light_color,
-            light_intensity
-        );
-        for (const auto& batch : forward_batches) {
-            forward_pass_->draw_batch(context, batch);
-        }
-    }
+    // Reset material pass flags
+    pbr_enabled_ = false;
+    npr_enabled_ = false;
 }
 
 void RenderMeshManager::build_rdg(RDGBuilder& builder, RDGTextureHandle color_target, 
@@ -307,6 +223,14 @@ void RenderMeshManager::build_rdg(RDGBuilder& builder, RDGTextureHandle color_ta
     }
     
     if (!forward_batches.empty() && forward_pass_ && forward_pass_->is_ready()) {
-        WARN(LogRenderMeshManager, "Non-PBR/NPR path not yet implemented in RDG mode, use render_batches instead");
+        forward_pass_->set_per_frame_data(
+            active_camera_->get_view_matrix(),
+            active_camera_->get_projection_matrix(),
+            active_camera_->get_position(),
+            light_dir,
+            light_color,
+            light_intensity
+        );
+        forward_pass_->build(builder, color_target, depth_target, forward_batches);
     }
 }

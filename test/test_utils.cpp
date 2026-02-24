@@ -8,13 +8,74 @@
 #include "engine/main/engine_context.h"
 #include "engine/function/render/render_system/render_system.h"
 #include "engine/function/render/render_system/render_mesh_manager.h"
+#include "engine/function/input/input.h"
 
 #include <fstream>
+#include <thread>
+#include <chrono>
 
 namespace test_utils {
 
+// TestContext static members
+bool TestContext::engine_initialized_ = false;
+std::string TestContext::test_asset_dir_;
+
+void TestContext::init_engine() {
+    if (engine_initialized_) return;
+    
+    test_asset_dir_ = std::string(ENGINE_PATH) + "/test/test_internal";
+    
+    std::bitset<8> mode;
+    mode.set(EngineContext::StartMode::Asset);
+    mode.set(EngineContext::StartMode::Window);
+    mode.set(EngineContext::StartMode::Render);
+    mode.set(EngineContext::StartMode::SingleThread);
+    
+    EngineContext::init(mode);
+    
+    if (auto am = EngineContext::asset()) {
+        am->init(test_asset_dir_);
+    }
+    
+    engine_initialized_ = true;
+}
+
+void TestContext::shutdown_engine() {
+    if (!engine_initialized_) return;
+    
+    EngineContext::exit();
+    engine_initialized_ = false;
+}
+
+void TestContext::reset() {
+    if (!engine_initialized_) return;
+    
+    // 1. Clear active scene first
+    if (auto world = EngineContext::world()) {
+        world->set_active_scene(nullptr);
+    }
+    
+    // 2. Wait for GPU and cleanup render system state
+    if (auto rs = EngineContext::render_system()) {
+        rs->cleanup_for_test();
+    }
+    
+    // 3. Force cleanup of any remaining entities in world
+    if (auto world = EngineContext::world()) {
+        // Reset world state completely
+        world->set_active_scene(nullptr);
+    }
+    
+    // 4. Process any pending asset operations
+    if (auto am = EngineContext::asset()) {
+        am->tick();
+    }
+    
+    // 5. Small delay to ensure GPU has finished all work
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+}
+
 SceneLoadResult SceneLoader::load(const std::string& virtual_path, 
-                                   bool should_init_components,
                                    bool set_active) {
     SceneLoadResult result;
     
@@ -51,11 +112,6 @@ SceneLoadResult SceneLoader::load(const std::string& virtual_path,
         return result;
     }
     
-    // Initialize components if requested
-    if (should_init_components) {
-        SceneLoader::init_components(scene.get());
-    }
-    
     // Find camera
     CameraComponent* camera = scene->get_camera();
     if (!camera) {
@@ -77,19 +133,6 @@ SceneLoadResult SceneLoader::load(const std::string& virtual_path,
     return result;
 }
 
-void SceneLoader::init_components(Scene* scene) {
-    if (!scene) return;
-    
-    for (auto& entity : scene->entities_) {
-        if (!entity) continue;
-        for (auto& comp : entity->get_components()) {
-            if (comp) {
-                comp->on_init();
-            }
-        }
-    }
-}
-
 bool SceneLoader::scene_exists(const std::string& virtual_path) {
     auto am = EngineContext::asset();
     if (!am) return false;
@@ -99,6 +142,79 @@ bool SceneLoader::scene_exists(const std::string& virtual_path) {
     
     std::ifstream file(phys_path_opt->generic_string());
     return file.is_open();
+}
+
+bool RenderTestApp::capture_screenshot(std::vector<uint8_t>& screenshot_data) {
+    auto swapchain = EngineContext::render_system()->get_swapchain();
+    if (!swapchain) return false;
+
+    uint32_t current_frame = swapchain->get_current_frame_index();
+    RHITextureRef back_buffer = swapchain->get_texture(current_frame);
+    if (!back_buffer) return false;
+
+    auto backend = EngineContext::rhi();
+    auto pool = backend->create_command_pool({});
+    auto context = backend->create_command_context(pool);
+    
+    context->begin_command();
+    context->end_command();
+    auto fence = backend->create_fence(false);
+    context->execute(fence, nullptr, nullptr);
+    fence->wait();
+    
+    return context->read_texture(back_buffer, screenshot_data.data(), screenshot_data.size());
+}
+
+bool RenderTestApp::run(const Config& config, std::vector<uint8_t>& out_screenshot_data, int* out_frames) {
+    // 1. Create Scene
+    if (config.create_scene_func) {
+        if (!config.create_scene_func(config.scene_path)) {
+            return false;
+        }
+    }
+
+    // 2. Load Scene
+    auto result = SceneLoader::load(config.scene_path, true);
+    if (!result.success) {
+        return false;
+    }
+
+    if (config.on_scene_loaded_func) {
+        config.on_scene_loaded_func(result);
+    }
+
+    // 3. Render
+    int frames = 0;
+    bool screenshot_taken = false;
+    
+    while (frames < config.max_frames) {
+        Input::get_instance().tick();
+        EngineContext::world()->tick(0.016f);
+        
+        RenderPacket packet;
+        packet.active_camera = result.camera;
+        packet.active_scene = result.scene.get();
+        packet.frame_index = frames % 2;
+        
+        bool should_continue = EngineContext::render_system()->tick(packet);
+        if (!should_continue) break;
+        
+        frames++;
+        
+        if (config.capture_frame > 0 && frames == config.capture_frame && !screenshot_taken) {
+            out_screenshot_data.resize(config.width * config.height * 4);
+            if (capture_screenshot(out_screenshot_data)) {
+                screenshot_taken = true;
+            }
+        }
+        
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+    }
+    
+    if (out_frames) {
+        *out_frames = frames;
+    }
+    return screenshot_taken;
 }
 
 } // namespace test_utils

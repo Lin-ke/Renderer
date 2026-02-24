@@ -2,6 +2,7 @@
 #include <catch2/catch_approx.hpp>
 #include "engine/main/engine_context.h"
 #include "engine/function/asset/asset_manager.h"
+#include "test/test_utils.h"
 #include "engine/function/asset/basic/png.h"
 #include "engine/function/framework/scene.h"
 #include "engine/function/framework/entity.h"
@@ -17,8 +18,8 @@
  */
 
 TEST_CASE("Scene Serialization via AssetManager", "[scene]") {
+    test_utils::TestContext::reset();
     {
-        EngineContext::init(1 << EngineContext::StartMode::Asset);
         EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
 
         auto scene = std::make_shared<Scene>();
@@ -30,12 +31,9 @@ TEST_CASE("Scene Serialization via AssetManager", "[scene]") {
 
         std::string scene_path = "/Game/test_scene.asset";
         EngineContext::asset()->save_asset(scene, scene_path);
-        
-        EngineContext::exit();
     }
 
     {
-        EngineContext::init(1 << EngineContext::StartMode::Asset);
         INFO(LogAsset, "--- Phase 2: Loading Scene ---");
         EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
 
@@ -59,18 +57,17 @@ TEST_CASE("Scene Serialization via AssetManager", "[scene]") {
         CHECK(scale.x() == (2.0f));
         CHECK(scale.y() == (2.0f));
         CHECK(scale.z() == (2.0f));
-
-        EngineContext::exit();
     }
+    test_utils::TestContext::reset();
 }
 
 TEST_CASE("Scene Dependency Integration", "[scene]") {
+    test_utils::TestContext::reset();
     utils::clean_old_files(std::filesystem::path(std::string(ENGINE_PATH) + "/test/test_internal/assets"), 5);
     UID texture_uid, scene_uid;
     
     // Phase 1: Save Scene with Dependencies
     {
-        EngineContext::init(1 << EngineContext::StartMode::Asset);
         EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
 
         // 1. Create a dependency asset (Texture)
@@ -98,13 +95,10 @@ TEST_CASE("Scene Dependency Integration", "[scene]") {
         std::string scene_path = "/Game/level1.asset";
         EngineContext::asset()->save_asset(scene, scene_path);
         scene_uid = scene->get_uid();
-
-        EngineContext::exit();
     }
 
     // Phase 2: Load Scene and Verify
     {
-        EngineContext::init(1 << EngineContext::StartMode::Asset);
         EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
 
         std::string scene_path = "/Game/level1.asset";
@@ -126,7 +120,6 @@ TEST_CASE("Scene Dependency Integration", "[scene]") {
         REQUIRE(spirit->texture != nullptr);
         CHECK(spirit->texture->get_uid() == texture_uid);
         CHECK(spirit->texture->width_ == 256);
-
-        EngineContext::exit();
     }
+    test_utils::TestContext::reset();
 }

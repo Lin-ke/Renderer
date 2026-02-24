@@ -47,7 +47,7 @@ private:
  */
 class DX11Swapchain : public RHISwapchain {
 public:
-    DX11Swapchain(const RHISwapchainInfo& info, DX11Backend& backend);
+    DX11Swapchain(const RHISwapchainInfo& info, std::shared_ptr<DX11Backend> backend);
 
     virtual uint32_t get_current_frame_index() override final {
         if (supports_frame_index_query_ && swap_chain_) {
@@ -94,7 +94,7 @@ public:
  */
 class DX11Buffer : public RHIBuffer {
 public:
-    DX11Buffer(const RHIBufferInfo& info, DX11Backend& backend);
+    DX11Buffer(const RHIBufferInfo& info, std::shared_ptr<DX11Backend> backend);
 
     virtual bool init() override final;
     virtual void* map() override final;
@@ -107,7 +107,7 @@ public:
 
 private:
     ComPtr<ID3D11Buffer> buffer_;
-    DX11Backend& backend_;
+    std::weak_ptr<DX11Backend> backend_;
     void* mapped_data_ = nullptr;
 };
 
@@ -116,7 +116,7 @@ private:
  */
 class DX11Texture : public RHITexture {
 public:
-    DX11Texture(const RHITextureInfo& info, DX11Backend& backend, ComPtr<ID3D11Texture2D> handle = nullptr);
+    DX11Texture(const RHITextureInfo& info, std::shared_ptr<DX11Backend> backend, ComPtr<ID3D11Texture2D> handle = nullptr);
 
     virtual bool init() override final;
     virtual void destroy() override final;
@@ -131,7 +131,7 @@ public:
 private:
     ComPtr<ID3D11Texture2D> texture_;
     ComPtr<ID3D11ShaderResourceView> srv_;
-    DX11Backend& backend_;
+    std::weak_ptr<DX11Backend> backend_;
 };
 
 /**
@@ -139,7 +139,7 @@ private:
  */
 class DX11TextureView : public RHITextureView {
 public:
-    DX11TextureView(const RHITextureViewInfo& info, DX11Backend& backend);
+    DX11TextureView(const RHITextureViewInfo& info, std::shared_ptr<DX11Backend> backend);
 
     virtual void destroy() override final;
     virtual void* raw_handle() override final { return srv_.Get(); }
@@ -163,7 +163,7 @@ private:
  */
 class DX11Sampler : public RHISampler {
 public:
-    DX11Sampler(const RHISamplerInfo& info, DX11Backend& backend);
+    DX11Sampler(const RHISamplerInfo& info, std::shared_ptr<DX11Backend> backend);
 
     virtual bool init() override final;
     virtual void destroy() override final;
@@ -171,7 +171,7 @@ public:
 
 private:
     ComPtr<ID3D11SamplerState> sampler_state_;
-    DX11Backend& backend_;
+    std::weak_ptr<DX11Backend> backend_;
 };
 
 /**
@@ -179,7 +179,7 @@ private:
  */
 class DX11Shader : public RHIShader {
 public:
-    DX11Shader(const RHIShaderInfo& info, DX11Backend& backend);
+    DX11Shader(const RHIShaderInfo& info, std::shared_ptr<DX11Backend> backend);
 
     virtual bool init() override final;
     virtual void destroy() override final;
@@ -191,7 +191,7 @@ public:
 private:
     ComPtr<ID3D11DeviceChild> shader_resource_;
     ComPtr<ID3DBlob> blob_;
-    DX11Backend& backend_;
+    std::weak_ptr<DX11Backend> backend_;
 };
 
 /**
@@ -229,7 +229,7 @@ public:
  */
 class DX11RootSignature : public RHIRootSignature {
 public:
-    DX11RootSignature(const RHIRootSignatureInfo& info, DX11Backend& backend) : RHIRootSignature(info) {}
+    DX11RootSignature(const RHIRootSignatureInfo& info, std::shared_ptr<DX11Backend> backend) : RHIRootSignature(info) {}
     virtual bool init() override final { return true; }
     virtual RHIDescriptorSetRef create_descriptor_set(uint32_t set) override final;
     virtual void destroy() override final {}
@@ -251,7 +251,7 @@ public:
  */
 class DX11RenderPass : public RHIRenderPass {
 public:
-    DX11RenderPass(const RHIRenderPassInfo& info, DX11Backend& backend);
+    DX11RenderPass(const RHIRenderPassInfo& info, std::shared_ptr<DX11Backend> backend);
     virtual bool init() override final { return true; }
     virtual void destroy() override final {}
     virtual void* raw_handle() override final { return nullptr; }
@@ -262,7 +262,7 @@ public:
  */
 class DX11GraphicsPipeline : public RHIGraphicsPipeline {
 public:
-    DX11GraphicsPipeline(const RHIGraphicsPipelineInfo& info, DX11Backend& backend);
+    DX11GraphicsPipeline(const RHIGraphicsPipelineInfo& info, std::shared_ptr<DX11Backend> backend);
     virtual bool init() override final;
     virtual void destroy() override final;
     virtual void* raw_handle() override final { return nullptr; }
@@ -275,7 +275,7 @@ private:
     ComPtr<ID3D11BlendState> blend_state_;
     ComPtr<ID3D11DepthStencilState> depth_stencil_state_;
     D3D11_PRIMITIVE_TOPOLOGY topology_;
-    DX11Backend& backend_;
+    std::weak_ptr<DX11Backend> backend_;
 };
 
 /**
@@ -303,7 +303,7 @@ public:
  */
 class DX11Fence : public RHIFence {
 public:
-    DX11Fence(bool signaled, DX11Backend& backend);
+    DX11Fence(bool signaled, std::shared_ptr<DX11Backend> backend);
     virtual bool init() override final;
     virtual void wait() override final;
     virtual void destroy() override final;
@@ -314,7 +314,7 @@ public:
 
 private:
     ComPtr<ID3D11Query> query_;
-    DX11Backend& backend_;
+    std::weak_ptr<DX11Backend> backend_;
     bool signaled_;
 };
 
@@ -333,7 +333,7 @@ public:
  */
 class DX11CommandContext : public RHICommandContext {
 public:
-    DX11CommandContext(RHICommandPoolRef pool, DX11Backend& backend);
+    DX11CommandContext(RHICommandPoolRef pool, std::shared_ptr<DX11Backend> backend);
 
     virtual void destroy() override final {}
     virtual void begin_command() override final;
@@ -385,9 +385,12 @@ public:
 
     virtual void imgui_create_fonts_texture() override final;
     virtual void imgui_render_draw_data() override final;
+    
+    // Check if command context is valid (backend and context are available)
+    bool is_valid() const { return !backend_.expired() && context_; }
 
 private:
-    DX11Backend& backend_;
+    std::weak_ptr<DX11Backend> backend_;
     ComPtr<ID3D11DeviceContext> context_;
 };
 
@@ -425,9 +428,12 @@ private:
 /**
  * @brief DX11 implementation of RHIBackend
  */
-class DX11Backend : public RHIBackend {
+class DX11Backend : public RHIBackend, public std::enable_shared_from_this<DX11Backend> {
 public:
     DX11Backend(const RHIBackendInfo& info);
+    
+    // Get a shared_ptr to this backend - resources should hold this instead of raw reference
+    std::shared_ptr<DX11Backend> get_shared() { return shared_from_this(); }
 
     virtual void tick() override final;
     virtual void destroy() override final;
@@ -471,6 +477,9 @@ public:
     ComPtr<IDXGIFactory> get_factory() const { return factory_; }
     ComPtr<ID3D11Device> get_device() const { return device_; }
     ComPtr<ID3D11DeviceContext> get_context() const { return context_; }
+    
+    // Check if backend is still valid (device not destroyed)
+    bool is_valid() const { return device_ != nullptr; }
 
 private:
     ComPtr<IDXGIFactory> factory_;

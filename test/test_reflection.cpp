@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include "engine/main/engine_context.h"
 #include "engine/function/asset/asset_manager.h"
+#include "test/test_utils.h"
 #include "engine/function/framework/scene.h"
 #include "engine/function/framework/entity.h"
 #include "engine/function/framework/prefab.h"
@@ -57,6 +58,7 @@ CEREAL_REGISTER_TYPE(AnyTestComponent);
 CEREAL_REGISTER_POLYMORPHIC_RELATION(Component, AnyTestComponent);
 
 TEST_CASE("Reflection std::any Access", "[reflection]") {
+    test_utils::TestContext::reset();
     AnyTestComponent::register_class();
 
     auto* class_info = ClassDB::get().get_class_info("AnyTestComponent");
@@ -112,9 +114,11 @@ TEST_CASE("Reflection std::any Access", "[reflection]") {
         prop.setter_any(&comp, std::any(std::string("Enemy")));
         CHECK(comp.name_ == "Enemy");
     }
+    test_utils::TestContext::reset();
 }
 
 TEST_CASE("Simplified Serialization", "[reflection]") {
+    test_utils::TestContext::reset();
     // 1. Test Primitive (int)
     {
         int val = 500;
@@ -156,16 +160,17 @@ TEST_CASE("Simplified Serialization", "[reflection]") {
         ReflectScheme::deserialize(legacy, val);
         CHECK(val == 100);
     }
+    test_utils::TestContext::reset();
 }
 
 TEST_CASE("Prefab Modifications", "[prefab]") {
+    test_utils::TestContext::reset();
     utils::clean_old_files(std::filesystem::path(std::string(ENGINE_PATH) + "/test/test_internal/assets"), 5);
     
     UID prefab_uid;
 
     // Phase 1: Create Prefab with HealthComponent
     {
-        EngineContext::init(1 << EngineContext::StartMode::Asset);
         EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
 
         auto prefab = std::make_shared<Prefab>();
@@ -176,12 +181,10 @@ TEST_CASE("Prefab Modifications", "[prefab]") {
 
         EngineContext::asset()->save_asset(prefab, "/Game/monster.asset");
         prefab_uid = prefab->get_uid();
-        EngineContext::exit();
     }
 
     // Phase 2: Instantiate and Add Modification
     {
-        EngineContext::init(1 << EngineContext::StartMode::Asset);
         EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
 
         auto prefab = EngineContext::asset()->load_asset<Prefab>(prefab_uid);
@@ -199,12 +202,10 @@ TEST_CASE("Prefab Modifications", "[prefab]") {
         CHECK(hp->is_alive == false);
 
         EngineContext::asset()->save_asset(scene, "/Game/scene_mod.asset");
-        EngineContext::exit();
     }
 
     // Phase 3: Verify JSON Structure and Reload
     {
-        EngineContext::init(1 << EngineContext::StartMode::Asset);
         EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
 
         auto scene = EngineContext::asset()->load_asset<Scene>("/Game/scene_mod.asset");
@@ -227,19 +228,17 @@ TEST_CASE("Prefab Modifications", "[prefab]") {
         
         CHECK(hp->max_hp == 500);
         CHECK(hp->is_alive == false);
-
-        EngineContext::exit();
     }
+    test_utils::TestContext::reset();
 }
 
 TEST_CASE("Complex Prefab System", "[prefab]") {
+    test_utils::TestContext::reset();
     utils::clean_old_files(std::filesystem::path(std::string(ENGINE_PATH) + "/test/test_internal/assets"), 5);
     UID ball_uid, cube_uid;
 
     // Phase 1: Create and Save Two Prefabs
     {
-        EngineContext::init(1 << EngineContext::StartMode::Asset);
-
         EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
 
         // 1. Create "Ball" Prefab at (1, 2, 3)
@@ -267,14 +266,10 @@ TEST_CASE("Complex Prefab System", "[prefab]") {
             cube_uid = cube_prefab->get_uid();
 
         }
-
-        EngineContext::exit();
     }
 
     // Phase 2: Instantiate Multiple Copies and Distinct Prefabs
     {
-        EngineContext::init(1 << EngineContext::StartMode::Asset);
-
         EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
 
         auto ball_prefab = EngineContext::asset()->load_asset<Prefab>(ball_uid);
@@ -319,14 +314,10 @@ TEST_CASE("Complex Prefab System", "[prefab]") {
 
         // Save Scene
         EngineContext::asset()->save_asset(scene, "/Game/complex_scene.asset");
-
-        EngineContext::exit();
     }
 
     // Phase 3: Reload and Verify
     {
-        EngineContext::init(1 << EngineContext::StartMode::Asset);
-
         EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
 
         auto scene = EngineContext::asset()->load_asset<Scene>("/Game/complex_scene.asset");
@@ -365,7 +356,6 @@ TEST_CASE("Complex Prefab System", "[prefab]") {
 
         // Verify AssetManager caching
         CHECK(pc1->prefab == pc2->prefab);
-
-        EngineContext::exit();
     }
+    test_utils::TestContext::reset();
 }

@@ -1,5 +1,6 @@
 #include "engine/function/render/render_resource/buffer.h"
 #include "engine/core/math/math.h"
+#include "engine/core/log/Log.h"
 #include "engine/main/engine_context.h"
 #include "engine/function/render/rhi/rhi_structs.h"
 #include "engine/function/render/data/render_structs.h"
@@ -9,6 +10,8 @@
 #include <cstring>
 #include <memory>
 #include <vector>
+
+DEFINE_LOG_TAG(LogBuffer, "Buffer");
 
 RHIBackendRef global_rhi_backend() {
     return EngineContext::rhi();
@@ -31,10 +34,17 @@ void VertexBuffer::set_buffer_data(void* data, uint32_t size, RHIBufferRef& buff
         info.type = RESOURCE_TYPE_VERTEX_BUFFER;
         info.creation_flag = BUFFER_CREATION_PERSISTENT_MAP;
         buffer = EngineContext::rhi()->create_buffer(info);
+        if (!buffer) {
+            ERR(LogBuffer, "Failed to create buffer for vertex data");
+            return;
+        }
     }
 
     void* mapped = buffer->map();
-    assert(mapped != nullptr && "VertexBuffer::set_buffer_data: failed to map buffer");
+    if (!mapped) {
+        ERR(LogBuffer, "Failed to map buffer for vertex data");
+        return;
+    }
     memcpy(mapped, data, size);
     buffer->unmap();
 
@@ -85,10 +95,17 @@ void IndexBuffer::set_index(const std::vector<uint32_t>& index) {
         info.type = RESOURCE_TYPE_INDEX_BUFFER;
         info.creation_flag = BUFFER_CREATION_PERSISTENT_MAP;
         buffer_ = EngineContext::rhi()->create_buffer(info);
+        if (!buffer_) {
+            ERR(LogBuffer, "Failed to create buffer for index data");
+            return;
+        }
     }
 
     void* mapped = buffer_->map();
-    assert(mapped != nullptr && "IndexBuffer::set_index: failed to map buffer");
+    if (!mapped) {
+        ERR(LogBuffer, "Failed to map buffer for index data");
+        return;
+    }
     memcpy(mapped, index.data(), size);
     buffer_->unmap();
 }

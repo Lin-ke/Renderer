@@ -59,6 +59,17 @@ public:
         }
     }
 
+    virtual void on_load() override {
+        for (auto& entity : entities_) {
+            if (!entity) continue;
+            for (auto& comp : entity->get_components()) {
+                if (comp) {
+                    comp->on_init();
+                }
+            }
+        }
+    }
+
     virtual void load_asset_deps() override {
         for (auto& entity : entities_) {
             for (auto& comp : entity->get_components()) {

@@ -386,7 +386,7 @@ void AssetManager::collect_save_dependencies_recursive(AssetRef asset, std::vect
 	
 	asset->traverse_deps([&](AssetRef dep_asset) {
 			if (dep_asset) {
-				INFO(LogAsset, "Asset {} depends on {}", uid.to_string(), dep_asset->get_uid().to_string());
+				// INFO(LogAsset, "Asset {} depends on {}", uid.to_string(), dep_asset->get_uid().to_string());
 			}
 			collect_save_dependencies_recursive(dep_asset, sorted_assets, visited, visiting);
 	});

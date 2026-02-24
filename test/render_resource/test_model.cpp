@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
+#include "test/test_utils.h"
 #include "engine/main/engine_context.h"
 #include "engine/function/render/render_resource/model.h"
 #include "engine/function/asset/asset_manager.h"
@@ -13,12 +14,7 @@
 DEFINE_LOG_TAG(LogModelTest, "ModelTest");
 
 TEST_CASE("Model Loading with bunny.obj", "[render_resource]") {
-    std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Asset);
-    mode.set(EngineContext::StartMode::Window);
-    mode.set(EngineContext::StartMode::Render);
-    mode.set(EngineContext::StartMode::SingleThread);
-    EngineContext::init(mode);
+    test_utils::TestContext::reset();
     
     std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
     EngineContext::asset()->init(test_asset_dir);
@@ -45,16 +41,11 @@ TEST_CASE("Model Loading with bunny.obj", "[render_resource]") {
     REQUIRE(mesh->get_index_buffer() != nullptr);
     
     model.reset();
-    EngineContext::exit();
+    test_utils::TestContext::reset();
 }
 
 TEST_CASE("Model Multiple Submeshes", "[render_resource]") {
-    std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Asset);
-    mode.set(EngineContext::StartMode::Window);
-    mode.set(EngineContext::StartMode::Render);
-    mode.set(EngineContext::StartMode::SingleThread);
-    EngineContext::init(mode);
+    test_utils::TestContext::reset();
     
     std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
     EngineContext::asset()->init(test_asset_dir);
@@ -76,7 +67,7 @@ TEST_CASE("Model Multiple Submeshes", "[render_resource]") {
     }
     
     model.reset();
-    EngineContext::exit();
+    test_utils::TestContext::reset();
 }
 
 TEST_CASE("Mesh Data Structure", "[render_resource]") {
@@ -86,6 +77,7 @@ TEST_CASE("Mesh Data Structure", "[render_resource]") {
     std::vector<uint32_t> indices = { 0, 1, 2 };
     
     auto mesh = Mesh::Create(positions, normals, {}, tex_coords, indices, "mesh1");
+    REQUIRE(mesh != nullptr);
     
     CHECK(mesh->get_index_count() / 3 == 1); // 1 triangle
     
@@ -103,6 +95,8 @@ TEST_CASE("Mesh Data Structure", "[render_resource]") {
 }
 
 TEST_CASE("Model Process Settings", "[render_resource]") {
+    test_utils::TestContext::reset();
+    
     ModelProcessSetting setting1;
     setting1.smooth_normal = true;
     setting1.flip_uv = true;
@@ -111,13 +105,6 @@ TEST_CASE("Model Process Settings", "[render_resource]") {
     CHECK(setting1.smooth_normal == true);
     CHECK(setting1.flip_uv == true);
     CHECK(setting1.load_materials == false);
-    
-    std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Asset);
-    mode.set(EngineContext::StartMode::Window);
-    mode.set(EngineContext::StartMode::Render);
-    mode.set(EngineContext::StartMode::SingleThread);
-    EngineContext::init(mode);
     
     std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
     EngineContext::asset()->init(test_asset_dir);
@@ -133,5 +120,5 @@ TEST_CASE("Model Process Settings", "[render_resource]") {
     REQUIRE(model->get_submesh_count() > 0);
     
     model.reset();
-    EngineContext::exit();
+    test_utils::TestContext::reset();
 }

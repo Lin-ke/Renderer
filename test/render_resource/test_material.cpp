@@ -15,12 +15,9 @@
 DEFINE_LOG_TAG(LogMaterialTest, "MaterialTest");
 
 TEST_CASE("Material Parameters and Serialization", "[render_resource]") {
-    std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
+    test_utils::TestContext::reset();
     
-    std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Asset);
-    mode.set(EngineContext::StartMode::SingleThread);
-    EngineContext::init(mode);
+    std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
     EngineContext::asset()->init(test_asset_dir);
 
     // Use PBRMaterial for specific properties
@@ -50,16 +47,13 @@ TEST_CASE("Material Parameters and Serialization", "[render_resource]") {
     loaded_pbr.reset();
     material.reset();
     
-    EngineContext::exit();
+    test_utils::TestContext::reset();
 }
 
 TEST_CASE("NPR Material Parameters and Serialization", "[render_resource]") {
-    std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
+    test_utils::TestContext::reset();
     
-    std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Asset);
-    mode.set(EngineContext::StartMode::SingleThread);
-    EngineContext::init(mode);
+    std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
     EngineContext::asset()->init(test_asset_dir);
 
     // Use NPRMaterial
@@ -89,16 +83,13 @@ TEST_CASE("NPR Material Parameters and Serialization", "[render_resource]") {
     loaded_npr.reset();
     material.reset();
     
-    EngineContext::exit();
+    test_utils::TestContext::reset();
 }
 
 TEST_CASE("Material Texture Dependencies", "[render_resource]") {
-    std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
+    test_utils::TestContext::reset();
     
-    std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Asset);
-    mode.set(EngineContext::StartMode::SingleThread);
-    EngineContext::init(mode);
+    std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
     EngineContext::asset()->init(test_asset_dir);
 
     Extent3D extent = { 64, 64, 1 };
@@ -119,10 +110,9 @@ TEST_CASE("Material Texture Dependencies", "[render_resource]") {
     material.reset();
     texture.reset();
     
-    EngineContext::exit();
+    test_utils::TestContext::reset();
     
     // Cold reload
-    EngineContext::init(mode);
     EngineContext::asset()->init(test_asset_dir);
 
     auto loaded_material = EngineContext::asset()->load_asset<Material>(material_path);
@@ -135,5 +125,5 @@ TEST_CASE("Material Texture Dependencies", "[render_resource]") {
 
     loaded_material.reset();
     
-    EngineContext::exit();
+    test_utils::TestContext::reset();
 }

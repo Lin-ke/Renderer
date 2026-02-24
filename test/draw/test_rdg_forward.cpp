@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
+#include "test/test_utils.h"
 #include "engine/main/engine_context.h"
 #include "engine/function/framework/world.h"
 #include "engine/function/framework/scene.h"
@@ -24,16 +25,14 @@ DEFINE_LOG_TAG(LogRDGForward, "RDGForward");
  */
 
 TEST_CASE("RDG Forward Pass - Bunny Rendering", "[draw][rdg]") {
+    // Reset test state (Engine is already initialized by test_main.cpp)
+    test_utils::TestContext::reset();
+    
     std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
     
-    std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Asset);
-    mode.set(EngineContext::StartMode::Window);
-    mode.set(EngineContext::StartMode::Render);
-    mode.set(EngineContext::StartMode::SingleThread);
-    
-    EngineContext::init(mode);
-    EngineContext::asset()->init(test_asset_dir);
+    if (auto am = EngineContext::asset()) {
+        am->init(test_asset_dir);
+    }
     
     REQUIRE(EngineContext::rhi() != nullptr);
     REQUIRE(EngineContext::render_system() != nullptr);
@@ -124,21 +123,19 @@ TEST_CASE("RDG Forward Pass - Bunny Rendering", "[draw][rdg]") {
     
     CHECK(frames > 0);
     
-    EngineContext::world()->set_active_scene(nullptr);
-    EngineContext::exit();
+    // Reset state for next test
+    test_utils::TestContext::reset();
 }
 
 TEST_CASE("RDG Forward Pass - Wireframe Toggle", "[draw][rdg]") {
+    // Reset test state (Engine is already initialized by test_main.cpp)
+    test_utils::TestContext::reset();
+    
     std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
     
-    std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Asset);
-    mode.set(EngineContext::StartMode::Window);
-    mode.set(EngineContext::StartMode::Render);
-    mode.set(EngineContext::StartMode::SingleThread);
-    
-    EngineContext::init(mode);
-    EngineContext::asset()->init(test_asset_dir);
+    if (auto am = EngineContext::asset()) {
+        am->init(test_asset_dir);
+    }
     
     auto scene = std::make_shared<Scene>();
     
@@ -214,6 +211,6 @@ TEST_CASE("RDG Forward Pass - Wireframe Toggle", "[draw][rdg]") {
     
     CHECK(frames > 0);
     
-    EngineContext::world()->set_active_scene(nullptr);
-    EngineContext::exit();
+    // Reset state for next test
+    test_utils::TestContext::reset();
 }

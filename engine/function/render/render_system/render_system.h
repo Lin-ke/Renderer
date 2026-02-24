@@ -92,17 +92,20 @@ public:
     std::shared_ptr<RenderLightManager> get_light_manager() { return light_manager_; }
     std::shared_ptr<GizmoManager> get_gizmo_manager() { return gizmo_manager_; }
     RHITextureViewRef get_depth_texture_view() { return depth_texture_view_; }
+    RHITextureRef get_depth_texture() { return depth_texture_; }
+    RHITextureRef get_prepass_depth_texture() { return prepass_depth_texture_; }
+
+    /**
+     * @brief Cleanup runtime state for testing (keeps system initialized)
+     * 
+     * This clears per-test rendering state without destroying the render system,
+     * allowing fast test reset.
+     */
+    void cleanup_for_test();
 
     // UI Methods
     void render_ui_begin();
     void render_ui(RHICommandContextRef command);
-    
-    // Depth Prepass accessors
-    std::shared_ptr<render::DepthPrePass> get_depth_prepass() { return depth_prepass_; }
-    RHITextureRef get_prepass_depth_texture() { return prepass_depth_texture_; }
-    RHITextureViewRef get_prepass_depth_texture_view() { return prepass_depth_texture_view_; }
-    bool is_prepass_enabled() const { return prepass_enabled_; }
-    void set_prepass_enabled(bool enable) { prepass_enabled_ = enable; }
     
 private:
     // RDG methods
@@ -185,7 +188,6 @@ public:
     // Depth prepass depth texture (shared with forward passes)
     RHITextureRef prepass_depth_texture_;
     RHITextureViewRef prepass_depth_texture_view_;
-    bool prepass_enabled_ = true;  // Enable/disable depth prepass
     
     // Depth buffer visualization
     RHITextureRef depth_visualize_texture_;

@@ -282,9 +282,10 @@ void RenderSystem::init_depth_prepass_resource() {
 		INFO(LogRenderSystem, "Depth prepass resources created");
 	} else {
 		WARN(LogRenderSystem, "Failed to create depth prepass texture");
-		prepass_enabled_ = false;
 	}
 }
+
+
 
 void RenderSystem::build_and_execute_rdg(uint32_t frame_index, const RenderPacket &packet) {
 	// Create command list from command context
@@ -313,9 +314,9 @@ void RenderSystem::build_and_execute_rdg(uint32_t frame_index, const RenderPacke
 											.import(back_buffer, RESOURCE_STATE_COLOR_ATTACHMENT)
 											.finish();
 
-	// Import prepass depth texture
-	RDGTextureHandle depth_target = rdg_builder.create_texture("DepthPrepass")
-											.import(prepass_depth_texture_, RESOURCE_STATE_DEPTH_STENCIL_ATTACHMENT)
+	// Import depth texture
+	RDGTextureHandle depth_target = rdg_builder.create_texture("Depth")
+											.import(depth_texture_, RESOURCE_STATE_DEPTH_STENCIL_ATTACHMENT)
 											.finish();
 
 	// Collect draw batches
@@ -372,8 +373,8 @@ void RenderSystem::build_and_execute_rdg(uint32_t frame_index, const RenderPacke
 		}
 	}
 
-	// Execute depth prepass first (if enabled)
-	if (prepass_enabled_ && depth_prepass_ && prepass_depth_texture_) {
+	// Execute depth prepass first
+	{
 		PROFILE_SCOPE("RenderSystem_DepthPrepass");
 
 		depth_prepass_->set_per_frame_data(
@@ -562,28 +563,10 @@ bool RenderSystem::tick(const RenderPacket &packet) {
 	{
 		PROFILE_SCOPE("RenderSystem_SceneRender");
 
-		// Use RDG-based rendering if depth prepass is enabled and initialized
-		if (prepass_enabled_ && depth_prepass_ && prepass_depth_texture_) {
-			build_and_execute_rdg(frame_index, packet);
-		} else {
-			// Fallback to traditional rendering
-			uint32_t current_buffer_index = swapchain_->get_current_frame_index();
-			RHITextureViewRef back_buffer_view = swapchain_buffer_views_[current_buffer_index];
-			RHIRenderPassRef render_pass = swapchain_render_passes_[current_buffer_index];
+		// Use RDG-based rendering
+		build_and_execute_rdg(frame_index, packet);
 
-			if (render_pass) {
-				command->begin_render_pass(render_pass);
-
-				{
-					PROFILE_SCOPE("RenderSystem_MeshBatches");
-					mesh_manager_->render_batches(command, back_buffer_view, extent);
-				}
-
-				command->end_render_pass();
-			}
-		}
-
-		// Depth visualization (works with both rendering paths)
+		// Depth visualization
 		if (depth_visualize_initialized_ && depth_visualize_pass_ && depth_visualize_texture_view_) {
 			PROFILE_SCOPE("RenderSystem_DepthVisualize");
 			CameraComponent *camera = packet.active_camera;
@@ -591,18 +574,13 @@ bool RenderSystem::tick(const RenderPacket &packet) {
 				camera = mesh_manager_->get_active_camera();
 			}
 			if (camera) {
-				// Use prepass depth if available, otherwise use main depth
-				RHITextureRef depth_to_visualize = prepass_enabled_ && prepass_depth_texture_
-						? prepass_depth_texture_
-						: depth_texture_;
-
 				Extent2D viz_extent = {
 					depth_visualize_texture_->get_info().extent.width,
 					depth_visualize_texture_->get_info().extent.height
 				};
 				depth_visualize_pass_->draw(
 						command,
-						depth_to_visualize,
+						prepass_depth_texture_,
 						depth_visualize_texture_view_,
 						viz_extent,
 						camera->get_near(),
@@ -709,7 +687,68 @@ bool RenderSystem::tick(const RenderPacket &packet) {
 	return true;
 }
 
+void RenderSystem::cleanup_for_test() {
+	WARN(LogRenderSystem, "cleanup_for_test() called, backend_={}", (void*)backend_.get());
+	
+	// Check if backend is valid (device not destroyed)
+	if (!backend_ || !backend_->is_valid()) {
+		WARN(LogRenderSystem, "Backend is null or invalid, skipping GPU cleanup");
+		// Still cleanup non-GPU state
+		if (mesh_manager_) {
+			mesh_manager_->cleanup_for_test();
+		}
+		if (light_manager_) {
+			light_manager_->destroy();
+		}
+		if (gizmo_manager_) {
+			gizmo_manager_->shutdown();
+		}
+		selected_entity_ = nullptr;
+		return;
+	}
+	
+	// Wait for GPU to complete all pending work
+	for (auto &resource : per_frame_common_resources_) {
+		if (resource.fence) {
+			resource.fence->wait();
+		}
+	}
+	
+	// Cleanup mesh manager state (keeps passes initialized)
+	if (mesh_manager_) {
+		mesh_manager_->cleanup_for_test();
+	}
+	
+	// Cleanup light manager
+	if (light_manager_) {
+		light_manager_->destroy();
+	}
+	
+	// Cleanup gizmo manager
+	if (gizmo_manager_) {
+		gizmo_manager_->shutdown();
+	}
+	
+	// Reset selected entity
+	selected_entity_ = nullptr;
+	
+	// Wait for any pending GPU operations
+	// Backend validity already checked above, but double-check for safety
+	// Flush any pending GPU work
+	auto temp_pool = backend_->create_command_pool({queue_});
+	auto temp_cmd = backend_->create_command_context(temp_pool);
+	temp_cmd->begin_command();
+	temp_cmd->end_command();
+	auto temp_fence = backend_->create_fence(false);
+	if (temp_fence) {
+		temp_cmd->execute(temp_fence, nullptr, nullptr);
+		temp_fence->wait();
+	}
+}
+
 void RenderSystem::destroy() {
+	WARN(LogRenderSystem, "RenderSystem::destroy() called! backend_={}", (void*)backend_.get());
+	
 	// Shutdown ImGui
 	if (backend_) {
 		backend_->imgui_shutdown();
@@ -724,12 +763,7 @@ void RenderSystem::destroy() {
 		mesh_manager_.reset();
 	}
 
-	// Cleanup depth prepass
-	if (depth_prepass_) {
-		depth_prepass_.reset();
-	}
-	prepass_depth_texture_view_.reset();
-	prepass_depth_texture_.reset();
+
 	if (light_manager_) {
 		light_manager_->destroy();
 		light_manager_.reset();

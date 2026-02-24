@@ -113,11 +113,17 @@ public:
 };
 
 // --- DX11Buffer ---
-DX11Buffer::DX11Buffer(const RHIBufferInfo& info, DX11Backend& backend) 
+DX11Buffer::DX11Buffer(const RHIBufferInfo& info, std::shared_ptr<DX11Backend> backend) 
     : RHIBuffer(info), backend_(backend) {
 }
 
 bool DX11Buffer::init() {
+    auto backend = backend_.lock();
+    if (!backend || !backend->is_valid()) {
+        ERR(LogRHI, "Failed to init DX11Buffer: backend is destroyed or invalid");
+        return false;
+    }
+    
     D3D11_BUFFER_DESC desc = {};
     desc.ByteWidth = (UINT)info_.size;
     desc.Usage = DX11Util::memory_usage_to_dx11(info_.memory_usage);
@@ -127,14 +133,14 @@ bool DX11Buffer::init() {
         desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ | D3D11_CPU_ACCESS_WRITE;
     }
 
-    HRESULT hr = backend_.get_device()->CreateBuffer(&desc, nullptr, buffer_.GetAddressOf());
+    HRESULT hr = backend->get_device()->CreateBuffer(&desc, nullptr, buffer_.GetAddressOf());
     if (FAILED(hr)) {
         ERR(LogRHI, "Failed to create DX11 Buffer (HRESULT: 0x{:08X})", (uint32_t)hr);
         return false;
     }
 
     if (!get_name().empty()) {
-        backend_.set_name(shared_from_this(), get_name());
+        backend->set_name(shared_from_this(), get_name());
     }
 
     return true;
@@ -142,6 +148,9 @@ bool DX11Buffer::init() {
 
 void* DX11Buffer::map() {
     if (!buffer_ || mapped_data_) return nullptr;
+    
+    auto backend = backend_.lock();
+    if (!backend || !backend->is_valid()) return nullptr;
     
     D3D11_MAPPED_SUBRESOURCE mapped_res;
     D3D11_MAP map_type = D3D11_MAP_WRITE_DISCARD;
@@ -169,7 +178,7 @@ void* DX11Buffer::map() {
         return nullptr;
     }
 
-    HRESULT hr = backend_.get_context()->Map(buffer_.Get(), 0, map_type, 0, &mapped_res);
+    HRESULT hr = backend->get_context()->Map(buffer_.Get(), 0, map_type, 0, &mapped_res);
     if (SUCCEEDED(hr)) {
         mapped_data_ = mapped_res.pData;
         return mapped_data_;
@@ -179,18 +188,26 @@ void* DX11Buffer::map() {
 
 void DX11Buffer::unmap() {
     if (!buffer_ || !mapped_data_) return;
-    backend_.get_context()->Unmap(buffer_.Get(), 0);
+    auto backend = backend_.lock();
+    if (!backend || !backend->is_valid()) return;
+    backend->get_context()->Unmap(buffer_.Get(), 0);
     mapped_data_ = nullptr;
 }
 
 void DX11Buffer::destroy() { buffer_.Reset(); }
 
 // --- DX11Texture ---
-DX11Texture::DX11Texture(const RHITextureInfo& info, DX11Backend& backend, ComPtr<ID3D11Texture2D> handle)
+DX11Texture::DX11Texture(const RHITextureInfo& info, std::shared_ptr<DX11Backend> backend, ComPtr<ID3D11Texture2D> handle)
     : RHITexture(info), texture_(handle), backend_(backend) {
 }
 
 bool DX11Texture::init() {
+    auto backend = backend_.lock();
+    if (!backend || !backend->is_valid()) {
+        ERR(LogRHI, "Failed to init DX11Texture: backend is destroyed or invalid");
+        return false;
+    }
+    
     if (!texture_) {
         D3D11_TEXTURE2D_DESC desc = {};
         desc.Width = info_.extent.width;
@@ -220,7 +237,7 @@ bool DX11Texture::init() {
         }
         desc.CPUAccessFlags = (info_.memory_usage == MEMORY_USAGE_CPU_TO_GPU) ? D3D11_CPU_ACCESS_WRITE : 0;
 
-        HRESULT hr = backend_.get_device()->CreateTexture2D(&desc, nullptr, texture_.GetAddressOf());
+        HRESULT hr = backend->get_device()->CreateTexture2D(&desc, nullptr, texture_.GetAddressOf());
         if (FAILED(hr)) {
             ERR(LogRHI, "Failed to create DX11 Texture2D ({}x{}, format: {}, bind: 0x{:X}, type: 0x{:X}, HRESULT: 0x{:08X})", 
                 desc.Width, desc.Height, (uint32_t)desc.Format, (uint32_t)desc.BindFlags, (uint32_t)info_.type, (uint32_t)hr);
@@ -229,7 +246,7 @@ bool DX11Texture::init() {
     }
     
     if (!get_name().empty()) {
-        backend_.set_name(shared_from_this(), get_name());
+        backend->set_name(shared_from_this(), get_name());
     }
     
     return true;
@@ -243,6 +260,9 @@ void DX11Texture::destroy() {
 ComPtr<ID3D11ShaderResourceView> DX11Texture::create_srv() {
     if (!texture_) return nullptr;
     if (srv_) return srv_;
+    
+    auto backend = backend_.lock();
+    if (!backend || !backend->is_valid()) return nullptr;
     
     D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
     
@@ -260,7 +280,7 @@ ComPtr<ID3D11ShaderResourceView> DX11Texture::create_srv() {
     srv_desc.Texture2D.MipLevels = info_.mip_levels > 0 ? info_.mip_levels : (UINT)-1;
     srv_desc.Texture2D.MostDetailedMip = 0;
     
-    HRESULT hr = backend_.get_device()->CreateShaderResourceView(texture_.Get(), &srv_desc, srv_.GetAddressOf());
+    HRESULT hr = backend->get_device()->CreateShaderResourceView(texture_.Get(), &srv_desc, srv_.GetAddressOf());
     if (FAILED(hr)) {
         ERR(LogRHI, "Failed to create SRV for texture (format: {}, HRESULT: 0x{:08X})", (uint32_t)format, (uint32_t)hr);
         return nullptr;
@@ -271,17 +291,19 @@ ComPtr<ID3D11ShaderResourceView> DX11Texture::create_srv() {
 
 ComPtr<ID3D11RenderTargetView> DX11Texture::create_rtv() {
     if (!texture_) return nullptr;
+    auto backend = backend_.lock();
+    if (!backend || !backend->is_valid()) return nullptr;
     ComPtr<ID3D11RenderTargetView> rtv;
     D3D11_RENDER_TARGET_VIEW_DESC rtv_desc = {};
     rtv_desc.Format = DX11Util::rhi_format_to_dxgi(info_.format);
     rtv_desc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
     rtv_desc.Texture2D.MipSlice = 0;
-    backend_.get_device()->CreateRenderTargetView(texture_.Get(), &rtv_desc, rtv.GetAddressOf());
+    backend->get_device()->CreateRenderTargetView(texture_.Get(), &rtv_desc, rtv.GetAddressOf());
     return rtv;
 }
 
 // --- DX11TextureView ---
-DX11TextureView::DX11TextureView(const RHITextureViewInfo& info, DX11Backend& backend)
+DX11TextureView::DX11TextureView(const RHITextureViewInfo& info, std::shared_ptr<DX11Backend> backend)
     : RHITextureView(info) {
     auto dx_tex = resource_cast(info.texture);
     if (!dx_tex) return;
@@ -337,7 +359,7 @@ DX11TextureView::DX11TextureView(const RHITextureViewInfo& info, DX11Backend& ba
             srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
             srv_desc.Texture2D.MipLevels = tex_info.mip_levels > 0 ? tex_info.mip_levels : (UINT)-1;
             srv_desc.Texture2D.MostDetailedMip = info.subresource.base_mip_level;
-            HRESULT hr = backend.get_device()->CreateShaderResourceView(dx_tex->get_handle().Get(), &srv_desc, srv_.GetAddressOf());
+            HRESULT hr = backend->get_device()->CreateShaderResourceView(dx_tex->get_handle().Get(), &srv_desc, srv_.GetAddressOf());
             if (FAILED(hr)) {
                 ERR(LogRHI, "Failed to create texture SRV (format: {}, HRESULT: 0x{:08X})", 
                     (uint32_t)srv_format, (uint32_t)hr);
@@ -358,7 +380,7 @@ DX11TextureView::DX11TextureView(const RHITextureViewInfo& info, DX11Backend& ba
         rtv_desc.Format = rtv_format;
         rtv_desc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
         rtv_desc.Texture2D.MipSlice = info.subresource.base_mip_level;
-        backend.get_device()->CreateRenderTargetView(dx_tex->get_handle().Get(), &rtv_desc, rtv_.GetAddressOf());
+        backend->get_device()->CreateRenderTargetView(dx_tex->get_handle().Get(), &rtv_desc, rtv_.GetAddressOf());
     }
 
     // Create DSV for depth-stencil types
@@ -383,11 +405,11 @@ DX11TextureView::DX11TextureView(const RHITextureViewInfo& info, DX11Backend& ba
         dsv_desc.Format = dsv_format;
         dsv_desc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
         dsv_desc.Texture2D.MipSlice = info.subresource.base_mip_level;
-        backend.get_device()->CreateDepthStencilView(dx_tex->get_handle().Get(), &dsv_desc, dsv_.GetAddressOf());
+        backend->get_device()->CreateDepthStencilView(dx_tex->get_handle().Get(), &dsv_desc, dsv_.GetAddressOf());
         
         // Create read-only DSV for simultaneous SRV binding
         dsv_desc.Flags = D3D11_DSV_READ_ONLY_DEPTH;
-        backend.get_device()->CreateDepthStencilView(dx_tex->get_handle().Get(), &dsv_desc, dsv_read_only_.GetAddressOf());
+        backend->get_device()->CreateDepthStencilView(dx_tex->get_handle().Get(), &dsv_desc, dsv_read_only_.GetAddressOf());
         
         // If srv_ was not created yet (e.g. depth texture not marked as TEXTURE), create it for shader sampling
         if (!srv_) {
@@ -400,7 +422,7 @@ DX11TextureView::DX11TextureView(const RHITextureViewInfo& info, DX11Backend& ba
             srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
             srv_desc.Texture2D.MipLevels = 1;
             srv_desc.Texture2D.MostDetailedMip = info.subresource.base_mip_level;
-            HRESULT hr = backend.get_device()->CreateShaderResourceView(dx_tex->get_handle().Get(), &srv_desc, srv_.GetAddressOf());
+            HRESULT hr = backend->get_device()->CreateShaderResourceView(dx_tex->get_handle().Get(), &srv_desc, srv_.GetAddressOf());
             if (FAILED(hr)) {
                 ERR(LogRHI, "Failed to create depth buffer SRV (HRESULT: 0x{:08X})", (uint32_t)hr);
             }
@@ -413,7 +435,7 @@ void DX11TextureView::destroy() {
 }
 
 // --- DX11Swapchain ---
-DX11Swapchain::DX11Swapchain(const RHISwapchainInfo& info, DX11Backend& backend)
+DX11Swapchain::DX11Swapchain(const RHISwapchainInfo& info, std::shared_ptr<DX11Backend> backend)
     : RHISwapchain(info) {
     auto dx_surface = resource_cast(info.surface);
     if (!dx_surface) return;
@@ -431,11 +453,11 @@ DX11Swapchain::DX11Swapchain(const RHISwapchainInfo& info, DX11Backend& backend)
     desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
 
     ComPtr<IDXGISwapChain> temp_swap_chain;
-    HRESULT hr = backend.get_factory()->CreateSwapChain(backend.get_device().Get(), &desc, temp_swap_chain.GetAddressOf());
+    HRESULT hr = backend->get_factory()->CreateSwapChain(backend->get_device().Get(), &desc, temp_swap_chain.GetAddressOf());
     if (FAILED(hr)) {
         // Fallback to DISCARD if FLIP_DISCARD is not supported
         desc.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
-        hr = backend.get_factory()->CreateSwapChain(backend.get_device().Get(), &desc, temp_swap_chain.GetAddressOf());
+        hr = backend->get_factory()->CreateSwapChain(backend->get_device().Get(), &desc, temp_swap_chain.GetAddressOf());
     }
 
     if (SUCCEEDED(hr)) {
@@ -475,7 +497,7 @@ DX11Swapchain::DX11Swapchain(const RHISwapchainInfo& info, DX11Backend& backend)
         textures_.push_back(texture);
 
         ComPtr<ID3D11RenderTargetView> rtv;
-        backend.get_device()->CreateRenderTargetView(back_buffer.Get(), nullptr, rtv.GetAddressOf());
+        backend->get_device()->CreateRenderTargetView(back_buffer.Get(), nullptr, rtv.GetAddressOf());
         back_buffer_rtvs_.push_back(rtv);
     }
 }
@@ -516,11 +538,17 @@ void DX11Swapchain::present(RHISemaphoreRef wait_semaphore) {
 void DX11Swapchain::destroy() { swap_chain_.Reset(); textures_.clear(); }
 
 // --- DX11Sampler ---
-DX11Sampler::DX11Sampler(const RHISamplerInfo& info, DX11Backend& backend) 
+DX11Sampler::DX11Sampler(const RHISamplerInfo& info, std::shared_ptr<DX11Backend> backend) 
     : RHISampler(info), backend_(backend) {
 }
 
 bool DX11Sampler::init() {
+    auto backend = backend_.lock();
+    if (!backend || !backend->is_valid()) {
+        ERR(LogRHI, "Failed to init DX11Sampler: backend is destroyed or invalid");
+        return false;
+    }
+    
     D3D11_SAMPLER_DESC desc = {};
     desc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
     desc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
@@ -529,7 +557,7 @@ bool DX11Sampler::init() {
     desc.ComparisonFunc = D3D11_COMPARISON_NEVER;
     desc.MinLOD = 0;
     desc.MaxLOD = D3D11_FLOAT32_MAX;
-    HRESULT hr = backend_.get_device()->CreateSamplerState(&desc, sampler_state_.GetAddressOf());
+    HRESULT hr = backend->get_device()->CreateSamplerState(&desc, sampler_state_.GetAddressOf());
     if (FAILED(hr)) {
         ERR(LogRHI, "Failed to create DX11 Sampler State (HRESULT: 0x{:08X})", (uint32_t)hr);
         return false;
@@ -540,11 +568,17 @@ bool DX11Sampler::init() {
 void DX11Sampler::destroy() { sampler_state_.Reset(); }
 
 // --- DX11Shader ---
-DX11Shader::DX11Shader(const RHIShaderInfo& info, DX11Backend& backend) 
+DX11Shader::DX11Shader(const RHIShaderInfo& info, std::shared_ptr<DX11Backend> backend) 
     : RHIShader(info), backend_(backend) {
 }
 
 bool DX11Shader::init() {
+    auto backend = backend_.lock();
+    if (!backend || !backend->is_valid()) {
+        ERR(LogRHI, "Failed to init DX11Shader: backend is destroyed or invalid");
+        return false;
+    }
+    
     HRESULT hr = S_OK;
     const void* code_ptr = info_.code.data();
     size_t code_size = info_.code.size();
@@ -556,13 +590,13 @@ bool DX11Shader::init() {
 
     switch (info_.frequency) {
         case SHADER_FREQUENCY_VERTEX:
-            hr = backend_.get_device()->CreateVertexShader(code_ptr, code_size, nullptr, (ID3D11VertexShader**)shader_resource_.GetAddressOf());
+            hr = backend->get_device()->CreateVertexShader(code_ptr, code_size, nullptr, (ID3D11VertexShader**)shader_resource_.GetAddressOf());
             break;
         case SHADER_FREQUENCY_FRAGMENT:
-            hr = backend_.get_device()->CreatePixelShader(code_ptr, code_size, nullptr, (ID3D11PixelShader**)shader_resource_.GetAddressOf());
+            hr = backend->get_device()->CreatePixelShader(code_ptr, code_size, nullptr, (ID3D11PixelShader**)shader_resource_.GetAddressOf());
             break;
         case SHADER_FREQUENCY_COMPUTE:
-            hr = backend_.get_device()->CreateComputeShader(code_ptr, code_size, nullptr, (ID3D11ComputeShader**)shader_resource_.GetAddressOf());
+            hr = backend->get_device()->CreateComputeShader(code_ptr, code_size, nullptr, (ID3D11ComputeShader**)shader_resource_.GetAddressOf());
             break;
         default:
             ERR(LogRHI, "Unsupported shader frequency for DX11");
@@ -580,11 +614,17 @@ bool DX11Shader::init() {
 void DX11Shader::destroy() { shader_resource_.Reset(); blob_.Reset(); }
 
 // --- DX11GraphicsPipeline ---
-DX11GraphicsPipeline::DX11GraphicsPipeline(const RHIGraphicsPipelineInfo& info, DX11Backend& backend)
+DX11GraphicsPipeline::DX11GraphicsPipeline(const RHIGraphicsPipelineInfo& info, std::shared_ptr<DX11Backend> backend)
     : RHIGraphicsPipeline(info), backend_(backend) {
 }
 
 bool DX11GraphicsPipeline::init() {
+    auto backend = backend_.lock();
+    if (!backend || !backend->is_valid()) {
+        ERR(LogRHI, "Failed to init DX11GraphicsPipeline: backend is destroyed or invalid");
+        return false;
+    }
+    
     auto vs = resource_cast(info_.vertex_shader);
     if (vs) {
         std::vector<D3D11_INPUT_ELEMENT_DESC> elements;
@@ -654,7 +694,7 @@ bool DX11GraphicsPipeline::init() {
         }
         
         if (!elements.empty()) {
-            backend_.get_device()->CreateInputLayout(elements.data(), (UINT)elements.size(), 
+            backend->get_device()->CreateInputLayout(elements.data(), (UINT)elements.size(), 
                                                      vs->get_info().code.data(), vs->get_info().code.size(), 
                                                      input_layout_.GetAddressOf());
         }
@@ -672,13 +712,13 @@ bool DX11GraphicsPipeline::init() {
     rast_desc.MultisampleEnable = FALSE;
     rast_desc.AntialiasedLineEnable = FALSE;
 
-    backend_.get_device()->CreateRasterizerState(&rast_desc, rasterizer_state_.GetAddressOf());
+    backend->get_device()->CreateRasterizerState(&rast_desc, rasterizer_state_.GetAddressOf());
     
     // Blend State
     D3D11_BLEND_DESC blend_desc = {};
     blend_desc.RenderTarget[0].BlendEnable = FALSE;
     blend_desc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
-    backend_.get_device()->CreateBlendState(&blend_desc, blend_state_.GetAddressOf());
+    backend->get_device()->CreateBlendState(&blend_desc, blend_state_.GetAddressOf());
     
     // Depth Stencil State
     D3D11_DEPTH_STENCIL_DESC ds_desc = {};
@@ -687,7 +727,7 @@ bool DX11GraphicsPipeline::init() {
     ds_desc.DepthFunc = DX11Util::compare_func_to_dx11(info_.depth_stencil_state.depth_test);
     ds_desc.StencilEnable = FALSE;
     
-    backend_.get_device()->CreateDepthStencilState(&ds_desc, depth_stencil_state_.GetAddressOf());
+    backend->get_device()->CreateDepthStencilState(&ds_desc, depth_stencil_state_.GetAddressOf());
     
     // Set topology from pipeline info instead of hardcoding
     topology_ = DX11Util::primitive_type_to_dx11(info_.primitive_type);
@@ -719,13 +759,23 @@ void DX11GraphicsPipeline::destroy() {
 }
 
 // --- DX11Fence ---
-DX11Fence::DX11Fence(bool signaled, DX11Backend& backend) 
+DX11Fence::DX11Fence(bool signaled, std::shared_ptr<DX11Backend> backend) 
     : backend_(backend), signaled_(signaled) {
 }
 
 bool DX11Fence::init() {
+    auto backend = backend_.lock();
+    if (!backend || !backend->is_valid()) {
+        ERR(LogRHI, "Failed to init DX11Fence: backend is destroyed or invalid");
+        return false;
+    }
+    auto device = backend->get_device();
+    if (!device) {
+        ERR(LogRHI, "Failed to init DX11Fence: device is null");
+        return false;
+    }
     D3D11_QUERY_DESC desc = { D3D11_QUERY_EVENT, 0 };
-    HRESULT hr = backend_.get_device()->CreateQuery(&desc, query_.GetAddressOf());
+    HRESULT hr = device->CreateQuery(&desc, query_.GetAddressOf());
     if (FAILED(hr)) {
         ERR(LogRHI, "Failed to create DX11 Query for Fence (HRESULT: 0x{:08X})", (uint32_t)hr);
         return false;
@@ -737,7 +787,21 @@ bool DX11Fence::init() {
 }
 
 void DX11Fence::wait() {
-    while (backend_.get_context()->GetData(query_.Get(), nullptr, 0, 0) == S_FALSE) {
+    // Check if fence is still valid (not destroyed)
+    if (!query_) {
+        return;
+    }
+    // Check if backend is still available and valid
+    auto backend = backend_.lock();
+    if (!backend || !backend->is_valid()) {
+        return;
+    }
+    // Check if backend context is still available
+    auto context = backend->get_context();
+    if (!context) {
+        return;
+    }
+    while (context->GetData(query_.Get(), nullptr, 0, 0) == S_FALSE) {
         Sleep(0);
     }
 }
@@ -777,6 +841,10 @@ DX11Backend::DX11Backend(const RHIBackendInfo& info) : RHIBackend(info) {
 
 void DX11Backend::tick() { RHIBackend::tick(); }
 void DX11Backend::destroy() { 
+    // Log stack trace to find who called destroy
+    WARN(LogRHI, "DX11Backend::destroy() called! device_={} context_={}", 
+         (void*)device_.Get(), (void*)context_.Get());
+    
     // Shutdown ImGui if initialized
     if (ImGui::GetCurrentContext()) {
         ImGui_ImplDX11_Shutdown();
@@ -868,16 +936,16 @@ RHISurfaceRef DX11Backend::create_surface(void* native_window_handle) {
 }
 
 RHISwapchainRef DX11Backend::create_swapchain(const RHISwapchainInfo& info) {
-    auto swapchain = std::make_shared<DX11Swapchain>(info, *this);
+    auto swapchain = std::make_shared<DX11Swapchain>(info, shared_from_this());
     register_resource(swapchain);
     return swapchain;
 }
 
 RHICommandPoolRef DX11Backend::create_command_pool(const RHICommandPoolInfo& info) { return std::make_shared<DX11CommandPool>(info); }
-RHICommandContextRef DX11Backend::create_command_context(RHICommandPoolRef pool) { return std::make_shared<DX11CommandContext>(pool, *this); }
+RHICommandContextRef DX11Backend::create_command_context(RHICommandPoolRef pool) { return std::make_shared<DX11CommandContext>(pool, shared_from_this()); }
 
 RHIBufferRef DX11Backend::create_buffer(const RHIBufferInfo& info) {
-    auto buffer = std::make_shared<DX11Buffer>(info, *this);
+    auto buffer = std::make_shared<DX11Buffer>(info, shared_from_this());
     if (!buffer->init()) {
         return nullptr;
     }
@@ -885,7 +953,7 @@ RHIBufferRef DX11Backend::create_buffer(const RHIBufferInfo& info) {
 }
 
 RHITextureRef DX11Backend::create_texture(const RHITextureInfo& info) {
-    auto texture = std::make_shared<DX11Texture>(info, *this);
+    auto texture = std::make_shared<DX11Texture>(info, shared_from_this());
     if (!texture->init()) {
         return nullptr;
     }
@@ -893,12 +961,12 @@ RHITextureRef DX11Backend::create_texture(const RHITextureInfo& info) {
 }
 
 RHITextureViewRef DX11Backend::create_texture_view(const RHITextureViewInfo& info) {
-    auto view = std::make_shared<DX11TextureView>(info, *this);
+    auto view = std::make_shared<DX11TextureView>(info, shared_from_this());
     register_resource(view); return view;
 }
 
 RHISamplerRef DX11Backend::create_sampler(const RHISamplerInfo& info) {
-    auto sampler = std::make_shared<DX11Sampler>(info, *this);
+    auto sampler = std::make_shared<DX11Sampler>(info, shared_from_this());
     if (!sampler->init()) {
         return nullptr;
     }
@@ -906,7 +974,7 @@ RHISamplerRef DX11Backend::create_sampler(const RHISamplerInfo& info) {
 }
 
 RHIShaderRef DX11Backend::create_shader(const RHIShaderInfo& info) {
-    auto shader = std::make_shared<DX11Shader>(info, *this);
+    auto shader = std::make_shared<DX11Shader>(info, shared_from_this());
     if (!shader->init()) {
         WARN(LogRHI, "Shader initialization failed, using null shader fallback.");
         return nullptr;
@@ -920,7 +988,7 @@ RHITopLevelAccelerationStructureRef DX11Backend::create_top_level_acceleration_s
 RHIBottomLevelAccelerationStructureRef DX11Backend::create_bottom_level_acceleration_structure(const RHIBottomLevelAccelerationStructureInfo& info) { return nullptr; }
 
 RHIRootSignatureRef DX11Backend::create_root_signature(const RHIRootSignatureInfo& info) {
-    auto sig = std::make_shared<DX11RootSignature>(info, *this);
+    auto sig = std::make_shared<DX11RootSignature>(info, shared_from_this());
     if (!sig->init()) {
         return nullptr;
     }
@@ -928,7 +996,7 @@ RHIRootSignatureRef DX11Backend::create_root_signature(const RHIRootSignatureInf
 }
 
 RHIRenderPassRef DX11Backend::create_render_pass(const RHIRenderPassInfo& info) {
-    auto pass = std::make_shared<DX11RenderPass>(info, *this);
+    auto pass = std::make_shared<DX11RenderPass>(info, shared_from_this());
     if (!pass->init()) {
         return nullptr;
     }
@@ -936,7 +1004,7 @@ RHIRenderPassRef DX11Backend::create_render_pass(const RHIRenderPassInfo& info) 
 }
 
 RHIGraphicsPipelineRef DX11Backend::create_graphics_pipeline(const RHIGraphicsPipelineInfo& info) {
-    auto pipeline = std::make_shared<DX11GraphicsPipeline>(info, *this);
+    auto pipeline = std::make_shared<DX11GraphicsPipeline>(info, shared_from_this());
     if (!pipeline->init()) {
         return nullptr;
     }
@@ -946,7 +1014,7 @@ RHIGraphicsPipelineRef DX11Backend::create_graphics_pipeline(const RHIGraphicsPi
 RHIComputePipelineRef DX11Backend::create_compute_pipeline(const RHIComputePipelineInfo& info) { return nullptr; }
 RHIRayTracingPipelineRef DX11Backend::create_ray_tracing_pipeline(const RHIRayTracingPipelineInfo& info) { return nullptr; }
 RHIFenceRef DX11Backend::create_fence(bool signaled) { 
-    auto fence = std::make_shared<DX11Fence>(signaled, *this);
+    auto fence = std::make_shared<DX11Fence>(signaled, shared_from_this());
     if (!fence->init()) {
         return nullptr;
     }
@@ -983,10 +1051,24 @@ std::vector<uint8_t> DX11Backend::compile_shader(const char* source, const char*
 }
 
 // --- DX11CommandContext ---
-DX11CommandContext::DX11CommandContext(RHICommandPoolRef pool, DX11Backend& backend) : RHICommandContext(pool), backend_(backend), context_(backend.get_context()) {}
+DX11CommandContext::DX11CommandContext(RHICommandPoolRef pool, std::shared_ptr<DX11Backend> backend) : RHICommandContext(pool), backend_(backend) {
+    if (!backend) {
+        ERR(LogRHI, "DX11CommandContext created with null backend!");
+        return;
+    }
+    if (!backend->is_valid()) {
+        ERR(LogRHI, "DX11CommandContext created with invalid backend! device_={}", (void*)backend->get_device().Get());
+        return;
+    }
+    context_ = backend->get_context();
+    if (!context_) {
+        ERR(LogRHI, "DX11CommandContext: backend->get_context() returned null!");
+    }
+}
 void DX11CommandContext::begin_command() {}
 void DX11CommandContext::end_command() {}
 void DX11CommandContext::execute(RHIFenceRef fence, RHISemaphoreRef ws, RHISemaphoreRef ss) {
+    if (!context_) return;
     if (fence) {
         auto dx_fence = resource_cast(fence);
         context_->End(dx_fence->raw_handle_as<ID3D11Query>());
@@ -996,6 +1078,9 @@ void DX11CommandContext::execute(RHIFenceRef fence, RHISemaphoreRef ws, RHISemap
 void DX11CommandContext::texture_barrier(const RHITextureBarrier& b) {}
 void DX11CommandContext::buffer_barrier(const RHIBufferBarrier& b) {}
 void DX11CommandContext::copy_texture_to_buffer(RHITextureRef s, TextureSubresourceLayers ss, RHIBufferRef d, uint64_t doff) {
+    auto backend = backend_.lock();
+    if (!backend || !backend->is_valid()) return;
+    
     // CopyResource cannot be used between different resource types (texture vs buffer)
     // We need to create a staging texture, copy to it, then copy data to buffer
     auto* dx11_texture = static_cast<DX11Texture*>(s.get());
@@ -1028,7 +1113,7 @@ void DX11CommandContext::copy_texture_to_buffer(RHITextureRef s, TextureSubresou
     staging_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
     
     ComPtr<ID3D11Texture2D> staging_texture;
-    HRESULT hr = backend_.get_device()->CreateTexture2D(&staging_desc, nullptr, staging_texture.GetAddressOf());
+    HRESULT hr = backend->get_device()->CreateTexture2D(&staging_desc, nullptr, staging_texture.GetAddressOf());
     if (FAILED(hr)) return;
     
     // Calculate source subresource index
@@ -1075,7 +1160,8 @@ void DX11CommandContext::copy_texture_to_buffer(RHITextureRef s, TextureSubresou
         buf_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ | D3D11_CPU_ACCESS_WRITE;
         
         ComPtr<ID3D11Buffer> staging_buffer;
-        hr = backend_.get_device()->CreateBuffer(&buf_desc, nullptr, staging_buffer.GetAddressOf());
+        // backend already locked above
+        hr = backend->get_device()->CreateBuffer(&buf_desc, nullptr, staging_buffer.GetAddressOf());
         if (SUCCEEDED(hr)) {
             // Copy data to staging buffer
             D3D11_MAPPED_SUBRESOURCE buf_mapped;
@@ -1317,8 +1403,11 @@ bool DX11CommandContext::read_texture(RHITextureRef texture, void* data, uint32_
     staging_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
     staging_desc.MiscFlags = 0;
     
+    auto backend = backend_.lock();
+    if (!backend) return false;
+    
     ComPtr<ID3D11Texture2D> staging_texture;
-    HRESULT hr = backend_.get_device()->CreateTexture2D(&staging_desc, nullptr, staging_texture.GetAddressOf());
+    HRESULT hr = backend->get_device()->CreateTexture2D(&staging_desc, nullptr, staging_texture.GetAddressOf());
     if (FAILED(hr)) return false;
     
     // Copy to staging
@@ -1349,7 +1438,7 @@ bool DX11CommandContext::read_texture(RHITextureRef texture, void* data, uint32_
     return true;
 }
 
-DX11RenderPass::DX11RenderPass(const RHIRenderPassInfo& info, DX11Backend& backend) : RHIRenderPass(info) {}
+DX11RenderPass::DX11RenderPass(const RHIRenderPassInfo& info, std::shared_ptr<DX11Backend> backend) : RHIRenderPass(info) {}
 RHIDescriptorSetRef DX11RootSignature::create_descriptor_set(uint32_t set) { return nullptr; }
 
 // DX11CommandContextImmediate implementation

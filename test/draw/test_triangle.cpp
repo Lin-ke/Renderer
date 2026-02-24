@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include "test/test_utils.h"
 #include "engine/core/window/window.h"
 #include "engine/main/engine_context.h"
 #include "engine/function/render/graph/rdg_builder.h"
@@ -218,9 +219,12 @@ TEST_CASE("DX11 Swapchain and Fence - Basic Triangle", "[draw][triangle]") {
     context->destroy();
     pool->destroy();
     swapchain->destroy();
-    backend->destroy();
+    
+    // Note: Do NOT call backend->destroy() or reset_backend() here.
+    // The RenderSystem holds a shared_ptr to the backend, and destroying
+    // it here would invalidate the backend for subsequent tests.
+    // The backend will be properly cleaned up when TestContext shuts down.
     window.reset();
-    RHIBackend::reset_backend();
 }
 
 struct PerFrameData {
@@ -242,12 +246,8 @@ struct PerLightData {
 };
 
 TEST_CASE("Draw Cube Blinn-Phong", "[draw][triangle]") {
-    // 1. Init Engine
-    std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Render);
-    mode.set(EngineContext::StartMode::Window);
-    mode.set(EngineContext::StartMode::SingleThread);
-    EngineContext::init(mode);
+    // Reset test state (Engine is already initialized by test_main.cpp)
+    test_utils::TestContext::reset();
 
     auto* rhi = EngineContext::render_system()->get_rhi().get();
     void* window_handle = EngineContext::render_system()->get_window_handle();
@@ -416,5 +416,6 @@ TEST_CASE("Draw Cube Blinn-Phong", "[draw][triangle]") {
         frames++;
     }
     
-    EngineContext::exit();
+    // Reset state for next test
+    test_utils::TestContext::reset();
 }

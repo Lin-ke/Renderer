@@ -14,19 +14,15 @@ World::~World() {
 
 void World::init() {
     if (initialized_) return;
-    
-    INFO(LogWorld, "Initializing World...");
     initialized_ = true;
-    INFO(LogWorld, "World initialized");
+    // INFO(LogWorld, "World initialized");
 }
 
 void World::destroy() {
     if (!initialized_) return;
-    
-    INFO(LogWorld, "Destroying World...");
     active_scene_.reset();
     initialized_ = false;
-    INFO(LogWorld, "World destroyed");
+    // INFO(LogWorld, "World destroyed");
 }
 
 World& World::get() {

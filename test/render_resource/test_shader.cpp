@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
+#include "test/test_utils.h"
 #include "engine/main/engine_context.h"
 #include "engine/function/render/render_resource/shader.h"
 #include "engine/function/asset/asset_manager.h"
@@ -35,12 +36,7 @@ static std::vector<uint8_t> compile_shader_test(const std::string& source, const
 }
 
 TEST_CASE("Shader Loading and Serialization", "[render_resource]") {
-    std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Asset);
-    mode.set(EngineContext::StartMode::Window);
-    mode.set(EngineContext::StartMode::Render);
-    mode.set(EngineContext::StartMode::SingleThread);
-    EngineContext::init(mode);
+    test_utils::TestContext::reset();
     
     std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
     EngineContext::asset()->init(test_asset_dir);
@@ -76,5 +72,5 @@ TEST_CASE("Shader Loading and Serialization", "[render_resource]") {
     CHECK(loaded_shader->get_entry() == "main");
     REQUIRE(loaded_shader->shader_ != nullptr);
 
-    EngineContext::exit();
+    test_utils::TestContext::reset();
 }

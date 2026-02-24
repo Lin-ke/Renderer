@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 #include <cmath>
+#include "test/test_utils.h"
 #include "engine/main/engine_context.h"
 #include "engine/function/framework/world.h"
 #include "engine/function/framework/scene.h"
@@ -103,9 +104,7 @@ CEREAL_REGISTER_POLYMORPHIC_RELATION(Component, OrbitComponent);
 // 测试用例：Tick 系统基础功能
 // ============================================================================
 TEST_CASE("Tick system basic functionality", "[tick]") {
-    std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Asset);
-    EngineContext::init(mode);
+    test_utils::TestContext::reset();
     
     // 获取 World 并创建场景
     World* world = EngineContext::world();
@@ -172,16 +171,14 @@ TEST_CASE("Tick system basic functionality", "[tick]") {
         REQUIRE(transform->transform.get_position().z() == Approx(expected_z).epsilon(0.001));
     }
     
-    EngineContext::exit();
+    test_utils::TestContext::reset();
 }
 
 // ============================================================================
 // 测试用例：World -> Scene -> Entity -> Component Tick 传播
 // ============================================================================
 TEST_CASE("Tick propagation through hierarchy", "[tick]") {
-    std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Asset);
-    EngineContext::init(mode);
+    test_utils::TestContext::reset();
     
     World* world = EngineContext::world();
     auto scene = std::make_shared<Scene>();
@@ -228,16 +225,14 @@ TEST_CASE("Tick propagation through hierarchy", "[tick]") {
         }
     }
     
-    EngineContext::exit();
+    test_utils::TestContext::reset();
 }
 
 // ============================================================================
 // 测试用例：帧率无关的运动（关键测试）
 // ============================================================================
 TEST_CASE("Frame rate independent movement", "[tick]") {
-    std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Asset);
-    EngineContext::init(mode);
+    test_utils::TestContext::reset();
     
     World* world = EngineContext::world();
     auto scene = std::make_shared<Scene>();
@@ -300,21 +295,19 @@ TEST_CASE("Frame rate independent movement", "[tick]") {
         REQUIRE(orbit->get_current_angle() == Approx(0.0f).margin(0.001));
     }
     
-    EngineContext::exit();
+    test_utils::TestContext::reset();
 }
 
 // ============================================================================
 // 测试用例：DeltaTime 查询
 // ============================================================================
 TEST_CASE("EngineContext time queries", "[tick]") {
-    std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Asset);
-    EngineContext::init(mode);
+    test_utils::TestContext::reset();
     
     SECTION("Initial tick count is zero") {
         REQUIRE(EngineContext::get_current_tick() == 0);
         REQUIRE(EngineContext::get_delta_time() == 0.0f);
     }
     
-    EngineContext::exit();
+    test_utils::TestContext::reset();
 }

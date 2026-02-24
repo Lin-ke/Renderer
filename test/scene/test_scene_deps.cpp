@@ -34,15 +34,9 @@ static const std::string KLEE_MODEL_PATH = "/Engine/models/Klee/klee.fbx";
 static const std::string TEST_MODEL_PATH = "/Engine/models/bunny.obj";
 
 TEST_CASE("Scene Dependency System with Model", "[scene][deps]") {
+    test_utils::TestContext::reset();
+    
     try {
-        std::bitset<8> mode;
-        mode.set(EngineContext::StartMode::Asset);
-        mode.set(EngineContext::StartMode::Window);
-        mode.set(EngineContext::StartMode::Render);
-        mode.set(EngineContext::StartMode::SingleThread);
-        
-        EngineContext::init(mode);
-        
         std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
         std::filesystem::create_directories(test_asset_dir);
         EngineContext::asset()->init(test_asset_dir);
@@ -66,7 +60,7 @@ TEST_CASE("Scene Dependency System with Model", "[scene][deps]") {
 
         if (models_to_test.empty()) {
             WARN(LogKleeSceneDeps, "No test models found. Skipping test.");
-            EngineContext::exit();
+            test_utils::TestContext::reset();
             REQUIRE(true);
             return;
         }
@@ -235,20 +229,16 @@ TEST_CASE("Scene Dependency System with Model", "[scene][deps]") {
             INFO(LogKleeSceneDeps, "Cleaned up {} auto-generated UUID-named asset files", cleaned);
         }
         
-        EngineContext::exit();
+        test_utils::TestContext::reset();
     } catch (const std::exception& e) {
         ERR(LogKleeSceneDeps, "Test failed: {}", e.what());
-        EngineContext::exit();
+        test_utils::TestContext::reset();
         FAIL("Test failed with exception");
     }
 }
 
 TEST_CASE("Scene Dependency Traversal", "[scene][deps]") {
-    std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Asset);
-    mode.set(EngineContext::StartMode::SingleThread);
-    
-    EngineContext::init(mode);
+    test_utils::TestContext::reset();
     
     auto scene = std::make_shared<Scene>();
     
@@ -267,5 +257,5 @@ TEST_CASE("Scene Dependency Traversal", "[scene][deps]") {
     // Empty scene with no real assets should have no dependencies
     REQUIRE(deps.empty());
     
-    EngineContext::exit();
+    test_utils::TestContext::reset();
 }

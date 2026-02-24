@@ -181,23 +181,77 @@ public:
     /**
      * @brief Load a scene from virtual path with full initialization
      * @param virtual_path Virtual path like "/Game/scene.asset"
-     * @param should_init_components Whether to call on_init() for all components
      * @param set_active Whether to set as active scene in World
      * @return SceneLoadResult with scene, camera, and status
      */
     static SceneLoadResult load(const std::string& virtual_path, 
-                                 bool should_init_components = true,
                                  bool set_active = true);
-    
-    /**
-     * @brief Initialize all components in a scene (call on_init)
-     */
-    static void init_components(Scene* scene);
     
     /**
      * @brief Check if scene file exists at virtual path
      */
     static bool scene_exists(const std::string& virtual_path);
+};
+
+/**
+ * @brief Utility for render tests handling scene creation and rendering
+ */
+class RenderTestApp {
+public:
+    using SceneCreateFunc = std::function<bool(const std::string&)>;
+    using SceneLoadedFunc = std::function<void(SceneLoadResult&)>;
+
+    struct Config {
+        std::string scene_path;
+        uint32_t width = 1280;
+        uint32_t height = 720;
+        int max_frames = 60;
+        int capture_frame = 30; // 0 to disable
+        SceneCreateFunc create_scene_func;
+        SceneLoadedFunc on_scene_loaded_func;
+    };
+
+    static bool run(const Config& config, std::vector<uint8_t>& out_screenshot_data, int* out_frames = nullptr);
+    static bool capture_screenshot(std::vector<uint8_t>& screenshot_data);
+};
+
+/**
+ * @brief Global test context for managing Engine lifecycle across tests
+ * 
+ * This allows tests to share a single Engine instance, significantly
+ * reducing test execution time by avoiding repeated init/exit cycles.
+ */
+class TestContext {
+public:
+    /**
+     * @brief Initialize the global Engine (called once before all tests)
+     */
+    static void init_engine();
+    
+    /**
+     * @brief Shutdown the global Engine (called once after all tests)
+     */
+    static void shutdown_engine();
+    
+    /**
+     * @brief Reset test state between tests without restarting Engine
+     * 
+     * This clears:
+     * - Active scene
+     * - Mesh renderer registrations
+     * - Render batches
+     * - Other per-test runtime state
+     */
+    static void reset();
+    
+    /**
+     * @brief Check if Engine is initialized
+     */
+    static bool is_initialized() { return engine_initialized_; }
+
+private:
+    static bool engine_initialized_;
+    static std::string test_asset_dir_;
 };
 
 } // namespace test_utils

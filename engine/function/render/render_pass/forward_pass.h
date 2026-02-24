@@ -48,9 +48,22 @@ public:
 
     void init() override;
     void build(RDGBuilder& builder) override;
+    
+    /**
+     * @brief Build the render pass into the RDG with explicit batches
+     * @param builder RDG builder
+     * @param color_target Color attachment target
+     * @param depth_target Depth attachment target (optional)
+     * @param batches Draw batches to render
+     */
+    void build(RDGBuilder& builder, RDGTextureHandle color_target,
+               std::optional<RDGTextureHandle> depth_target,
+               const std::vector<DrawBatch>& batches);
 
     std::string_view get_name() const override { return "ForwardPass"; }
     PassType get_type() const override { return PassType::Forward; }
+    
+    bool is_ready() const { return initialized_ && pipeline_ != nullptr; }
 
     /**
      * @brief Update per-frame uniforms (view, proj, camera, lights)
@@ -72,11 +85,6 @@ public:
      * @param batch Draw batch data
      */
     void draw_batch(RHICommandContextRef command, const DrawBatch& batch);
-
-    /**
-     * @brief Check if pass is ready to render
-     */
-    bool is_ready() const { return initialized_ && pipeline_ != nullptr; }
 
     /**
      * @brief Set wireframe mode

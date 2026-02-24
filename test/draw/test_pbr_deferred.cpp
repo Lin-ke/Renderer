@@ -26,50 +26,42 @@
 DEFINE_LOG_TAG(LogPbrDeferred, "PbrDeferred");
 
 TEST_CASE("GBuffer Pass Initialization", "[pbr][deferred]") {
-    std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Asset);
-    mode.set(EngineContext::StartMode::Render);
-    mode.set(EngineContext::StartMode::Window);
-    mode.set(EngineContext::StartMode::SingleThread);
-    
-    EngineContext::init(mode);
+    // Reset test state (Engine is already initialized by test_main.cpp)
+    test_utils::TestContext::reset();
     
     // Create GBuffer pass
     auto gbuffer_pass = std::make_shared<render::GBufferPass>();
     gbuffer_pass->init();
     
     REQUIRE(gbuffer_pass->is_ready());
-    EngineContext::exit();
+    
+    // Reset state for next test
+    test_utils::TestContext::reset();
 }
 
 TEST_CASE("Deferred Lighting Pass Initialization", "[pbr][deferred]") {
-    std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Asset);
-    mode.set(EngineContext::StartMode::Render);
-    mode.set(EngineContext::StartMode::Window);
-    mode.set(EngineContext::StartMode::SingleThread);
-    
-    EngineContext::init(mode);
+    // Reset test state (Engine is already initialized by test_main.cpp)
+    test_utils::TestContext::reset();
     
     // Create Deferred Lighting pass
     auto lighting_pass = std::make_shared<render::DeferredLightingPass>();
     lighting_pass->init();
     
     REQUIRE(lighting_pass->is_ready());
-    EngineContext::exit();
+    
+    // Reset state for next test
+    test_utils::TestContext::reset();
 }
 
 TEST_CASE("PBR Deferred Rendering - Material Ball", "[pbr][deferred]") {
+    // Reset test state (Engine is already initialized by test_main.cpp)
+    test_utils::TestContext::reset();
+    
     std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
     
-    std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Asset);
-    mode.set(EngineContext::StartMode::Render);
-    mode.set(EngineContext::StartMode::Window);
-    mode.set(EngineContext::StartMode::SingleThread);
-    
-    EngineContext::init(mode);
-    EngineContext::asset()->init(test_asset_dir);
+    if (auto am = EngineContext::asset()) {
+        am->init(test_asset_dir);
+    }
     
     REQUIRE(EngineContext::rhi() != nullptr);
     REQUIRE(EngineContext::render_system() != nullptr);
@@ -192,6 +184,6 @@ TEST_CASE("PBR Deferred Rendering - Material Ball", "[pbr][deferred]") {
         }
     }
     
-    EngineContext::world()->set_active_scene(nullptr);
-    EngineContext::exit();
+    // Reset state for next test
+    test_utils::TestContext::reset();
 }

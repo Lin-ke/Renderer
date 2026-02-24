@@ -677,7 +677,7 @@ void NPRForwardPass::build(RDGBuilder& builder, RDGTextureHandle color_target,
         .color(0, color_target, ATTACHMENT_LOAD_OP_CLEAR, ATTACHMENT_STORE_OP_STORE, 
                Color4{0.1f, 0.1f, 0.2f, 1.0f});
     
-    // Use LOAD for depth if depth prepass was performed, otherwise CLEAR
+    // Use LOAD for depth since depth prepass already wrote it
     // Use read-only depth to allow simultaneous SRV binding for rim light
     rp_builder.depth_stencil(depth_target, ATTACHMENT_LOAD_OP_LOAD, 
                              ATTACHMENT_STORE_OP_DONT_CARE, 1.0f, 0, {}, true);
@@ -687,7 +687,7 @@ void NPRForwardPass::build(RDGBuilder& builder, RDGTextureHandle color_target,
     rp_builder.read(0, 0, 0, depth_target, VIEW_TYPE_2D, 
                     TextureSubresourceRange{TEXTURE_ASPECT_DEPTH, 0, 1, 0, 1});
     
-    // Get the actual depth texture from RDG for binding
+    // Get the actual depth texture from prepass for screen-space rim light
     auto* render_system = EngineContext::render_system();
     RHITextureRef depth_tex = render_system ? render_system->get_prepass_depth_texture() : nullptr;
     

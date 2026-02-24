@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include "test/test_utils.h"
 #include "engine/main/engine_context.h"
 #include "engine/function/render/render_resource/model.h"
 #include "engine/function/render/render_resource/material.h"
@@ -12,13 +13,7 @@
 DEFINE_LOG_TAG(LogFbxMaterial, "FbxMaterial");
 
 TEST_CASE("FBX Model Loading with Materials", "[render_resource][fbx]") {
-    std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Asset);
-    mode.set(EngineContext::StartMode::Render);
-    mode.set(EngineContext::StartMode::Window);
-    mode.set(EngineContext::StartMode::SingleThread);
-    
-    EngineContext::init(mode);
+    test_utils::TestContext::reset();
     
     std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
     EngineContext::asset()->init(test_asset_dir);
@@ -46,17 +41,11 @@ TEST_CASE("FBX Model Loading with Materials", "[render_resource][fbx]") {
         REQUIRE(mesh->get_index_buffer() != nullptr);
     }
     
-    EngineContext::exit();
+    test_utils::TestContext::reset();
 }
 
 TEST_CASE("FBX Model Without Materials", "[render_resource][fbx]") {
-    std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Asset);
-    mode.set(EngineContext::StartMode::Render);
-    mode.set(EngineContext::StartMode::Window);
-    mode.set(EngineContext::StartMode::SingleThread);
-    
-    EngineContext::init(mode);
+    test_utils::TestContext::reset();
     
     std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
     EngineContext::asset()->init(test_asset_dir);
@@ -77,17 +66,11 @@ TEST_CASE("FBX Model Without Materials", "[render_resource][fbx]") {
         REQUIRE(model->get_material(i) == nullptr);
     }
     
-    EngineContext::exit();
+    test_utils::TestContext::reset();
 }
 
 TEST_CASE("FBX Model Processing Options", "[render_resource][fbx]") {
-    std::bitset<8> mode;
-    mode.set(EngineContext::StartMode::Asset);
-    mode.set(EngineContext::StartMode::Render);
-    mode.set(EngineContext::StartMode::Window);
-    mode.set(EngineContext::StartMode::SingleThread);
-    
-    EngineContext::init(mode);
+    test_utils::TestContext::reset();
     
     std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
     EngineContext::asset()->init(test_asset_dir);
@@ -121,5 +104,5 @@ TEST_CASE("FBX Model Processing Options", "[render_resource][fbx]") {
         REQUIRE(model->get_submesh_count() > 0);
     }
     
-    EngineContext::exit();
+    test_utils::TestContext::reset();
 }

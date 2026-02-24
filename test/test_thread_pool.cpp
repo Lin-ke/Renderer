@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include "test/test_utils.h"
 #include "engine/main/engine_context.h"
 #include "engine/core/os/thread_pool.h"
 #include <atomic>
@@ -6,12 +7,7 @@
 #include <future>
 
 TEST_CASE("Thread Pool Integration Test", "[thread_pool]") {
-    EngineContext::exit();
-
-    // Initialize EngineContext in multi-threaded mode (StartMode::SingleThread bit is 0)
-    // We only need basic systems, maybe Log
-    std::bitset<8> mode;
-    EngineContext::init(mode);
+    test_utils::TestContext::reset();
 
     auto* pool = EngineContext::thread_pool();
     REQUIRE(pool != nullptr);
@@ -66,5 +62,5 @@ TEST_CASE("Thread Pool Integration Test", "[thread_pool]") {
         REQUIRE(completed == num_tasks);
     }
 
-    EngineContext::exit();
+    test_utils::TestContext::reset();
 }
