@@ -843,9 +843,14 @@ struct VertexElement {
 
     bool __padding[3] = {0};
 
+    // Semantic name for shader matching (e.g., "POSITION", "NORMAL", "TEXCOORD")
+    std::string semantic_name = "POSITION";
+    uint32_t semantic_index = 0;  // Semantic index (e.g., TEXCOORD0, TEXCOORD1)
+
     friend bool operator==(const VertexElement& a, const VertexElement& b) {
         return a.stream_index == b.stream_index && a.attribute_index == b.attribute_index && a.format == b.format && a.offset == b.offset &&
-               a.stride == b.stride && a.use_instance_index == b.use_instance_index;
+               a.stride == b.stride && a.use_instance_index == b.use_instance_index &&
+               a.semantic_name == b.semantic_name && a.semantic_index == b.semantic_index;
     }
 };
 

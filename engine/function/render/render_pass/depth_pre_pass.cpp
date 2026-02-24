@@ -105,7 +105,7 @@ void DepthPrePass::create_pipeline() {
     // Input Layout: Position only
     pipe_info.vertex_input_state.vertex_elements.resize(1);
     pipe_info.vertex_input_state.vertex_elements[0].stream_index = 0;
-    pipe_info.vertex_input_state.vertex_elements[0].attribute_index = 0; // POSITION
+    pipe_info.vertex_input_state.vertex_elements[0].semantic_name = "POSITION";
     pipe_info.vertex_input_state.vertex_elements[0].format = FORMAT_R32G32B32_SFLOAT;
     pipe_info.vertex_input_state.vertex_elements[0].offset = 0;
 

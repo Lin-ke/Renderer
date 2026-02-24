@@ -393,10 +393,15 @@ private:
 
 /**
  * @brief DX11 implementation of RHICommandContextImmediate
+ * 
+ * Uses immediate context for synchronous resource upload operations.
+ * All commands are executed immediately on the GPU, and flush() waits
+ * for GPU completion.
  */
 class DX11CommandContextImmediate : public RHICommandContextImmediate {
 public:
     DX11CommandContextImmediate(DX11Backend& backend);
+    virtual ~DX11CommandContextImmediate() = default;
 
     virtual void flush() override final;
 
@@ -412,6 +417,9 @@ public:
 
 private:
     DX11Backend& backend_;
+    
+    // Get the immediate context for all operations
+    ID3D11DeviceContext* get_context();
 };
 
 /**

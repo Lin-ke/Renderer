@@ -151,11 +151,11 @@ void ForwardPass::create_pipeline() {
     
     pipe_info.vertex_input_state.vertex_elements.resize(2);
     pipe_info.vertex_input_state.vertex_elements[0].stream_index = 0;
-    pipe_info.vertex_input_state.vertex_elements[0].attribute_index = 0;
+    pipe_info.vertex_input_state.vertex_elements[0].semantic_name = "POSITION";
     pipe_info.vertex_input_state.vertex_elements[0].format = FORMAT_R32G32B32_SFLOAT;
     pipe_info.vertex_input_state.vertex_elements[0].offset = 0;
     pipe_info.vertex_input_state.vertex_elements[1].stream_index = 1;
-    pipe_info.vertex_input_state.vertex_elements[1].attribute_index = 1;
+    pipe_info.vertex_input_state.vertex_elements[1].semantic_name = "NORMAL";
     pipe_info.vertex_input_state.vertex_elements[1].format = FORMAT_R32G32B32_SFLOAT;
     pipe_info.vertex_input_state.vertex_elements[1].offset = 0;
     

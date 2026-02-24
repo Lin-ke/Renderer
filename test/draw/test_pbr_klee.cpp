@@ -225,8 +225,8 @@ TEST_CASE("Render NPR Model", "[draw][npr]") {
     // ============================================================================
     // Part 1: Create Scene (Comment this out after first run to skip creation)
     // ============================================================================
-    bool create_success = create_and_save_npr_scene(SCENE_SAVE_PATH);
-    REQUIRE(create_success);
+    // bool create_success = create_and_save_npr_scene(SCENE_SAVE_PATH);
+    // REQUIRE(create_success);
     
     // ============================================================================
     // Part 2: Load Scene

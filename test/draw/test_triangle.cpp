@@ -135,8 +135,8 @@ TEST_CASE("DX11 Swapchain and Fence - Basic Triangle", "[draw][triangle]") {
     pipe_info.vertex_shader = vs;
     pipe_info.fragment_shader = ps;
     pipe_info.vertex_input_state.vertex_elements = {
-        { 0, 0, FORMAT_R32G32B32_SFLOAT, 0, 6 * sizeof(float) },
-        { 0, 1, FORMAT_R32G32B32_SFLOAT, 3 * sizeof(float), 6 * sizeof(float) }
+        { 0, 0, FORMAT_R32G32B32_SFLOAT, 0, 6 * sizeof(float), false, {0}, "POSITION", 0 },
+        { 0, 1, FORMAT_R32G32B32_SFLOAT, 3 * sizeof(float), 6 * sizeof(float), false, {0}, "NORMAL", 0 }
     };
     pipe_info.depth_stencil_state.enable_depth_test = false;
     auto pipeline = backend->create_graphics_pipeline(pipe_info);
@@ -351,8 +351,8 @@ TEST_CASE("Draw Cube Blinn-Phong", "[draw][triangle]") {
     pipe_info.vertex_shader = vs;
     pipe_info.fragment_shader = ps;
     pipe_info.vertex_input_state.vertex_elements = {
-        { 0, 0, FORMAT_R32G32B32_SFLOAT, 0, 6 * sizeof(float) },
-        { 0, 1, FORMAT_R32G32B32_SFLOAT, 3 * sizeof(float), 6 * sizeof(float) }
+        { 0, 0, FORMAT_R32G32B32_SFLOAT, 0, 6 * sizeof(float), false, {0}, "POSITION", 0 },
+        { 0, 1, FORMAT_R32G32B32_SFLOAT, 3 * sizeof(float), 6 * sizeof(float), false, {0}, "NORMAL", 0 }
     };
     pipe_info.depth_stencil_state.enable_depth_test = false;
     auto pipeline = rhi->create_graphics_pipeline(pipe_info);

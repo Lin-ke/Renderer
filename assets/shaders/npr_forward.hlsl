@@ -193,78 +193,80 @@ float4 PSMain(PSInput input) : SV_TARGET {
         float4 sampled = albedo_map.Sample(default_sampler, input.texcoord);
         base_color *= sampled.rgb;
     }
+    // return float4(input.texcoord, 0.0, 1.0);
     
-    // Get normal
-    float3 N = GetNormal(input);
+    // // Get normal
+    // float3 N = GetNormal(input);
     
-    // Get LightMap data (default values if no light map)
-    float metallic = 0.0;
-    float ao = 0.5;      // 0.5 = neutral
-    float specular = 0.5;
-    float material_type = 0.5;
+    // // Get LightMap data (default values if no light map)
+    // float metallic = 0.0;
+    // float ao = 0.5;      // 0.5 = neutral
+    // float specular = 0.5;
+    // float material_type = 0.5;
     
-    if (use_light_map > 0.5) {
-        float4 light_data = light_map.Sample(default_sampler, input.texcoord);
-        // Gamma correction for light map
-        light_data = pow(light_data, 1.0 / 2.2);
-        metallic = light_data.r;
-        ao = light_data.g;
-        specular = light_data.b;
-        material_type = light_data.a;
-    }
+    // if (use_light_map > 0.5) {
+    //     float4 light_data = light_map.Sample(default_sampler, input.texcoord);
+    //     // Gamma correction for light map
+    //     light_data = pow(light_data, 1.0 / 2.2);
+    //     metallic = light_data.r;
+    //     ao = light_data.g;
+    //     specular = light_data.b;
+    //     material_type = light_data.a;
+    // }
     
-    // Directional light calculation
-    float3 dir_color = float3(0.0, 0.0, 0.0);
-    {
-        float3 L = normalize(-light_dir);
+    // // Directional light calculation
+    // float3 dir_color = float3(0.0, 0.0, 0.0);
+    // {
+    //     float3 L = normalize(-light_dir);
         
-        // Half Lambert lighting
-        float ao_shadow = ao * 2.0;  // AO shadow factor
-        float lambert = max(0.0, dot(N, L));
-        float half_lambert = max(0.0, min(1.0, (lambert * 0.5 + 0.5) * ao_shadow));
+    //     // Half Lambert lighting
+    //     float ao_shadow = ao * 2.0;  // AO shadow factor
+    //     float lambert = max(0.0, dot(N, L));
+    //     float half_lambert = max(0.0, min(1.0, (lambert * 0.5 + 0.5) * ao_shadow));
         
-        // Smoothstep for toon look
-        half_lambert = smoothstep(0.0, lambert_clamp, half_lambert);
+    //     // Smoothstep for toon look
+    //     half_lambert = smoothstep(0.0, lambert_clamp, half_lambert);
         
-        // Sample ramp texture
-        float3 surface_color;
-        if (use_ramp_map > 0.5) {
-            // Get ramp texture dimensions
-            int2 ramp_size;
-            ramp_map.GetDimensions(ramp_size.x, ramp_size.y);
+    //     // Sample ramp texture
+    //     float3 surface_color;
+    //     if (use_ramp_map > 0.5) {
+    //         // Get ramp texture dimensions
+    //         int2 ramp_size;
+    //         ramp_map.GetDimensions(ramp_size.x, ramp_size.y);
             
-            // Calculate ramp UV
-            float ramp_x = half_lambert;
-            // Material type determines which row to sample (0.3, 0.5, 0.7, 1.0 map to rows)
-            float material_row = (1.0 - material_type) * 4.0 + 0.5 + ramp_tex_offset;
-            float ramp_y = (1.0 / float(ramp_size.y)) * material_row;
+    //         // Calculate ramp UV
+    //         float ramp_x = half_lambert;
+    //         // Material type determines which row to sample (0.3, 0.5, 0.7, 1.0 map to rows)
+    //         float material_row = (1.0 - material_type) * 4.0 + 0.5 + ramp_tex_offset;
+    //         float ramp_y = (1.0 / float(ramp_size.y)) * material_row;
             
-            float4 ramp = ramp_map.Sample(clamp_sampler, float2(ramp_x, ramp_y));
-            ramp = pow(ramp, 1.0 / 2.2);
-            surface_color = ramp.rgb * base_color;
-        } else {
-            // No ramp map, use simple half lambert
-            surface_color = half_lambert * base_color;
-        }
+    //         float4 ramp = ramp_map.Sample(clamp_sampler, float2(ramp_x, ramp_y));
+    //         ramp = pow(ramp, 1.0 / 2.2);
+    //         surface_color = ramp.rgb * base_color;
+    //     } else {
+    //         // No ramp map, use simple half lambert
+    //         surface_color = half_lambert * base_color;
+    //     }
         
-        dir_color = max(float3(0.0, 0.0, 0.0), surface_color) * light_color * light_intensity;
-    }
+    //     dir_color = max(float3(0.0, 0.0, 0.0), surface_color) * light_color * light_intensity;
+    // }
     
-    // Screen space rim light
-    float3 rim_color_out = float3(0.0, 0.0, 0.0);
-    if (rim_strength > 0.0) {
-        float rim = CalculateRim(input, N);
-        rim_color_out = rim_color * rim * rim_strength * base_color;
-    }
+    // // Screen space rim light
+    // float3 rim_color_out = float3(0.0, 0.0, 0.0);
+    // if (rim_strength > 0.0) {
+    //     float rim = CalculateRim(input, N);
+    //     rim_color_out = rim_color * rim * rim_strength * base_color;
+    // }
     
-    // Combine lighting
-    float3 final_color = rim_color_out + dir_color * (1.0 - saturate(length(rim_color_out) / length(dir_color + 0.001)));
+    // // Combine lighting
+    // float3 final_color = rim_color_out + dir_color * (1.0 - saturate(length(rim_color_out) / length(dir_color + 0.001)));
     
-    // Add emission
-    final_color += emission.rgb;
+    // // Add emission
+    // final_color += emission.rgb;
     
-    // Gamma correction
-    final_color = pow(final_color, 1.0 / 2.2);
+    // // Gamma correction
+    // final_color = pow(final_color, 1.0 / 2.2);
     
-    return float4(final_color, 1.0);
+    // return float4(final_color, 1.0);
+    return float4(base_color, 1.0);
 }

@@ -265,19 +265,19 @@ void PBRForwardPass::create_pipeline() {
     
     pipe_info.vertex_input_state.vertex_elements.resize(4);
     pipe_info.vertex_input_state.vertex_elements[0].stream_index = 0;
-    pipe_info.vertex_input_state.vertex_elements[0].attribute_index = 0;
+    pipe_info.vertex_input_state.vertex_elements[0].semantic_name = "POSITION";
     pipe_info.vertex_input_state.vertex_elements[0].format = FORMAT_R32G32B32_SFLOAT;
     pipe_info.vertex_input_state.vertex_elements[0].offset = 0;
     pipe_info.vertex_input_state.vertex_elements[1].stream_index = 1;
-    pipe_info.vertex_input_state.vertex_elements[1].attribute_index = 1;
+    pipe_info.vertex_input_state.vertex_elements[1].semantic_name = "NORMAL";
     pipe_info.vertex_input_state.vertex_elements[1].format = FORMAT_R32G32B32_SFLOAT;
     pipe_info.vertex_input_state.vertex_elements[1].offset = 0;
     pipe_info.vertex_input_state.vertex_elements[2].stream_index = 2;
-    pipe_info.vertex_input_state.vertex_elements[2].attribute_index = 4;
+    pipe_info.vertex_input_state.vertex_elements[2].semantic_name = "TANGENT";
     pipe_info.vertex_input_state.vertex_elements[2].format = FORMAT_R32G32B32A32_SFLOAT;
     pipe_info.vertex_input_state.vertex_elements[2].offset = 0;
     pipe_info.vertex_input_state.vertex_elements[3].stream_index = 3;
-    pipe_info.vertex_input_state.vertex_elements[3].attribute_index = 2;
+    pipe_info.vertex_input_state.vertex_elements[3].semantic_name = "TEXCOORD";
     pipe_info.vertex_input_state.vertex_elements[3].format = FORMAT_R32G32_SFLOAT;
     pipe_info.vertex_input_state.vertex_elements[3].offset = 0;
     

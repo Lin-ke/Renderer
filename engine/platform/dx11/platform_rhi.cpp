@@ -3,6 +3,7 @@
 #include "engine/function/render/render_system/render_system.h"
 #include "engine/main/engine_context.h"
 #include <d3d11_1.h>
+#include <d3d11shader.h>
 #include <dxgi1_6.h>
 #include <imgui_impl_dx11.h>
 #include <imgui_impl_win32.h>
@@ -202,12 +203,21 @@ bool DX11Texture::init() {
         if (info_.type & RESOURCE_TYPE_DEPTH_STENCIL) {
             if (format == DXGI_FORMAT_D32_FLOAT) format = DXGI_FORMAT_R32_TYPELESS;
             else if (format == DXGI_FORMAT_D24_UNORM_S8_UINT) format = DXGI_FORMAT_R24G8_TYPELESS;
+        } else if (info_.mip_levels > 1) {
+            // For SRGB textures with mipmaps: use UNORM format for the texture (required for GenerateMips)
+            // The SRV will be created with SRGB format for correct gamma correction
+            if (format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB) format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            else if (format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB) format = DXGI_FORMAT_B8G8R8A8_UNORM;
         }
         desc.Format = format;
         
         desc.SampleDesc.Count = 1;
         desc.Usage = DX11Util::memory_usage_to_dx11(info_.memory_usage);
         desc.BindFlags = DX11Util::resource_type_to_bind_flags(info_.type);
+        if (info_.mip_levels > 1 && !(info_.type & RESOURCE_TYPE_DEPTH_STENCIL)) {
+            desc.BindFlags |= D3D11_BIND_RENDER_TARGET;
+            desc.MiscFlags |= D3D11_RESOURCE_MISC_GENERATE_MIPS;
+        }
         desc.CPUAccessFlags = (info_.memory_usage == MEMORY_USAGE_CPU_TO_GPU) ? D3D11_CPU_ACCESS_WRITE : 0;
 
         HRESULT hr = backend_.get_device()->CreateTexture2D(&desc, nullptr, texture_.GetAddressOf());
@@ -235,20 +245,24 @@ ComPtr<ID3D11ShaderResourceView> DX11Texture::create_srv() {
     if (srv_) return srv_;
     
     D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
-    DXGI_FORMAT format = DX11Util::rhi_format_to_dxgi(info_.format);
     
-    // Handle depth format mapping for SRV (D32->R32, etc.)
-    if (format == DXGI_FORMAT_D32_FLOAT) format = DXGI_FORMAT_R32_FLOAT;
-    else if (format == DXGI_FORMAT_D24_UNORM_S8_UINT) format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+    // Get the actual texture format
+    D3D11_TEXTURE2D_DESC tex_desc;
+    texture_->GetDesc(&tex_desc);
+    DXGI_FORMAT format = tex_desc.Format;
+    
+    // Handle depth format mapping for SRV (D32/TYPELESS->R32, etc.)
+    if (format == DXGI_FORMAT_D32_FLOAT || format == DXGI_FORMAT_R32_TYPELESS) format = DXGI_FORMAT_R32_FLOAT;
+    else if (format == DXGI_FORMAT_D24_UNORM_S8_UINT || format == DXGI_FORMAT_R24G8_TYPELESS) format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
     
     srv_desc.Format = format;
     srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-    srv_desc.Texture2D.MipLevels = info_.mip_levels;
+    srv_desc.Texture2D.MipLevels = info_.mip_levels > 0 ? info_.mip_levels : (UINT)-1;
     srv_desc.Texture2D.MostDetailedMip = 0;
     
     HRESULT hr = backend_.get_device()->CreateShaderResourceView(texture_.Get(), &srv_desc, srv_.GetAddressOf());
     if (FAILED(hr)) {
-        ERR(LogRHI, "Failed to create SRV for texture (HRESULT: 0x{:08X})", (uint32_t)hr);
+        ERR(LogRHI, "Failed to create SRV for texture (format: {}, HRESULT: 0x{:08X})", (uint32_t)format, (uint32_t)hr);
         return nullptr;
     }
     
@@ -307,11 +321,12 @@ DX11TextureView::DX11TextureView(const RHITextureViewInfo& info, DX11Backend& ba
             // (This is normal for swapchain back buffers)
         } else {
             D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
-            DXGI_FORMAT srv_format = view_format;
+            // Use actual texture format for SRV, not the original RHI format
+            // This is necessary because the texture may have been created with a different format
+            // (e.g., SRGB -> UNORM for mipmap generation support)
+            DXGI_FORMAT srv_format = actual_tex_format;
             
-            // Handle depth format mapping for SRV (depth formats cannot be directly sampled)
-            // view_format might be the original depth format (e.g., DXGI_FORMAT_D32_FLOAT)
-            // or the typeless format from texture creation (e.g., DXGI_FORMAT_R32_TYPELESS)
+            // Handle depth format mapping for SRV (depth/typeless formats cannot be directly sampled)
             if (srv_format == DXGI_FORMAT_D32_FLOAT || srv_format == DXGI_FORMAT_R32_TYPELESS) {
                 srv_format = DXGI_FORMAT_R32_FLOAT;
             } else if (srv_format == DXGI_FORMAT_D24_UNORM_S8_UINT || srv_format == DXGI_FORMAT_R24G8_TYPELESS) {
@@ -320,7 +335,7 @@ DX11TextureView::DX11TextureView(const RHITextureViewInfo& info, DX11Backend& ba
             
             srv_desc.Format = srv_format;
             srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-            srv_desc.Texture2D.MipLevels = tex_info.mip_levels > 0 ? tex_info.mip_levels : 1;
+            srv_desc.Texture2D.MipLevels = tex_info.mip_levels > 0 ? tex_info.mip_levels : (UINT)-1;
             srv_desc.Texture2D.MostDetailedMip = info.subresource.base_mip_level;
             HRESULT hr = backend.get_device()->CreateShaderResourceView(dx_tex->get_handle().Get(), &srv_desc, srv_.GetAddressOf());
             if (FAILED(hr)) {
@@ -333,7 +348,8 @@ DX11TextureView::DX11TextureView(const RHITextureViewInfo& info, DX11Backend& ba
     // Create RTV for render target types
     if (tex_info.type & RESOURCE_TYPE_RENDER_TARGET) {
         D3D11_RENDER_TARGET_VIEW_DESC rtv_desc = {};
-        DXGI_FORMAT rtv_format = view_format;
+        // Use actual texture format for RTV
+        DXGI_FORMAT rtv_format = actual_tex_format;
         
         // Handle typeless format mapping for RTV
         if (rtv_format == DXGI_FORMAT_R32_TYPELESS || rtv_format == DXGI_FORMAT_D32_FLOAT) rtv_format = DXGI_FORMAT_R32_FLOAT;
@@ -348,7 +364,8 @@ DX11TextureView::DX11TextureView(const RHITextureViewInfo& info, DX11Backend& ba
     // Create DSV for depth-stencil types
     if (tex_info.type & RESOURCE_TYPE_DEPTH_STENCIL) {
         D3D11_DEPTH_STENCIL_VIEW_DESC dsv_desc = {};
-        DXGI_FORMAT dsv_format = view_format;
+        // Use actual texture format for DSV
+        DXGI_FORMAT dsv_format = actual_tex_format;
         
         // Handle typeless format mapping for DSV
         if (dsv_format == DXGI_FORMAT_R32_TYPELESS) dsv_format = DXGI_FORMAT_D32_FLOAT;
@@ -571,22 +588,76 @@ bool DX11GraphicsPipeline::init() {
     auto vs = resource_cast(info_.vertex_shader);
     if (vs) {
         std::vector<D3D11_INPUT_ELEMENT_DESC> elements;
-        for (const auto& el : info_.vertex_input_state.vertex_elements) {
-            // Map attribute_index to semantic name
-            const char* semantic_name = "POSITION";
-            switch (el.attribute_index) {
-                case 0: semantic_name = "POSITION"; break;
-                case 1: semantic_name = "NORMAL"; break;
-                case 2: semantic_name = "TEXCOORD"; break;
-                case 3: semantic_name = "COLOR"; break;
-                case 4: semantic_name = "TANGENT"; break;
-                default: semantic_name = "POSITION"; break;
+        
+        // Use Shader Reflection to get input signature from vertex shader bytecode
+        ComPtr<ID3D11ShaderReflection> reflector;
+        HRESULT hr = D3DReflect(vs->get_info().code.data(), vs->get_info().code.size(), 
+                                IID_ID3D11ShaderReflection, (void**)reflector.GetAddressOf());
+        
+        if (SUCCEEDED(hr) && reflector) {
+            D3D11_SHADER_DESC shader_desc;
+            reflector->GetDesc(&shader_desc);
+            
+            // Build a map of semantic name -> input slot index for matching
+            std::unordered_map<std::string, uint32_t> semantic_to_element_index;
+            for (uint32_t i = 0; i < info_.vertex_input_state.vertex_elements.size(); ++i) {
+                semantic_to_element_index[info_.vertex_input_state.vertex_elements[i].semantic_name] = i;
             }
-            D3D11_INPUT_ELEMENT_DESC desc = { semantic_name, 0, DX11Util::rhi_format_to_dxgi(el.format), el.stream_index, el.offset, 
-                                              el.use_instance_index ? D3D11_INPUT_PER_INSTANCE_DATA : D3D11_INPUT_PER_VERTEX_DATA, el.use_instance_index ? 1u : 0u };
-            elements.push_back(desc);
+            
+            // Iterate through shader input parameters
+            for (uint32_t i = 0; i < shader_desc.InputParameters; ++i) {
+                D3D11_SIGNATURE_PARAMETER_DESC param_desc;
+                reflector->GetInputParameterDesc(i, &param_desc);
+                
+                // Find matching vertex element by semantic name (case-insensitive)
+                auto it = semantic_to_element_index.find(param_desc.SemanticName);
+                if (it == semantic_to_element_index.end()) {
+                    // Try case-insensitive match
+                    for (const auto& pair : semantic_to_element_index) {
+                        if (_stricmp(pair.first.c_str(), param_desc.SemanticName) == 0) {
+                            it = semantic_to_element_index.find(pair.first);
+                            break;
+                        }
+                    }
+                }
+                
+                if (it != semantic_to_element_index.end()) {
+                    const auto& el = info_.vertex_input_state.vertex_elements[it->second];
+                    
+                    D3D11_INPUT_ELEMENT_DESC desc = {};
+                    desc.SemanticName = param_desc.SemanticName;  // Use semantic from shader
+                    desc.SemanticIndex = param_desc.SemanticIndex; // Use semantic index from shader
+                    desc.Format = DX11Util::rhi_format_to_dxgi(el.format);
+                    desc.InputSlot = el.stream_index;
+                    desc.AlignedByteOffset = el.offset;
+                    desc.InputSlotClass = el.use_instance_index ? D3D11_INPUT_PER_INSTANCE_DATA : D3D11_INPUT_PER_VERTEX_DATA;
+                    desc.InstanceDataStepRate = el.use_instance_index ? 1u : 0u;
+                    
+                    elements.push_back(desc);
+                } else {
+                    WARN(LogRHI, "Vertex shader expects semantic '{}' but no matching vertex element provided", param_desc.SemanticName);
+                }
+            }
+        } else {
+            // Fallback: use vertex elements directly (manual mode)
+            for (const auto& el : info_.vertex_input_state.vertex_elements) {
+                D3D11_INPUT_ELEMENT_DESC desc = {};
+                desc.SemanticName = el.semantic_name.c_str();
+                desc.SemanticIndex = el.semantic_index;
+                desc.Format = DX11Util::rhi_format_to_dxgi(el.format);
+                desc.InputSlot = el.stream_index;
+                desc.AlignedByteOffset = el.offset;
+                desc.InputSlotClass = el.use_instance_index ? D3D11_INPUT_PER_INSTANCE_DATA : D3D11_INPUT_PER_VERTEX_DATA;
+                desc.InstanceDataStepRate = el.use_instance_index ? 1u : 0u;
+                elements.push_back(desc);
+            }
         }
-        backend_.get_device()->CreateInputLayout(elements.data(), (UINT)elements.size(), vs->get_info().code.data(), vs->get_info().code.size(), input_layout_.GetAddressOf());
+        
+        if (!elements.empty()) {
+            backend_.get_device()->CreateInputLayout(elements.data(), (UINT)elements.size(), 
+                                                     vs->get_info().code.data(), vs->get_info().code.size(), 
+                                                     input_layout_.GetAddressOf());
+        }
     }
     
     // Rasterizer State
@@ -924,11 +995,198 @@ void DX11CommandContext::execute(RHIFenceRef fence, RHISemaphoreRef ws, RHISemap
 }
 void DX11CommandContext::texture_barrier(const RHITextureBarrier& b) {}
 void DX11CommandContext::buffer_barrier(const RHIBufferBarrier& b) {}
-void DX11CommandContext::copy_texture_to_buffer(RHITextureRef s, TextureSubresourceLayers ss, RHIBufferRef d, uint64_t doff) { context_->CopyResource((ID3D11Resource*)d->raw_handle(), (ID3D11Resource*)s->raw_handle()); }
-void DX11CommandContext::copy_buffer_to_texture(RHIBufferRef s, uint64_t soff, RHITextureRef d, TextureSubresourceLayers ds) { context_->CopyResource((ID3D11Resource*)d->raw_handle(), (ID3D11Resource*)s->raw_handle()); }
+void DX11CommandContext::copy_texture_to_buffer(RHITextureRef s, TextureSubresourceLayers ss, RHIBufferRef d, uint64_t doff) {
+    // CopyResource cannot be used between different resource types (texture vs buffer)
+    // We need to create a staging texture, copy to it, then copy data to buffer
+    auto* dx11_texture = static_cast<DX11Texture*>(s.get());
+    auto* dx11_buffer = static_cast<DX11Buffer*>(d.get());
+    if (!dx11_texture || !dx11_buffer) return;
+    
+    ID3D11Texture2D* src_texture = dx11_texture->get_handle().Get();
+    if (!src_texture) return;
+    
+    // Get texture desc for the subresource we want to copy
+    const auto& tex_info = dx11_texture->get_info();
+    uint32_t width = tex_info.extent.width >> ss.mip_level;
+    uint32_t height = tex_info.extent.height >> ss.mip_level;
+    if (width == 0) width = 1;
+    if (height == 0) height = 1;
+    uint32_t row_pitch = width * 4; // Assuming RGBA8 format
+    uint32_t aligned_row_pitch = (row_pitch + 255) & ~255;
+    uint32_t total_size = aligned_row_pitch * height;
+    
+    // Create staging texture for this specific subresource
+    D3D11_TEXTURE2D_DESC staging_desc = {};
+    staging_desc.Width = width;
+    staging_desc.Height = height;
+    staging_desc.MipLevels = 1;
+    staging_desc.ArraySize = 1;
+    staging_desc.Format = DX11Util::rhi_format_to_dxgi(tex_info.format);
+    staging_desc.SampleDesc.Count = 1;
+    staging_desc.Usage = D3D11_USAGE_STAGING;
+    staging_desc.BindFlags = 0;
+    staging_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    
+    ComPtr<ID3D11Texture2D> staging_texture;
+    HRESULT hr = backend_.get_device()->CreateTexture2D(&staging_desc, nullptr, staging_texture.GetAddressOf());
+    if (FAILED(hr)) return;
+    
+    // Calculate source subresource index
+    uint32_t src_subresource = D3D11CalcSubresource(ss.mip_level, ss.base_array_layer, tex_info.mip_levels);
+    
+    // Copy from source texture to staging texture
+    context_->CopySubresourceRegion(staging_texture.Get(), 0, 0, 0, 0, src_texture, src_subresource, nullptr);
+    
+    // Map staging texture
+    D3D11_MAPPED_SUBRESOURCE mapped;
+    hr = context_->Map(staging_texture.Get(), 0, D3D11_MAP_READ, 0, &mapped);
+    if (FAILED(hr)) return;
+    
+    // Get buffer info to check if we can map it directly
+    // For GPU_DEFAULT buffers, we need to use UpdateSubresource
+    // For CPU accessible buffers, we can map directly
+    const auto& buf_info = dx11_buffer->get_info();
+    if (buf_info.memory_usage == MEMORY_USAGE_CPU_ONLY || 
+        buf_info.memory_usage == MEMORY_USAGE_CPU_TO_GPU) {
+        // Buffer is CPU accessible, map it
+        D3D11_MAPPED_SUBRESOURCE buf_mapped;
+        hr = context_->Map(dx11_buffer->get_handle().Get(), 0, D3D11_MAP_WRITE, 0, &buf_mapped);
+        if (SUCCEEDED(hr)) {
+            uint8_t* dst = static_cast<uint8_t*>(buf_mapped.pData) + doff;
+            uint8_t* src = static_cast<uint8_t*>(mapped.pData);
+            
+            // Copy row by row handling pitch differences
+            for (uint32_t row = 0; row < height; row++) {
+                memcpy(dst + row * row_pitch, src + row * mapped.RowPitch, row_pitch);
+            }
+            context_->Unmap(dx11_buffer->get_handle().Get(), 0);
+        }
+    } else {
+        // GPU_DEFAULT buffer, use UpdateSubresource via staging approach
+        // Create a temporary staging buffer
+        RHIBufferInfo staging_buf_info = {};
+        staging_buf_info.size = width * height * 4;
+        staging_buf_info.type = RESOURCE_TYPE_BUFFER;
+        staging_buf_info.memory_usage = MEMORY_USAGE_CPU_ONLY;
+        
+        D3D11_BUFFER_DESC buf_desc = {};
+        buf_desc.ByteWidth = width * height * 4;
+        buf_desc.Usage = D3D11_USAGE_STAGING;
+        buf_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ | D3D11_CPU_ACCESS_WRITE;
+        
+        ComPtr<ID3D11Buffer> staging_buffer;
+        hr = backend_.get_device()->CreateBuffer(&buf_desc, nullptr, staging_buffer.GetAddressOf());
+        if (SUCCEEDED(hr)) {
+            // Copy data to staging buffer
+            D3D11_MAPPED_SUBRESOURCE buf_mapped;
+            hr = context_->Map(staging_buffer.Get(), 0, D3D11_MAP_WRITE, 0, &buf_mapped);
+            if (SUCCEEDED(hr)) {
+                uint8_t* dst = static_cast<uint8_t*>(buf_mapped.pData);
+                uint8_t* src = static_cast<uint8_t*>(mapped.pData);
+                
+                for (uint32_t row = 0; row < height; row++) {
+                    memcpy(dst + row * row_pitch, src + row * mapped.RowPitch, row_pitch);
+                }
+                context_->Unmap(staging_buffer.Get(), 0);
+                
+                // Copy from staging buffer to destination buffer
+                context_->CopySubresourceRegion(
+                    dx11_buffer->get_handle().Get(),
+                    0,
+                    (UINT)doff, 0, 0,
+                    staging_buffer.Get(),
+                    0,
+                    nullptr
+                );
+            }
+        }
+    }
+    
+    context_->Unmap(staging_texture.Get(), 0);
+}
+void DX11CommandContext::copy_buffer_to_texture(RHIBufferRef s, uint64_t soff, RHITextureRef d, TextureSubresourceLayers ds) {
+    // For buffer to texture copy in DX11, we need to use UpdateSubresource
+    // since CopyResource requires resources of the same type.
+    auto* dx11_buffer = static_cast<DX11Buffer*>(s.get());
+    auto* dx11_texture = static_cast<DX11Texture*>(d.get());
+    
+    if (!dx11_buffer || !dx11_texture) return;
+    
+    // Map the source buffer to access data
+    D3D11_MAPPED_SUBRESOURCE mapped;
+    HRESULT hr = context_->Map(dx11_buffer->get_handle().Get(), 0, D3D11_MAP_READ, 0, &mapped);
+    if (FAILED(hr)) return;
+    
+    // Get texture info for proper row pitch calculation
+    const auto& tex_info = dx11_texture->get_info();
+    uint32_t width = tex_info.extent.width;
+    uint32_t height = tex_info.extent.height;
+    uint32_t bpp = 4; // Assuming RGBA8 format
+    
+    // Calculate row pitch with 256-byte alignment (as done in texture.cpp)
+    uint32_t row_pitch = width * bpp;
+    uint32_t aligned_row_pitch = (row_pitch + 255) & ~255;
+    
+    // Use UpdateSubresource to copy data to the specific subresource
+    uint32_t dst_subresource = D3D11CalcSubresource(ds.mip_level, ds.base_array_layer, tex_info.mip_levels);
+    
+    // Use D3D11_BOX to specify the region
+    D3D11_BOX box = {};
+    box.left = 0;
+    box.right = width;
+    box.top = 0;
+    box.bottom = height;
+    box.front = 0;
+    box.back = 1;
+    
+    context_->UpdateSubresource(
+        dx11_texture->get_handle().Get(),
+        dst_subresource,
+        &box,
+        mapped.pData,
+        aligned_row_pitch,
+        aligned_row_pitch * height
+    );
+    
+    context_->Unmap(dx11_buffer->get_handle().Get(), 0);
+}
 void DX11CommandContext::copy_buffer(RHIBufferRef s, uint64_t soff, RHIBufferRef d, uint64_t doff, uint64_t sz) { D3D11_BOX box = { (UINT)soff, 0, 0, (UINT)(soff + sz), 1, 1 }; context_->CopySubresourceRegion((ID3D11Resource*)d->raw_handle(), 0, (UINT)doff, 0, 0, (ID3D11Resource*)s->raw_handle(), 0, &box); }
-void DX11CommandContext::copy_texture(RHITextureRef s, TextureSubresourceLayers ss, RHITextureRef d, TextureSubresourceLayers ds) { context_->CopyResource((ID3D11Resource*)d->raw_handle(), (ID3D11Resource*)s->raw_handle()); }
-void DX11CommandContext::generate_mips(RHITextureRef s) {}
+void DX11CommandContext::copy_texture(RHITextureRef s, TextureSubresourceLayers ss, RHITextureRef d, TextureSubresourceLayers ds) {
+    // Use CopySubresourceRegion to support subresource-level copy
+    auto* src_tex = static_cast<DX11Texture*>(s.get());
+    auto* dst_tex = static_cast<DX11Texture*>(d.get());
+    if (!src_tex || !dst_tex) return;
+    
+    const auto& src_info = src_tex->get_info();
+    const auto& dst_info = dst_tex->get_info();
+    
+    uint32_t src_subresource = D3D11CalcSubresource(ss.mip_level, ss.base_array_layer, src_info.mip_levels);
+    uint32_t dst_subresource = D3D11CalcSubresource(ds.mip_level, ds.base_array_layer, dst_info.mip_levels);
+    
+    context_->CopySubresourceRegion(
+        dst_tex->get_handle().Get(),
+        dst_subresource,
+        0, 0, 0, // dst x, y, z
+        src_tex->get_handle().Get(),
+        src_subresource,
+        nullptr // copy entire subresource
+    );
+}
+void DX11CommandContext::generate_mips(RHITextureRef s) {
+    auto texture = std::static_pointer_cast<DX11Texture>(s);
+    if (!texture) return;
+    
+    auto srv = texture->get_srv();
+    if (!srv) {
+        srv = texture->create_srv();
+    }
+    if (!srv) {
+        ERR(LogRHI, "Failed to get SRV for GenerateMips");
+        return;
+    }
+    
+    context_->GenerateMips(srv.Get());
+}
 void DX11CommandContext::push_event(const std::string& name, Color3 color) {
     Microsoft::WRL::ComPtr<ID3DUserDefinedAnnotation> annotation;
     if (SUCCEEDED(context_.As(&annotation))) {
@@ -1093,52 +1351,121 @@ bool DX11CommandContext::read_texture(RHITextureRef texture, void* data, uint32_
 
 DX11RenderPass::DX11RenderPass(const RHIRenderPassInfo& info, DX11Backend& backend) : RHIRenderPass(info) {}
 RHIDescriptorSetRef DX11RootSignature::create_descriptor_set(uint32_t set) { return nullptr; }
-DX11CommandContextImmediate::DX11CommandContextImmediate(DX11Backend& backend) : backend_(backend) {}
+
+// DX11CommandContextImmediate implementation
+
+DX11CommandContextImmediate::DX11CommandContextImmediate(DX11Backend& backend) : backend_(backend) {
+}
+
+ID3D11DeviceContext* DX11CommandContextImmediate::get_context() {
+    return backend_.get_context().Get();
+}
+
 void DX11CommandContextImmediate::flush() {
-    // Flush the immediate context to ensure all commands are submitted
+    // Flush immediate context to ensure all commands are submitted to GPU
     backend_.get_context()->Flush();
 }
+
 void DX11CommandContextImmediate::texture_barrier(const RHITextureBarrier& b) {
-    // DX11 doesn't need explicit texture barriers, but we can use this for debugging
-    // In DX12/Vulkan this would insert a resource barrier
+    // DX11 doesn't need explicit texture barriers like Vulkan/DX12
+    // Resources are automatically transitioned when used
+    (void)b; // Unused in DX11
 }
+
 void DX11CommandContextImmediate::buffer_barrier(const RHIBufferBarrier& b) {
     // DX11 doesn't need explicit buffer barriers
+    (void)b; // Unused in DX11
 }
+
 void DX11CommandContextImmediate::copy_texture_to_buffer(RHITextureRef s, TextureSubresourceLayers ss, RHIBufferRef d, uint64_t doff) {
-    backend_.get_context()->CopyResource(
-        (ID3D11Resource*)d->raw_handle(), 
-        (ID3D11Resource*)s->raw_handle()
-    );
+    // Note: This operation requires staging due to DX11 limitations
+    // We create a staging texture, copy GPU data to it, read back to CPU, then upload to buffer
+    
+    auto* dx11_texture = static_cast<DX11Texture*>(s.get());
+    auto* dx11_buffer = static_cast<DX11Buffer*>(d.get());
+    if (!dx11_texture || !dx11_buffer) return;
+    
+    ID3D11Texture2D* src_texture = dx11_texture->get_handle().Get();
+    if (!src_texture) return;
+    
+    // Get texture info for the subresource we want to copy
+    const auto& tex_info = dx11_texture->get_info();
+    uint32_t width = tex_info.extent.width >> ss.mip_level;
+    uint32_t height = tex_info.extent.height >> ss.mip_level;
+    if (width == 0) width = 1;
+    if (height == 0) height = 1;
+    uint32_t row_pitch = width * 4; // Assuming RGBA8 format
+    uint32_t aligned_row_pitch = (row_pitch + 255) & ~255;
+    
+    // Create staging texture for readback
+    D3D11_TEXTURE2D_DESC staging_desc = {};
+    staging_desc.Width = width;
+    staging_desc.Height = height;
+    staging_desc.MipLevels = 1;
+    staging_desc.ArraySize = 1;
+    staging_desc.Format = DX11Util::rhi_format_to_dxgi(tex_info.format);
+    staging_desc.SampleDesc.Count = 1;
+    staging_desc.Usage = D3D11_USAGE_STAGING;
+    staging_desc.BindFlags = 0;
+    staging_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    
+    ComPtr<ID3D11Texture2D> staging_texture;
+    HRESULT hr = backend_.get_device()->CreateTexture2D(&staging_desc, nullptr, staging_texture.GetAddressOf());
+    if (FAILED(hr)) return;
+    
+    ID3D11DeviceContext* ctx = get_context();
+    
+    uint32_t src_subresource = D3D11CalcSubresource(ss.mip_level, ss.base_array_layer, tex_info.mip_levels);
+    ctx->CopySubresourceRegion(staging_texture.Get(), 0, 0, 0, 0, src_texture, src_subresource, nullptr);
+    
+    // Read back from staging texture using immediate context
+    D3D11_MAPPED_SUBRESOURCE mapped;
+    hr = ctx->Map(staging_texture.Get(), 0, D3D11_MAP_READ, 0, &mapped);
+    if (FAILED(hr)) return;
+    
+    uint8_t* temp_data = new uint8_t[width * height * 4];
+    for (uint32_t row = 0; row < height; row++) {
+        memcpy(temp_data + row * row_pitch, (uint8_t*)mapped.pData + row * mapped.RowPitch, row_pitch);
+    }
+    ctx->Unmap(staging_texture.Get(), 0);
+    
+    // Update destination buffer
+    D3D11_BOX dst_box = {};
+    dst_box.left = (UINT)doff;
+    dst_box.right = (UINT)(doff + width * height * 4);
+    dst_box.top = 0;
+    dst_box.bottom = 1;
+    dst_box.front = 0;
+    dst_box.back = 1;
+    
+    ctx->UpdateSubresource(
+        dx11_buffer->get_handle().Get(), 0, &dst_box, temp_data, row_pitch, row_pitch);
+    
+    delete[] temp_data;
 }
+
 void DX11CommandContextImmediate::copy_buffer_to_texture(RHIBufferRef s, uint64_t soff, RHITextureRef d, TextureSubresourceLayers ds) {
-    // For buffer to texture copy in DX11, we need to use UpdateSubresource
-    // since CopyResource requires resources of the same type.
-    // Map the staging buffer to get CPU pointer, then use UpdateSubresource
     auto* dx11_buffer = static_cast<DX11Buffer*>(s.get());
     auto* dx11_texture = static_cast<DX11Texture*>(d.get());
     
     if (!dx11_buffer || !dx11_texture) return;
     
-    // Map the source buffer to access data
+    ID3D11DeviceContext* ctx = get_context();
+    
+    // Map the source buffer to get CPU pointer
     D3D11_MAPPED_SUBRESOURCE mapped;
-    HRESULT hr = backend_.get_context()->Map(dx11_buffer->get_handle().Get(), 0, D3D11_MAP_READ, 0, &mapped);
+    HRESULT hr = ctx->Map(dx11_buffer->get_handle().Get(), 0, D3D11_MAP_READ, 0, &mapped);
     if (FAILED(hr)) return;
     
-    // Get texture info for proper row pitch calculation
     const auto& tex_info = dx11_texture->get_info();
     uint32_t width = tex_info.extent.width;
     uint32_t height = tex_info.extent.height;
     uint32_t bpp = 4; // Assuming RGBA8 format
     
-    // Calculate row pitch with 256-byte alignment (as done in texture.cpp)
     uint32_t row_pitch = width * bpp;
     uint32_t aligned_row_pitch = (row_pitch + 255) & ~255;
-    
-    // Use UpdateSubresource to copy data to the specific subresource
     uint32_t dst_subresource = D3D11CalcSubresource(ds.mip_level, ds.base_array_layer, tex_info.mip_levels);
     
-    // Use D3D11_BOX to specify the region
     D3D11_BOX box = {};
     box.left = 0;
     box.right = width;
@@ -1147,38 +1474,63 @@ void DX11CommandContextImmediate::copy_buffer_to_texture(RHIBufferRef s, uint64_
     box.front = 0;
     box.back = 1;
     
-    backend_.get_context()->UpdateSubresource(
+    // Copy data from mapped buffer to texture
+    uint8_t* src_data = static_cast<uint8_t*>(mapped.pData) + soff;
+    ctx->UpdateSubresource(
         dx11_texture->get_handle().Get(),
         dst_subresource,
         &box,
-        mapped.pData,
+        src_data,
         aligned_row_pitch,
         aligned_row_pitch * height
     );
     
-    backend_.get_context()->Unmap(dx11_buffer->get_handle().Get(), 0);
+    ctx->Unmap(dx11_buffer->get_handle().Get(), 0);
 }
+
 void DX11CommandContextImmediate::copy_buffer(RHIBufferRef s, uint64_t soff, RHIBufferRef d, uint64_t doff, uint64_t sz) {
+    ID3D11DeviceContext* ctx = get_context();
+    
     D3D11_BOX box = { (UINT)soff, 0, 0, (UINT)(soff + sz), 1, 1 };
-    backend_.get_context()->CopySubresourceRegion(
+    ctx->CopySubresourceRegion(
         (ID3D11Resource*)d->raw_handle(), 0, (UINT)doff, 0, 0,
         (ID3D11Resource*)s->raw_handle(), 0, &box
     );
 }
+
 void DX11CommandContextImmediate::copy_texture(RHITextureRef s, TextureSubresourceLayers ss, RHITextureRef d, TextureSubresourceLayers ds) {
-    backend_.get_context()->CopyResource(
-        (ID3D11Resource*)d->raw_handle(), 
-        (ID3D11Resource*)s->raw_handle()
+    auto* src_tex = static_cast<DX11Texture*>(s.get());
+    auto* dst_tex = static_cast<DX11Texture*>(d.get());
+    if (!src_tex || !dst_tex) return;
+    
+    ID3D11DeviceContext* ctx = get_context();
+    
+    const auto& src_info = src_tex->get_info();
+    const auto& dst_info = dst_tex->get_info();
+    
+    uint32_t src_subresource = D3D11CalcSubresource(ss.mip_level, ss.base_array_layer, src_info.mip_levels);
+    uint32_t dst_subresource = D3D11CalcSubresource(ds.mip_level, ds.base_array_layer, dst_info.mip_levels);
+    
+    ctx->CopySubresourceRegion(
+        dst_tex->get_handle().Get(), dst_subresource, 0, 0, 0,
+        src_tex->get_handle().Get(), src_subresource, nullptr
     );
 }
+
 void DX11CommandContextImmediate::generate_mips(RHITextureRef s) {
-    // DX11 can auto-generate mipmaps using GenerateMips on a shader resource view
-    // This requires the texture to have a valid SRV bound
     auto texture = std::static_pointer_cast<DX11Texture>(s);
-    if (texture) {
-        auto srv = texture->get_srv();
-        if (srv) {
-            backend_.get_context()->GenerateMips(srv.Get());
-        }
+    if (!texture) return;
+    
+    ID3D11DeviceContext* ctx = get_context();
+    
+    auto srv = texture->get_srv();
+    if (!srv) {
+        srv = texture->create_srv();
     }
+    if (!srv) {
+        ERR(LogRHI, "Failed to get SRV for GenerateMips");
+        return;
+    }
+    
+    ctx->GenerateMips(srv.Get());
 }
