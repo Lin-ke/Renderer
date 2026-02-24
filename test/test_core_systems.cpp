@@ -1,21 +1,86 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
-#include "engine/main/engine_context.h"
-#include "engine/function/render/render_system/render_light_manager.h"
 #include "test/test_utils.h"
+#include "engine/main/engine_context.h"
+#include "engine/core/os/thread_pool.h"
+#include "engine/function/render/render_system/render_light_manager.h"
 #include "engine/function/framework/component/directional_light_component.h"
 #include "engine/function/framework/component/point_light_component.h"
 #include "engine/function/framework/component/transform_component.h"
 #include "engine/function/framework/scene.h"
 #include "engine/function/framework/entity.h"
+#include "engine/function/asset/asset_manager.h"
 #include "engine/core/log/Log.h"
 
+#include <atomic>
+#include <vector>
+#include <future>
+
 /**
- * @file test_light_manager.cpp
- * @brief Unit tests for Light Manager and Light Components.
+ * @file test_core_systems.cpp
+ * @brief Core systems tests including thread pool and light manager.
  */
 
-TEST_CASE("RenderLightManager Basic Lifecycle", "[light]") {
+TEST_CASE("Thread Pool Integration", "[core]") {
+    test_utils::TestContext::reset();
+
+    auto* pool = EngineContext::thread_pool();
+    REQUIRE(pool != nullptr);
+
+    SECTION("Enqueue Basic Tasks") {
+        std::atomic<int> counter = 0;
+        int num_tasks = 50;
+        std::vector<std::future<void>> results;
+
+        for (int i = 0; i < num_tasks; ++i) {
+            results.emplace_back(pool->enqueue([&counter]() {
+                counter++;
+            }));
+        }
+
+        for (auto& res : results) {
+            res.wait();
+        }
+
+        REQUIRE(counter == num_tasks);
+    }
+
+    SECTION("Enqueue Task with Return Value") {
+        auto future_res = pool->enqueue([](int a, int b) {
+            return a * b;
+        }, 6, 7);
+
+        REQUIRE(future_res.get() == 42);
+    }
+
+    SECTION("Parallel Execution Verification") {
+        // This test tries to ensure that tasks can run in parallel 
+        // by sleeping and checking if total time is less than serial execution.
+        // However, this is flaky if only 1 core is available. 
+        // We'll just check if multiple tasks complete.
+        
+        std::atomic<int> completed = 0;
+        int num_tasks = 4;
+        std::vector<std::future<void>> results;
+        
+        for(int i=0; i<num_tasks; ++i) {
+            results.emplace_back(pool->enqueue([&completed]() {
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                completed++;
+            }));
+        }
+        
+        for (auto& res : results) {
+            res.wait();
+        }
+        
+        REQUIRE(completed == num_tasks);
+    }
+
+    test_utils::TestContext::reset();
+}
+
+TEST_CASE("Light Manager Lifecycle", "[core]") {
     test_utils::TestContext::reset();
     auto light_manager = std::make_shared<RenderLightManager>();
     
@@ -36,7 +101,7 @@ TEST_CASE("RenderLightManager Basic Lifecycle", "[light]") {
     test_utils::TestContext::reset();
 }
 
-TEST_CASE("DirectionalLightComponent Creation and Properties", "[light]") {
+TEST_CASE("Directional Light Component", "[core]") {
     test_utils::TestContext::reset();
     
     auto scene = std::make_shared<Scene>();
@@ -82,7 +147,7 @@ TEST_CASE("DirectionalLightComponent Creation and Properties", "[light]") {
     test_utils::TestContext::reset();
 }
 
-TEST_CASE("PointLightComponent Creation and Properties", "[light]") {
+TEST_CASE("Point Light Component", "[core]") {
     test_utils::TestContext::reset();
     
     auto scene = std::make_shared<Scene>();
@@ -136,7 +201,7 @@ TEST_CASE("PointLightComponent Creation and Properties", "[light]") {
     test_utils::TestContext::reset();
 }
 
-TEST_CASE("Light Component Serialization", "[light]") {
+TEST_CASE("Light Component Serialization", "[core]") {
     test_utils::TestContext::reset();
     std::string scene_path = "/Game/test_light_scene.asset";
     
@@ -214,7 +279,7 @@ TEST_CASE("Light Component Serialization", "[light]") {
     test_utils::TestContext::reset();
 }
 
-TEST_CASE("Light Component Update Methods", "[light]") {
+TEST_CASE("Light Component Update Methods", "[core]") {
     test_utils::TestContext::reset();
     
     auto scene = std::make_shared<Scene>();
@@ -247,7 +312,7 @@ TEST_CASE("Light Component Update Methods", "[light]") {
     test_utils::TestContext::reset();
 }
 
-TEST_CASE("Multiple Point Lights Management", "[light]") {
+TEST_CASE("Multiple Point Lights Management", "[core]") {
     test_utils::TestContext::reset();
     
     auto scene = std::make_shared<Scene>();

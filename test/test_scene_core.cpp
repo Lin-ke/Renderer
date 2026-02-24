@@ -9,31 +9,33 @@
 #include "engine/function/framework/component/mesh_renderer_component.h"
 #include "engine/function/framework/component/camera_component.h"
 #include "engine/function/framework/component/directional_light_component.h"
+#include "engine/function/framework/component/spirit_component.h"
 #include "engine/function/render/render_resource/model.h"
 #include "engine/function/render/render_resource/material.h"
 #include "engine/function/render/render_resource/texture.h"
 #include "engine/function/render/render_system/render_system.h"
 #include "engine/function/asset/asset_manager.h"
+#include "engine/function/asset/basic/png.h"
 #include "engine/core/log/Log.h"
+#include "engine/core/utils/math_print.h"
+#include "engine/core/utils/file_cleaner.h"
 
 #include <filesystem>
 #include <fstream>
 #include <vector>
 
 /**
- * @file test/scene/test_scene_deps.cpp
- * @brief Tests for scene dependency management with Klee and Bunny models
+ * @file test_scene_core.cpp
+ * @brief Core scene tests including serialization and dependency management.
  */
 
-DEFINE_LOG_TAG(LogKleeSceneDeps, "KleeSceneDeps");
+DEFINE_LOG_TAG(LogSceneCore, "SceneCore");
 
 static const std::string TEST_SCENE_FILE = "/Game/test_deps_scene.asset";
-// Test with Klee model which contains Japanese material names (Unicode)
 static const std::string KLEE_MODEL_PATH = "/Engine/models/Klee/klee.fbx";
-// Fallback to bunny if Klee not available
 static const std::string TEST_MODEL_PATH = "/Engine/models/bunny.obj";
 
-TEST_CASE("Scene Dependency System with Model", "[scene][deps]") {
+TEST_CASE("Scene Dependency System", "[scene]") {
     test_utils::TestContext::reset();
     
     try {
@@ -49,17 +51,17 @@ TEST_CASE("Scene Dependency System with Model", "[scene][deps]") {
         if (std::filesystem::exists(TEST_MODEL_PATH)) {
             models_to_test.push_back(TEST_MODEL_PATH);
         } else {
-            WARN(LogKleeSceneDeps, "Bunny model not found at: {}", TEST_MODEL_PATH);
+            WARN(LogSceneCore, "Bunny model not found at: {}", TEST_MODEL_PATH);
         }
         
         if (std::filesystem::exists(KLEE_MODEL_PATH)) {
             models_to_test.push_back(KLEE_MODEL_PATH);
         } else {
-            WARN(LogKleeSceneDeps, "Klee model not found at: {}", KLEE_MODEL_PATH);
+            WARN(LogSceneCore, "Klee model not found at: {}", KLEE_MODEL_PATH);
         }
 
         if (models_to_test.empty()) {
-            WARN(LogKleeSceneDeps, "No test models found. Skipping test.");
+            WARN(LogSceneCore, "No test models found. Skipping test.");
             test_utils::TestContext::reset();
             REQUIRE(true);
             return;
@@ -108,7 +110,7 @@ TEST_CASE("Scene Dependency System with Model", "[scene][deps]") {
             uint32_t submesh_count = test_model->get_submesh_count();
             REQUIRE(submesh_count > 0);
             
-            INFO(LogKleeSceneDeps, "Loaded {}: {} submeshes", is_klee ? "Klee" : "Bunny", submesh_count);
+            INFO(LogSceneCore, "Loaded {}: {} submeshes", is_klee ? "Klee" : "Bunny", submesh_count);
             
             // Add mesh renderer component
             auto* mesh_renderer = model_ent->add_component<MeshRendererComponent>();
@@ -151,7 +153,7 @@ TEST_CASE("Scene Dependency System with Model", "[scene][deps]") {
             
             // Save scene to file
             EngineContext::asset()->save_asset(scene, TEST_SCENE_FILE);
-            INFO(LogKleeSceneDeps, "Scene saved to {}", TEST_SCENE_FILE);
+            INFO(LogSceneCore, "Scene saved to {}", TEST_SCENE_FILE);
         }
         
         // ==========================================
@@ -161,7 +163,7 @@ TEST_CASE("Scene Dependency System with Model", "[scene][deps]") {
             auto loaded_scene = EngineContext::asset()->load_asset<Scene>(TEST_SCENE_FILE);
             
             REQUIRE(loaded_scene != nullptr);
-            INFO(LogKleeSceneDeps, "Scene loaded from {}", TEST_SCENE_FILE);
+            INFO(LogSceneCore, "Scene loaded from {}", TEST_SCENE_FILE);
             
             // Load asset dependencies (models, materials, etc.)
             loaded_scene->load_asset_deps();
@@ -219,25 +221,25 @@ TEST_CASE("Scene Dependency System with Model", "[scene][deps]") {
             REQUIRE(loaded_model != nullptr);
             CHECK(loaded_model->get_submesh_count() > 0);
             
-            INFO(LogKleeSceneDeps, "Scene verification completed: {} entities, model with {} submeshes",
+            INFO(LogSceneCore, "Scene verification completed: {} entities, model with {} submeshes",
                  loaded_scene->entities_.size(), loaded_model->get_submesh_count());
         }
         
         // Clean up auto-generated UUID-named dependency files
         size_t cleaned = test_utils::cleanup_uuid_named_assets(test_asset_dir + "/assets");
         if (cleaned > 0) {
-            INFO(LogKleeSceneDeps, "Cleaned up {} auto-generated UUID-named asset files", cleaned);
+            INFO(LogSceneCore, "Cleaned up {} auto-generated UUID-named asset files", cleaned);
         }
         
         test_utils::TestContext::reset();
     } catch (const std::exception& e) {
-        ERR(LogKleeSceneDeps, "Test failed: {}", e.what());
+        ERR(LogSceneCore, "Test failed: {}", e.what());
         test_utils::TestContext::reset();
         FAIL("Test failed with exception");
     }
 }
 
-TEST_CASE("Scene Dependency Traversal", "[scene][deps]") {
+TEST_CASE("Scene Dependency Traversal", "[scene]") {
     test_utils::TestContext::reset();
     
     auto scene = std::make_shared<Scene>();
@@ -257,5 +259,112 @@ TEST_CASE("Scene Dependency Traversal", "[scene][deps]") {
     // Empty scene with no real assets should have no dependencies
     REQUIRE(deps.empty());
     
+    test_utils::TestContext::reset();
+}
+
+TEST_CASE("Scene Serialization", "[scene]") {
+    test_utils::TestContext::reset();
+    {
+        EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
+
+        auto scene = std::make_shared<Scene>();
+        auto entity = scene->create_entity();
+        
+        auto transform_comp = entity->add_component<TransformComponent>();
+        transform_comp->transform.set_position({10.0f, 20.0f, 30.0f});
+        transform_comp->transform.set_scale({2.0f, 2.0f, 2.0f});
+
+        std::string scene_path = "/Game/test_scene.asset";
+        EngineContext::asset()->save_asset(scene, scene_path);
+    }
+
+    {
+        INFO(LogAsset, "--- Phase 2: Loading Scene ---");
+        EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
+
+        std::string scene_path = "/Game/test_scene.asset";
+        auto loaded_scene = EngineContext::asset()->load_asset<Scene>(scene_path);
+
+        REQUIRE(loaded_scene != nullptr);
+        REQUIRE(loaded_scene->entities_.size() == 1);
+
+        auto* entity = loaded_scene->entities_[0].get();
+        auto transform_comp = entity->get_component<TransformComponent>();
+        
+        REQUIRE(transform_comp != nullptr);
+
+        auto pos = transform_comp->transform.get_position();
+        CHECK(pos.x() == (10.0f));
+        CHECK(pos.y() == (20.0f));
+        CHECK(pos.z() == (30.0f));
+
+        auto scale = transform_comp->transform.get_scale();
+        CHECK(scale.x() == (2.0f));
+        CHECK(scale.y() == (2.0f));
+        CHECK(scale.z() == (2.0f));
+    }
+    test_utils::TestContext::reset();
+}
+
+TEST_CASE("Scene Dependency Integration", "[scene]") {
+    test_utils::TestContext::reset();
+    utils::clean_old_files(std::filesystem::path(std::string(ENGINE_PATH) + "/test/test_internal/assets"), 5);
+    UID texture_uid, scene_uid;
+    
+    // Phase 1: Save Scene with Dependencies
+    {
+        EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
+
+        // 1. Create a dependency asset (Texture)
+        auto texture = std::make_shared<PNGAsset>();
+        texture->width_ = 256;
+        texture->height_ = 256;
+        texture->channels_ = 4;
+        texture->pixels_.resize(256 * 256 * 4, 128);
+        
+        std::string texture_path = "/Game/texture.binasset";
+        EngineContext::asset()->save_asset(texture, texture_path);
+        texture_uid = texture->get_uid();
+
+        // 2. Create Scene
+        auto scene = std::make_shared<Scene>();
+        
+        // 3. Create Entity and Component
+        auto* entity = scene->create_entity();
+        auto* spirit = entity->add_component<SpiritComponent>();
+        
+        // 4. Link Dependency
+        spirit->texture = texture;
+
+        // 5. Save Scene
+        std::string scene_path = "/Game/level1.asset";
+        EngineContext::asset()->save_asset(scene, scene_path);
+        scene_uid = scene->get_uid();
+    }
+
+    // Phase 2: Load Scene and Verify
+    {
+        EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
+
+        std::string scene_path = "/Game/level1.asset";
+        auto loaded_scene = EngineContext::asset()->load_asset<Scene>(scene_path);
+
+        REQUIRE(loaded_scene != nullptr);
+        CHECK(loaded_scene->get_uid() == scene_uid);
+        
+        // Check Entity
+        REQUIRE(loaded_scene->entities_.size() == 1);
+        auto* entity = loaded_scene->entities_[0].get();
+        REQUIRE(entity != nullptr);
+
+        // Check Component
+        auto* spirit = entity->get_component<SpiritComponent>();
+        REQUIRE(spirit != nullptr);
+
+        // Check Dependency
+        REQUIRE(spirit->texture != nullptr);
+        CHECK(spirit->texture->get_uid() == texture_uid);
+        CHECK(spirit->texture->width_ == 256);
+    }
     test_utils::TestContext::reset();
 }
