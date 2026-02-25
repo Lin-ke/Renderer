@@ -8,13 +8,13 @@
 
 ## 项目结构
 
-```
+```text
 engine/
 ├── core/            # 基础模块（log、math、reflect、window）
 ├── function/        # 功能模块
 │   ├── asset/       # 资源管理（UID-based）
 │   ├── framework/   # ECS框架
-│   └── render/      # 渲染系统（RDG→RHI→DX11）
+│   └── render/      # 渲染系统（RDG->RHI->DX11）
 └── platform/dx11/   # DX11 RHI实现
 ```
 
@@ -43,86 +43,48 @@ xmake run utest "[tag]"              # 测试
 
 ---
 
-## 测试标签
-
-| 标签 | 说明 |
-|------|------|
-| `[render_resource]` | Texture/Material/Model/Shader |
-| `[scene]` | Scene管理 |
-| `[reflection]` | 反射系统 |
-| `[draw]` | 绘制测试 |
-| `[pbr]` | PBR渲染 |
-| `[light]` | 灯光系统 |
-
----
-
 ## Core Systems
 
-### Engine Context
+### Engine Context (引擎全局上下文)
+
+`EngineContext` 提供了访问各个核心子系统的静态API：
 
 ```cpp
-EngineContext::init(mode);              // 初始化
-auto* world = EngineContext::world();   // 获取子系统
-EngineContext::exit();                  // 退出
+// 初始化与退出
+EngineContext::init(mode);              
+EngineContext::exit();                  
+
+// 常用子系统 API 获取：
+auto* world         = EngineContext::world();           // 实体与场景管理
+auto* asset_manager = EngineContext::asset();           // 资源管理器 (AssetManager)
+auto  rhi_backend   = EngineContext::rhi();             // 渲染后端接口 (RHIBackendRef)
+auto* render_system = EngineContext::render_system();   // 高层渲染系统
+auto* render_res    = EngineContext::render_resource(); // 渲染资源管理
 ```
 
 ### Tick System
 
-分层传播：EngineContext → World → Scene → Entity → Component，使用 `delta_time` 保证帧率无关。
+分层传播：EngineContext -> World -> Scene -> Entity -> Component，使用 `delta_time` 保证帧率无关。
 
 ### Asset System
 
-**UID-based资源引用**：使用128位UUID唯一标识资源，支持路径别名（如`/Engine/models/bunny.obj`）。
+**UID-based资源引用**：使用128位UID唯一标识资源，必须用asset/binasset保存，加载（如`/Engine/models/bunny.asset`）。Model::load()可以使用fbx，obj（再保存就能得到asset）。
+
+**资源加载 API 提示**：目前统一通过 `EngineContext::asset()` 进行资源的加载与获取，不要再使用独立的 `Asset::Load` 静态方法。
 
 ```cpp
-auto model = Model::Load("/Engine/models/bunny.obj");  // 自动缓存，返回共享指针
-// 相同路径多次Load返回同一实例，引用计数管理生命周期
+// 1. 通过虚拟路径加载资源 (返回 std::shared_ptr<T>)
+auto model = EngineContext::asset()->load_asset<Model>("/Engine/models/bunny.asset");
+
+// 2. 通过 UID 加载资源
+auto texture = EngineContext::asset()->load_asset<Texture>(uid);
+
+// 3. 异步加载任务 (返回 std::vector<std::shared_future<AssetRef>>)
+auto load_tasks = EngineContext::asset()->enqueue_load_task(uid);
 ```
-
-**依赖处理（Deps）**：Asset通过`traverse_deps()`声明依赖，Scene/Prefab序列化时自动处理嵌套资源。
-
-**ASSET_DEPS宏**：简化依赖管理，自动生成`traverse_deps`、`load_asset_deps`、`save_asset_deps`和序列化代码。
-
-```cpp
-// 在Asset子类中使用ASSET_DEPS宏声明依赖
-class Material : public Asset {
-    ASSET_DEPS(
-        (TextureRef, texture_diffuse),              // 单一依赖
-        (TextureRef, texture_normal),
-        (std::vector<TextureRef>, texture_2d)       // 数组依赖
-    )
-    
-    // 宏自动生成：
-    // - traverse_deps()：遍历所有依赖
-    // - load_asset_deps()：从UID加载指针
-    // - save_asset_deps()：同步指针到UID
-    // - serialize_deps()：序列化UID列表
-};
-```
-
-**宏原理**：
-- `DECL_ENTRY`：声明`AssetRef ptr`和`UID ptr_uid`成员
-- `LOAD_ENTRY`：`ptr = AssetManager::load_asset<PtrType>(ptr_uid)`
-- `SYNC_ENTRY`：`ptr_uid = ptr ? ptr->get_uid() : UID::empty()`
-- `VISIT_ENTRY`：`if (ptr) callback(ptr)`
-
-**手动实现（旧方式）**：
-```cpp
-class Scene : public Asset {
-    void traverse_deps(std::function<void(std::shared_ptr<Asset>)> cb) const override {
-        for (auto& entity : entities_) {
-            entity->traverse_deps(cb);  // 遍历所有Entity的依赖
-        }
-    }
-    void load_asset_deps() override;   // 反序列化后加载依赖
-    void save_asset_deps() override;   // 保存时收集依赖
-};
-```
-
-**Model序列化架构**：Model是资源组合容器，通过`ASSET_DEPS`宏管理Mesh和Material依赖。
 
 **资源层级关系**：
-```
+```text
 Model (场景对象容器)
 ├── Mesh[] (几何数据)
 │   ├── VertexBuffer (顶点数据：位置/法线/切线/UV)
@@ -134,61 +96,18 @@ Model (场景对象容器)
 │   │   ├── Diffuse (漫反射)
 │   │   ├── Normal (法线)
 │   │   └── ARM (AO/Roughness/Metallic)
-│   └── MaterialParams (参数：roughness/metallic/color)
+│   ├── MaterialParams (参数：roughness/metallic/color)
 └── MaterialSlot[] (Mesh-Material绑定关系)
-```
-
-**代码结构**：
-```cpp
-class Model : public Asset {
-    ASSET_DEPS(
-        (std::vector<MeshRef>, mesh_deps_),       // 几何数据依赖
-        (std::vector<MaterialRef>, material_deps_) // 材质依赖
-    )
-    
-    // 运行时结构 - Slot定义渲染批次
-    struct MaterialSlot {
-        MeshRef mesh;           // 指向mesh_deps_[mesh_index]
-        MaterialRef material;   // 指向material_deps_[material_index]
-        uint32_t mesh_index;
-        uint32_t material_index;
-    };
-    std::vector<MaterialSlot> material_slots_;
-};
-
-class Material : public Asset {
-    ASSET_DEPS(
-        (TextureRef, texture_diffuse),
-        (TextureRef, texture_normal),
-        (TextureRef, texture_arm),
-        (ShaderRef, vertex_shader),
-        (ShaderRef, fragment_shader)
-    )
-    
-    MaterialType type_;  // PBR / NPR / Base
-    Vec4 diffuse_;
-    float roughness_, metallic_;
-};
 ```
 
 **渲染流程中的资源使用**：
 1. **Culling阶段**：使用`Mesh.bounding_box`进行视锥剔除
 2. **RenderBatch构建**：遍历`Model.material_slots_`，每个Slot生成一个DrawCall
 3. **渲染阶段**：
-   - `Mesh.vertex_buffer` / `index_buffer` → 绑定到GPU输入
-   - `Material.shader` → 绑定Pipeline
-   - `Material.texture_*` → 绑定到Shader Resource
-   - `Material.params` → 更新Constant Buffer
-
-**依赖同步流程**：
-- `sync_slots_to_deps()`：保存前收集`material_slots_`中的指针到`mesh_deps_`/`material_deps_`
-- `sync_deps_to_slots()`：加载后将依赖指针分配到`material_slots_`
-- 保存Model时，ASSET_DEPS自动级联保存所有Mesh和Material
-
-**性能考虑**：
-- Mesh和Material可被多个Model共享（如实例化渲染）
-- 实际顶点数据存储在GPU Buffer，Asset只存CPU端引用
-- 材质参数变化不影响其他使用相同Material的Model
+   - `Mesh.vertex_buffer` / `index_buffer` -> 绑定到GPU输入
+   - `Material.shader` -> 绑定Pipeline
+   - `Material.texture_*` -> 绑定到Shader Resource
+   - `Material.params` -> 更新Constant Buffer
 
 ### Reflection System
 
@@ -219,7 +138,7 @@ CEREAL_REGISTER_POLYMORPHIC_RELATION(Component, MyComponent)
 
 ### Render Architecture
 
-三层架构：**RDG → RHI → DX11**
+三层架构：**RDG -> RHI -> DX11**
 
 - **RDG**: Render Dependency Graph，管理Pass依赖和资源生命周期
 - **RHI**: Render Hardware Interface，抽象渲染API（DX11/Vulkan）
@@ -228,7 +147,7 @@ CEREAL_REGISTER_POLYMORPHIC_RELATION(Component, MyComponent)
 ```cpp
 // RDG层
 RDGBuilder builder;
-RDGTextureHandle color = builder.create_texture("Color").extent({w,h}).finish();
+RDGTextureHandle color = builder.create_texture("Color").extent({w,h}).finish();       
 builder.create_render_pass("Forward")
     .color(0, color, ATTACHMENT_LOAD_OP_CLEAR, ATTACHMENT_STORE_OP_STORE)
     .execute([](RDGPassContext ctx) { /* 渲染命令 */ })
@@ -240,11 +159,39 @@ RHIBufferRef buffer = backend->create_buffer(info);
 RHIGraphicsPipelineRef pipeline = backend->create_graphics_pipeline(info);
 ```
 
+### Math System (DXMath)
+
+基于DirectXMath的数学库，自定义封装提供Eigen兼容的API。
+
+#### 坐标系定义
+
+**右手坐标系**：
+- **X轴**: 前向 (front) - 相机/物体的前向方向
+- **Y轴**: 上 (up) - 世界空间的上方向
+- **Z轴**: 右 (right) - 水平右方向
+
+#### 旋转定义
+
+欧拉角存储顺序为 `(pitch, yaw, roll)`，但旋转轴与传统定义不同：    
+
+| 分量 | 含义 | 旋转轴 | 鼠标映射 |
+|------|------|--------|----------|
+| `pitch` (x) | 垂直俯仰 | **Z轴** (right) | 上下滑动 |
+| `yaw` (y) | 水平偏航 | **Y轴** (up) | 左右滑动 |
+| `roll` (z) | 侧倾 | **X轴** (front) | 通常不用 |
+
+#### 矩阵存储格式
+
+**C++端**: `float m[4][4]` 使用**列优先**存储（为了HLSL兼容）
+
+**HLSL端**: `float4x4` 默认列优先，与C++端格式一致
+
+
 ---
 
 ## Agent工作流
 
-0.  按需读取./docs
+0. 按需读取./docs
 1. **编码**：遵循代码风格，禁止占位符
 2. **测试**：在 `test/` 编写测试用例
 3. **验证**：`xmake run utest` 直到通过
@@ -252,7 +199,6 @@ RHIGraphicsPipelineRef pipeline = backend->create_graphics_pipeline(info);
    - "I have": 做了什么
    - "I omitted": 省略了什么及理由
    - 更新AGENTS.md（如必要）
-
 
 ## Docs
 Test格式（写Test前必看）

@@ -155,9 +155,20 @@ void DepthPrePass::build(RDGBuilder& builder, RDGTextureHandle depth_target, con
     auto rp_builder = builder.create_render_pass("DepthPrePass")
         .depth_stencil(depth_target, ATTACHMENT_LOAD_OP_CLEAR, ATTACHMENT_STORE_OP_STORE, 1.0f, 0);
 
-    rp_builder.execute([this, batches](RDGPassContext context) {
+    // Get extent for viewport
+    Extent2D extent = {1280, 720};
+    auto* render_system = EngineContext::render_system();
+    if (render_system && render_system->get_swapchain()) {
+        extent = render_system->get_swapchain()->get_extent();
+    }
+
+    rp_builder.execute([this, batches, extent](RDGPassContext context) {
         RHICommandListRef cmd = context.command;
         if (!cmd) return;
+
+        // Set viewport and scissor to ensure valid rendering state
+        cmd->set_viewport({0, 0}, {extent.width, extent.height});
+        cmd->set_scissor({0, 0}, {extent.width, extent.height});
         
         cmd->set_graphics_pipeline(pipeline_);
         

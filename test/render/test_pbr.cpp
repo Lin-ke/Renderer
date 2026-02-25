@@ -79,8 +79,6 @@ TEST_CASE("PBR deferred rendering", "[pbr]") {
     test_utils::TestContext::reset();
     
     std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
-    EngineContext::asset()->init(test_asset_dir);
-    
     REQUIRE(EngineContext::rhi() != nullptr);
     REQUIRE(EngineContext::render_system() != nullptr);
     
@@ -129,7 +127,7 @@ TEST_CASE("PBR material params", "[pbr]") {
     mat->set_roughness(0.5f);
     mat->set_metallic(0.8f);
     
-    CHECK(mat->get_diffuse().x() == Catch::Approx(0.8f));
+    CHECK(mat->get_diffuse().x == Catch::Approx(0.8f));
     CHECK(mat->get_roughness() == Catch::Approx(0.5f));
     CHECK(mat->get_metallic() == Catch::Approx(0.8f));
     

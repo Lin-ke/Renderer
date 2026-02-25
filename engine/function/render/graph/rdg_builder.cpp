@@ -205,7 +205,10 @@ void RDGBuilder::create_output_barriers(RDGPassNodeRef pass) {
 
 void RDGBuilder::prepare_descriptor_set(RDGPassNodeRef pass) {
     pass->for_each_texture([&](RDGTextureEdgeRef edge, RDGTextureNodeRef texture) {
-        if (edge->is_output()) return;
+        // For compute passes, read_write textures are output edges but still need descriptors
+        // For render passes, pure output edges (color/depth) don't need descriptor set binding
+        bool needs_descriptor = edge->as_shader_read || edge->as_shader_read_write;
+        if (edge->is_output() && !needs_descriptor) return;
         
         auto view_pool_alloc = RDGTextureViewPool::get()->allocate({
             .texture = resolve(texture),
@@ -224,7 +227,7 @@ void RDGBuilder::prepare_descriptor_set(RDGPassNodeRef pass) {
             pass->pooled_descriptor_sets_.push_back({descriptor, edge->set});
         }
 
-        if ((edge->as_shader_read || edge->as_shader_read_write) && pass->descriptor_sets_[edge->set] != nullptr) {
+        if (needs_descriptor && pass->descriptor_sets_[edge->set] != nullptr) {
             RHIDescriptorUpdateInfo update_info = {
                 .binding = edge->binding,
                 .index = edge->index,
@@ -321,6 +324,7 @@ void RDGBuilder::execute_pass(RDGRenderPassNodeRef pass) {
 
     RHIRenderPassRef render_pass = EngineContext::rhi()->create_render_pass(render_pass_info);
 
+    command_->gpu_timestamp_begin(pass->name());
     command_->push_event(pass->name(), {0.0f, 0.0f, 0.0f});
 
     create_input_barriers(pass);
@@ -347,6 +351,7 @@ void RDGBuilder::execute_pass(RDGRenderPassNodeRef pass) {
     release_resource(pass);
 
     command_->pop_event();
+    command_->gpu_timestamp_end();
     
     if (render_pass) {
         render_pass->destroy();
@@ -356,6 +361,7 @@ void RDGBuilder::execute_pass(RDGRenderPassNodeRef pass) {
 void RDGBuilder::execute_pass(RDGComputePassNodeRef pass) {
     prepare_descriptor_set(pass);
 
+    command_->gpu_timestamp_begin(pass->name());
     command_->push_event(pass->name(), {1.0f, 0.0f, 0.0f});
 
     create_input_barriers(pass);
@@ -378,11 +384,13 @@ void RDGBuilder::execute_pass(RDGComputePassNodeRef pass) {
     release_resource(pass);
 
     command_->pop_event();
+    command_->gpu_timestamp_end();
 }
 
 void RDGBuilder::execute_pass(RDGRayTracingPassNodeRef pass) {
     prepare_descriptor_set(pass);
 
+    command_->gpu_timestamp_begin(pass->name());
     command_->push_event(pass->name(), {0.0f, 1.0f, 0.0f});
 
     create_input_barriers(pass);
@@ -405,6 +413,7 @@ void RDGBuilder::execute_pass(RDGRayTracingPassNodeRef pass) {
     release_resource(pass);
 
     command_->pop_event();
+    command_->gpu_timestamp_end();
 }
 
 void RDGBuilder::execute_pass(RDGPresentPassNodeRef pass) {
@@ -427,6 +436,7 @@ void RDGBuilder::execute_pass(RDGPresentPassNodeRef pass) {
         }
     }
 
+    command_->gpu_timestamp_begin(pass->name());
     command_->push_event(pass->name(), {0.0f, 0.0f, 1.0f});
 
     create_input_barriers(pass);
@@ -454,6 +464,7 @@ void RDGBuilder::execute_pass(RDGPresentPassNodeRef pass) {
     release_resource(pass);
 
     command_->pop_event();
+    command_->gpu_timestamp_end();
 }
 
 void RDGBuilder::execute_pass(RDGCopyPassNodeRef pass) {
@@ -472,6 +483,7 @@ void RDGBuilder::execute_pass(RDGCopyPassNodeRef pass) {
         }
     });
 
+    command_->gpu_timestamp_begin(pass->name());
     command_->push_event(pass->name(), {1.0f, 1.0f, 0.0f});
 
     create_input_barriers(pass);
@@ -504,6 +516,7 @@ void RDGBuilder::execute_pass(RDGCopyPassNodeRef pass) {
     release_resource(pass);
 
     command_->pop_event();
+    command_->gpu_timestamp_end();
 }
 
 RHITextureRef RDGBuilder::resolve(RDGTextureNodeRef texture_node) {

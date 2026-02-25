@@ -370,12 +370,16 @@ void NPRForwardPass::set_per_frame_data(const Mat4& view, const Mat4& proj,
     per_frame_dirty_ = true;
 }
 
-void NPRForwardPass::draw_batch(RHICommandContextRef cmd, const DrawBatch& batch) {
+void NPRForwardPass::draw_batch(RHICommandContextRef cmd, const DrawBatch& batch, const Extent2D& extent) {
     if (!initialized_ || !pipeline_ || !cmd) {
         ERR(LogNPRForwardPass, "Draw batch failed: initialized={}, pipeline={}, cmd={}", 
             initialized_, (pipeline_ != nullptr), (cmd != nullptr));
         return;
     }
+
+    // Set viewport and scissor - always set them to ensure valid rendering state
+    cmd->set_viewport({0, 0}, {extent.width, extent.height});
+    cmd->set_scissor({0, 0}, {extent.width, extent.height});
 
     // Update and bind per-frame buffer
     if (per_frame_buffer_) {
@@ -527,12 +531,16 @@ void NPRForwardPass::draw_batch(RHICommandContextRef cmd, const DrawBatch& batch
     }
 }
 
-void NPRForwardPass::execute_batches(RHICommandListRef cmd, const std::vector<DrawBatch>& batches) {
+void NPRForwardPass::execute_batches(RHICommandListRef cmd, const std::vector<DrawBatch>& batches, const Extent2D& extent) {
     if (!initialized_ || !pipeline_ || !cmd) {
         ERR(LogNPRForwardPass, "Execute batches failed: initialized={}, pipeline={}, cmd={}", 
             initialized_, (pipeline_ != nullptr), (cmd != nullptr));
         return;
     }
+
+    // Set viewport and scissor - always set them to ensure valid rendering state
+    cmd->set_viewport({0, 0}, {extent.width, extent.height});
+    cmd->set_scissor({0, 0}, {extent.width, extent.height});
 
     cmd->set_graphics_pipeline(pipeline_);
     
@@ -672,33 +680,34 @@ void NPRForwardPass::build(RDGBuilder& builder, RDGTextureHandle color_target,
         return;
     }
     
+    // Get extent from render system (color_target doesn't have direct extent access)
+    Extent2D extent = {1280, 720};  // Default fallback
+    auto* render_system = EngineContext::render_system();
+    if (render_system && render_system->get_swapchain()) {
+        extent = render_system->get_swapchain()->get_extent();
+    }
+    
     // Create render pass
     auto rp_builder = builder.create_render_pass("NPRForwardPass")
         .color(0, color_target, ATTACHMENT_LOAD_OP_CLEAR, ATTACHMENT_STORE_OP_STORE, 
                Color4{0.1f, 0.1f, 0.2f, 1.0f});
     
-    // Use LOAD for depth since depth prepass already wrote it
-    // Use read-only depth to allow simultaneous SRV binding for rim light
     rp_builder.depth_stencil(depth_target, ATTACHMENT_LOAD_OP_LOAD, 
                              ATTACHMENT_STORE_OP_DONT_CARE, 1.0f, 0, {}, true);
     
-    // Declare dependency on depth texture (as input attachment)
-    // This ensures RDG inserts proper barriers
     rp_builder.read(0, 0, 0, depth_target, VIEW_TYPE_2D, 
                     TextureSubresourceRange{TEXTURE_ASPECT_DEPTH, 0, 1, 0, 1});
     
-    // Get the actual depth texture from prepass for screen-space rim light
-    auto* render_system = EngineContext::render_system();
     RHITextureRef depth_tex = render_system ? render_system->get_prepass_depth_texture() : nullptr;
     
-    rp_builder.execute([this, batches, depth_tex](RDGPassContext context) {
+    rp_builder.execute([this, batches, depth_tex, extent](RDGPassContext context) {
         // Set depth texture for this frame
         set_depth_texture(depth_tex);
         
         RHICommandListRef cmd = context.command;
         if (!cmd) return;
         
-        execute_batches(cmd, batches);
+        execute_batches(cmd, batches, extent);
     })
     .finish();
 }

@@ -31,6 +31,6 @@ VSOutput VSMain(VSInput input) {
     return output;
 }
 
-float4 PSMain(VSOutput input) : SV_TARGET {
-    return float4(0, 0, 0, 0);
+void PSMain(VSOutput input) {
+    // Depth-only pass, no color output needed
 }

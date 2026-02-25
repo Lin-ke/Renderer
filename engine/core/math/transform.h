@@ -12,8 +12,6 @@
 
 class Transform {
  public:
-  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-  
   Transform() = default;
 
   
@@ -69,7 +67,7 @@ class Transform {
   Quaternion inverse_rotation() const { return rotation_.conjugate(); }
   
   Vec3 inverse_scale() const {
-    return Vec3(1.0f / scale_.x(), 1.0f / scale_.y(), 1.0f / scale_.z());
+    return Vec3(1.0f / scale_.x, 1.0f / scale_.y, 1.0f / scale_.z);
   }
   
   Vec3 inverse_position() const { return -position_; }

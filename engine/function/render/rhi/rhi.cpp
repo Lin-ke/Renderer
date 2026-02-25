@@ -1,9 +1,12 @@
 #include "engine/function/render/rhi/rhi.h"
+#include "engine/function/render/render_system/gpu_profiler.h"
 #include "engine/core/log/Log.h"
 #include "engine/platform/dx11/platform_rhi.h"
 #include <algorithm>
 
 RHIBackendRef RHIBackend::backend_ = nullptr;
+
+GPUProfilerRef RHIBackend::create_gpu_profiler() { return nullptr; }
 
 class DummyRHIBackend : public RHIBackend {
 public:
@@ -92,4 +95,24 @@ void RHIBackend::destroy() {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// RHICommandContext – default gpu_timestamp forwarding to GPUProfiler
+// ---------------------------------------------------------------------------
+
+void RHICommandContext::gpu_timestamp_begin_frame() {
+    if (gpu_profiler_) gpu_profiler_->begin_frame();
+}
+
+void RHICommandContext::gpu_timestamp_end_frame() {
+    if (gpu_profiler_) gpu_profiler_->end_frame();
+}
+
+void RHICommandContext::gpu_timestamp_begin(const std::string& name) {
+    if (gpu_profiler_) gpu_profiler_->begin_scope(name);
+}
+
+void RHICommandContext::gpu_timestamp_end() {
+    if (gpu_profiler_) gpu_profiler_->end_scope();
 }

@@ -1,4 +1,5 @@
 #include "platform_rhi.h"
+#include "dx11_gpu_profiler.h"
 #include "engine/core/log/Log.h"
 #include "engine/function/render/render_system/render_system.h"
 #include "engine/main/engine_context.h"
@@ -235,6 +236,10 @@ bool DX11Texture::init() {
             desc.BindFlags |= D3D11_BIND_RENDER_TARGET;
             desc.MiscFlags |= D3D11_RESOURCE_MISC_GENERATE_MIPS;
         }
+        // Set cubemap flag for texture cubes
+        if (info_.type & RESOURCE_TYPE_TEXTURE_CUBE) {
+            desc.MiscFlags |= D3D11_RESOURCE_MISC_TEXTURECUBE;
+        }
         desc.CPUAccessFlags = (info_.memory_usage == MEMORY_USAGE_CPU_TO_GPU) ? D3D11_CPU_ACCESS_WRITE : 0;
 
         HRESULT hr = backend->get_device()->CreateTexture2D(&desc, nullptr, texture_.GetAddressOf());
@@ -276,9 +281,26 @@ ComPtr<ID3D11ShaderResourceView> DX11Texture::create_srv() {
     else if (format == DXGI_FORMAT_D24_UNORM_S8_UINT || format == DXGI_FORMAT_R24G8_TYPELESS) format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
     
     srv_desc.Format = format;
-    srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-    srv_desc.Texture2D.MipLevels = info_.mip_levels > 0 ? info_.mip_levels : (UINT)-1;
-    srv_desc.Texture2D.MostDetailedMip = 0;
+    
+    // Determine view dimension based on texture type
+    if (info_.array_layers == 6 && info_.type & RESOURCE_TYPE_TEXTURE_CUBE) {
+        // Cubemap texture
+        srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURECUBE;
+        srv_desc.TextureCube.MipLevels = info_.mip_levels > 0 ? info_.mip_levels : (UINT)-1;
+        srv_desc.TextureCube.MostDetailedMip = 0;
+    } else if (info_.array_layers > 1) {
+        // Texture array
+        srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+        srv_desc.Texture2DArray.MipLevels = info_.mip_levels > 0 ? info_.mip_levels : (UINT)-1;
+        srv_desc.Texture2DArray.MostDetailedMip = 0;
+        srv_desc.Texture2DArray.ArraySize = info_.array_layers;
+        srv_desc.Texture2DArray.FirstArraySlice = 0;
+    } else {
+        // Regular 2D texture
+        srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        srv_desc.Texture2D.MipLevels = info_.mip_levels > 0 ? info_.mip_levels : (UINT)-1;
+        srv_desc.Texture2D.MostDetailedMip = 0;
+    }
     
     HRESULT hr = backend->get_device()->CreateShaderResourceView(texture_.Get(), &srv_desc, srv_.GetAddressOf());
     if (FAILED(hr)) {
@@ -356,9 +378,27 @@ DX11TextureView::DX11TextureView(const RHITextureViewInfo& info, std::shared_ptr
             }
             
             srv_desc.Format = srv_format;
-            srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-            srv_desc.Texture2D.MipLevels = tex_info.mip_levels > 0 ? tex_info.mip_levels : (UINT)-1;
-            srv_desc.Texture2D.MostDetailedMip = info.subresource.base_mip_level;
+            
+            // Determine view dimension based on view type and texture properties
+            if (info.view_type == VIEW_TYPE_CUBE || 
+                (tex_info.array_layers == 6 && tex_info.type & RESOURCE_TYPE_TEXTURE_CUBE)) {
+                // Cubemap view
+                srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURECUBE;
+                srv_desc.TextureCube.MipLevels = tex_info.mip_levels > 0 ? tex_info.mip_levels : (UINT)-1;
+                srv_desc.TextureCube.MostDetailedMip = info.subresource.base_mip_level;
+            } else if (info.view_type == VIEW_TYPE_2D_ARRAY || tex_info.array_layers > 1) {
+                // Texture array view
+                srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+                srv_desc.Texture2DArray.MipLevels = tex_info.mip_levels > 0 ? tex_info.mip_levels : (UINT)-1;
+                srv_desc.Texture2DArray.MostDetailedMip = info.subresource.base_mip_level;
+                srv_desc.Texture2DArray.ArraySize = info.subresource.layer_count > 0 ? info.subresource.layer_count : tex_info.array_layers;
+                srv_desc.Texture2DArray.FirstArraySlice = info.subresource.base_array_layer;
+            } else {
+                // Regular 2D texture view
+                srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+                srv_desc.Texture2D.MipLevels = tex_info.mip_levels > 0 ? tex_info.mip_levels : (UINT)-1;
+                srv_desc.Texture2D.MostDetailedMip = info.subresource.base_mip_level;
+            }
             HRESULT hr = backend->get_device()->CreateShaderResourceView(dx_tex->get_handle().Get(), &srv_desc, srv_.GetAddressOf());
             if (FAILED(hr)) {
                 ERR(LogRHI, "Failed to create texture SRV (format: {}, HRESULT: 0x{:08X})", 
@@ -436,7 +476,7 @@ void DX11TextureView::destroy() {
 
 // --- DX11Swapchain ---
 DX11Swapchain::DX11Swapchain(const RHISwapchainInfo& info, std::shared_ptr<DX11Backend> backend)
-    : RHISwapchain(info) {
+    : RHISwapchain(info), backend_(backend) {
     auto dx_surface = resource_cast(info.surface);
     if (!dx_surface) return;
 
@@ -531,6 +571,12 @@ void DX11Swapchain::present(RHISemaphoreRef wait_semaphore) {
         // If frame index query is not supported, manually advance to next frame
         if (!supports_frame_index_query_) {
             current_index_ = (current_index_ + 1) % textures_.size();
+        }
+        
+        // Auto-check debug messages after present
+        auto backend = backend_.lock();
+        if (backend) {
+            backend->check_debug_messages("present");
         }
     }
 }
@@ -763,6 +809,50 @@ void DX11GraphicsPipeline::destroy() {
     input_layout_.Reset(); rasterizer_state_.Reset(); blend_state_.Reset(); depth_stencil_state_.Reset();
 }
 
+// --- DX11ComputePipeline ---
+DX11ComputePipeline::DX11ComputePipeline(const RHIComputePipelineInfo& info, std::shared_ptr<DX11Backend> backend)
+    : RHIComputePipeline(info), backend_(backend) {
+}
+
+bool DX11ComputePipeline::init() {
+    auto backend = backend_.lock();
+    if (!backend || !backend->is_valid()) {
+        ERR(LogRHI, "Failed to init DX11ComputePipeline: backend is destroyed or invalid");
+        return false;
+    }
+    
+    // Validate compute shader
+    if (!info_.compute_shader) {
+        ERR(LogRHI, "Failed to init DX11ComputePipeline: compute shader is null");
+        return false;
+    }
+    
+    auto cs = resource_cast(info_.compute_shader);
+    if (!cs || !cs->get_shader()) {
+        ERR(LogRHI, "Failed to init DX11ComputePipeline: compute shader is invalid");
+        return false;
+    }
+    
+    // DX11 compute pipeline doesn't require additional state objects
+    // The compute shader is bound directly at dispatch time
+    return true;
+}
+
+void DX11ComputePipeline::bind(ID3D11DeviceContext* context) {
+    if (!context) return;
+    
+    auto cs = resource_cast(info_.compute_shader);
+    if (cs) {
+        context->CSSetShader((ID3D11ComputeShader*)cs->get_shader().Get(), nullptr, 0);
+    } else {
+        context->CSSetShader(nullptr, nullptr, 0);
+    }
+}
+
+void DX11ComputePipeline::destroy() {
+    // No D3D11 objects to release - shader is managed by RHIShader
+}
+
 // --- DX11Fence ---
 DX11Fence::DX11Fence(bool signaled, std::shared_ptr<DX11Backend> backend) 
     : backend_(backend), signaled_(signaled) {
@@ -816,7 +906,25 @@ void DX11Fence::destroy() { query_.Reset(); }
 // --- DX11Backend ---
 DX11Backend::DX11Backend(const RHIBackendInfo& info) : RHIBackend(info) {
     UINT flags = 0;
-    if (info.enable_debug) flags |= D3D11_CREATE_DEVICE_DEBUG;
+    
+    // Enable DXGI debug if requested
+    if (info.enable_debug) {
+        flags |= D3D11_CREATE_DEVICE_DEBUG;
+        
+        // Enable DXGI factory debug - requires DXGI1.3+ (Windows 8.1+)
+        HMODULE dxgi_module = GetModuleHandleW(L"dxgi.dll");
+        if (dxgi_module) {
+            typedef HRESULT(WINAPI* CreateDXGIFactory2Func)(UINT Flags, REFIID riid, void** ppFactory);
+            CreateDXGIFactory2Func create_dxgi_factory2 = 
+                (CreateDXGIFactory2Func)GetProcAddress(dxgi_module, "CreateDXGIFactory2");
+            if (create_dxgi_factory2) {
+                HRESULT hr = create_dxgi_factory2(DXGI_CREATE_FACTORY_DEBUG, __uuidof(IDXGIFactory), (void**)factory_.GetAddressOf());
+                if (SUCCEEDED(hr)) {
+                    INFO(LogRHI, "DXGI Debug Layer enabled");
+                }
+            }
+        }
+    }
 
     D3D_FEATURE_LEVEL feature_levels[] = { 
         D3D_FEATURE_LEVEL_11_1, 
@@ -835,16 +943,108 @@ DX11Backend::DX11Backend(const RHIBackendInfo& info) : RHIBackend(info) {
         hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags, feature_levels, _countof(feature_levels), D3D11_SDK_VERSION, device_.GetAddressOf(), nullptr, context_.GetAddressOf());
     }
 
-    ComPtr<IDXGIDevice> dxgi_device;
-    device_.As(&dxgi_device);
-    ComPtr<IDXGIAdapter> adapter;
-    dxgi_device->GetAdapter(&adapter);
-    adapter->GetParent(__uuidof(IDXGIFactory), (void**)factory_.GetAddressOf());
+    // Create factory if not already created (debug path above may have created it)
+    if (!factory_) {
+        ComPtr<IDXGIDevice> dxgi_device;
+        device_.As(&dxgi_device);
+        ComPtr<IDXGIAdapter> adapter;
+        dxgi_device->GetAdapter(&adapter);
+        adapter->GetParent(__uuidof(IDXGIFactory), (void**)factory_.GetAddressOf());
+    }
+    
+    // Configure debug message queue if debug is enabled
+    if (info.enable_debug && device_) {
+        ComPtr<ID3D11Debug> debug_device;
+        HRESULT debug_hr = device_.As(&debug_device);
+        if (SUCCEEDED(debug_hr) && debug_device) {
+            INFO(LogRHI, "D3D11 Debug Layer enabled");
+            
+            if (SUCCEEDED(device_.As(&info_queue_)) && info_queue_) {
+                // Break on severity levels (auto-break on corruption/error)
+                // We do NOT use SetBreakOnSeverity(ERROR) because it
+                // breaks inside D3D runtime where the call-stack is useless.
+                // Instead our check_and_report_d3d_errors() reads the queue,
+                // logs every message, and then __debugbreak() in *our* code.
+                info_queue_->SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_CORRUPTION, TRUE);
+                
+                // Store all messages (not just break)
+                D3D11_MESSAGE_SEVERITY severity_levels[] = {
+                    D3D11_MESSAGE_SEVERITY_CORRUPTION,
+                    D3D11_MESSAGE_SEVERITY_ERROR,
+                    D3D11_MESSAGE_SEVERITY_WARNING,
+                    D3D11_MESSAGE_SEVERITY_INFO
+                };
+                
+                D3D11_INFO_QUEUE_FILTER filter = {};
+                filter.AllowList.NumSeverities = _countof(severity_levels);
+                filter.AllowList.pSeverityList = severity_levels;
+                info_queue_->AddStorageFilterEntries(&filter);
+                
+                // Increase message queue size to avoid losing messages
+                info_queue_->SetMessageCountLimit(1024);
+                
+                INFO(LogRHI, "D3D11 InfoQueue configured for debug output");
+            }
+        } else {
+            WARN(LogRHI, "D3D11 Debug Layer requested but not available. Install Windows Graphics Tools.");
+        }
+    }
     
     immediate_context_ = std::make_shared<DX11CommandContextImmediate>(*this);
 }
 
 void DX11Backend::tick() { RHIBackend::tick(); }
+
+bool DX11Backend::check_debug_messages(const char* caller_tag) {
+    if (!info_queue_) return false;
+    
+    UINT64 message_count = info_queue_->GetNumStoredMessages();
+    if (message_count == 0) return false;
+    
+    const char* tag = caller_tag ? caller_tag : "";
+    bool has_error_or_warning = false;
+    
+    // heap-allocate a reusable buffer to avoid stack overflow with _alloca in a loop
+    std::vector<uint8_t> buf;
+    
+    for (UINT64 i = 0; i < message_count; ++i) {
+        SIZE_T message_size = 0;
+        info_queue_->GetMessage(i, nullptr, &message_size);
+        if (message_size == 0) continue;
+        
+        buf.resize(message_size);
+        D3D11_MESSAGE* msg = reinterpret_cast<D3D11_MESSAGE*>(buf.data());
+        info_queue_->GetMessage(i, msg, &message_size);
+        
+        switch (msg->Severity) {
+            case D3D11_MESSAGE_SEVERITY_CORRUPTION:
+                has_error_or_warning = true;
+                ERR(LogRHI, "[{}] D3D11 CORRUPTION [ID={}]: {}", tag, (uint32_t)msg->ID, msg->pDescription);
+                break;
+            case D3D11_MESSAGE_SEVERITY_ERROR:
+                has_error_or_warning = true;
+                ERR(LogRHI, "[{}] D3D11 ERROR [ID={}]: {}", tag, (uint32_t)msg->ID, msg->pDescription);
+                break;
+            case D3D11_MESSAGE_SEVERITY_WARNING:
+                has_error_or_warning = true;
+                WARN(LogRHI, "[{}] D3D11 WARNING [ID={}]: {}", tag, (uint32_t)msg->ID, msg->pDescription);
+                break;
+            case D3D11_MESSAGE_SEVERITY_INFO:
+                INFO(LogRHI, "[{}] D3D11 INFO [ID={}]: {}", tag, (uint32_t)msg->ID, msg->pDescription);
+                break;
+            default:
+                break;
+        }
+    }
+    
+    info_queue_->ClearStoredMessages();
+    
+    // Break in OUR code so the call-stack is useful.
+    if (has_error_or_warning) {
+        __debugbreak();
+    }
+    return has_error_or_warning;
+}
 void DX11Backend::destroy() { 
     // Log stack trace to find who called destroy
     WARN(LogRHI, "DX11Backend::destroy() called! device_={} context_={}", 
@@ -872,6 +1072,8 @@ void DX11Backend::set_name(RHIResourceRef resource, const std::string& name) {
     
     ID3D11DeviceChild* child = static_cast<ID3D11DeviceChild*>(resource->raw_handle());
     if (child) {
+        // Clear existing name first to avoid "different size" warning
+        child->SetPrivateData(WKPDID_D3DDebugObjectName, 0, nullptr);
         child->SetPrivateData(WKPDID_D3DDebugObjectName, (UINT)name.size(), name.c_str());
     }
 }
@@ -1016,7 +1218,14 @@ RHIGraphicsPipelineRef DX11Backend::create_graphics_pipeline(const RHIGraphicsPi
     register_resource(pipeline); return pipeline;
 }
 
-RHIComputePipelineRef DX11Backend::create_compute_pipeline(const RHIComputePipelineInfo& info) { return nullptr; }
+RHIComputePipelineRef DX11Backend::create_compute_pipeline(const RHIComputePipelineInfo& info) {
+    auto pipeline = std::make_shared<DX11ComputePipeline>(info, shared_from_this());
+    if (!pipeline->init()) {
+        return nullptr;
+    }
+    register_resource(pipeline);
+    return pipeline;
+}
 RHIRayTracingPipelineRef DX11Backend::create_ray_tracing_pipeline(const RHIRayTracingPipelineInfo& info) { return nullptr; }
 RHIFenceRef DX11Backend::create_fence(bool signaled) { 
     auto fence = std::make_shared<DX11Fence>(signaled, shared_from_this());
@@ -1055,6 +1264,10 @@ std::vector<uint8_t> DX11Backend::compile_shader(const char* source, const char*
     return code;
 }
 
+GPUProfilerRef DX11Backend::create_gpu_profiler() {
+    return std::make_unique<DX11GPUProfiler>(device_.Get(), context_.Get());
+}
+
 // --- DX11CommandContext ---
 DX11CommandContext::DX11CommandContext(RHICommandPoolRef pool, std::shared_ptr<DX11Backend> backend) : RHICommandContext(pool), backend_(backend) {
     if (!backend) {
@@ -1074,6 +1287,22 @@ void DX11CommandContext::begin_command() {}
 void DX11CommandContext::end_command() {}
 void DX11CommandContext::execute(RHIFenceRef fence, RHISemaphoreRef ws, RHISemaphoreRef ss) {
     if (!context_) return;
+    
+    // Clear all CS bindings to prevent UAV/SRV hazards across command batches.
+    // DX11 shares one immediate context, so a UAV left bound on CS will cause
+    // the runtime to silently NULL any SRV bound to the same resource later.
+    {
+        ID3D11ShaderResourceView*  null_srv = nullptr;
+        ID3D11UnorderedAccessView* null_uav = nullptr;
+        ID3D11SamplerState*        null_sam = nullptr;
+        ID3D11Buffer*              null_cb  = nullptr;
+        context_->CSSetShaderResources(0, 1, &null_srv);
+        context_->CSSetUnorderedAccessViews(0, 1, &null_uav, nullptr);
+        context_->CSSetSamplers(0, 1, &null_sam);
+        context_->CSSetConstantBuffers(0, 1, &null_cb);
+        context_->CSSetShader(nullptr, nullptr, 0);
+    }
+    
     if (fence) {
         auto dx_fence = resource_cast(fence);
         context_->End(dx_fence->raw_handle_as<ID3D11Query>());
@@ -1331,13 +1560,28 @@ void DX11CommandContext::end_render_pass() {
     ID3D11RenderTargetView* null_rtvs[MAX_RENDER_TARGETS] = {};
     ID3D11DepthStencilView* null_dsv = nullptr;
     context_->OMSetRenderTargets(MAX_RENDER_TARGETS, null_rtvs, null_dsv);
+    
+    // Also unbind SRVs from VS/PS to prevent stale bindings from conflicting
+    // with the next pass's render targets (e.g. depth texture left in PS SRV
+    // will cause OMSetRenderTargets to silently NULL the slot).
+    static constexpr uint32_t SRV_SLOTS_TO_CLEAR = 8;
+    ID3D11ShaderResourceView* null_srvs[SRV_SLOTS_TO_CLEAR] = {};
+    context_->VSSetShaderResources(0, SRV_SLOTS_TO_CLEAR, null_srvs);
+    context_->PSSetShaderResources(0, SRV_SLOTS_TO_CLEAR, null_srvs);
 }
 void DX11CommandContext::set_viewport(Offset2D min, Offset2D max) { D3D11_VIEWPORT vp = { (float)min.x, (float)min.y, (float)(max.x - min.x), (float)(max.y - min.y), 0.0f, 1.0f }; context_->RSSetViewports(1, &vp); }
 void DX11CommandContext::set_scissor(Offset2D min, Offset2D max) { D3D11_RECT rect = { (LONG)min.x, (LONG)min.y, (LONG)max.x, (LONG)max.y }; context_->RSSetScissorRects(1, &rect); }
 void DX11CommandContext::set_depth_bias(float c, float s, float cl) {}
 void DX11CommandContext::set_line_width(float w) {}
 void DX11CommandContext::set_graphics_pipeline(RHIGraphicsPipelineRef p) { resource_cast(p)->bind(context_.Get()); }
-void DX11CommandContext::set_compute_pipeline(RHIComputePipelineRef p) {}
+void DX11CommandContext::set_compute_pipeline(RHIComputePipelineRef p) {
+    if (!context_) return;
+    if (p) {
+        resource_cast(p)->bind(context_.Get());
+    } else {
+        context_->CSSetShader(nullptr, nullptr, 0);
+    }
+}
 void DX11CommandContext::set_ray_tracing_pipeline(RHIRayTracingPipelineRef p) {}
 void DX11CommandContext::push_constants(void* d, uint16_t s, ShaderFrequency f) {}
 void DX11CommandContext::bind_descriptor_set(RHIDescriptorSetRef d, uint32_t s) {}
@@ -1348,8 +1592,14 @@ void DX11CommandContext::bind_constant_buffer(RHIBufferRef b, uint32_t s, Shader
     if (f & SHADER_FREQUENCY_COMPUTE) context_->CSSetConstantBuffers(s, 1, &cb);
 }
 void DX11CommandContext::bind_texture(RHITextureRef t, uint32_t s, ShaderFrequency f) {
+    if (!t) {
+        ID3D11ShaderResourceView* null_srv = nullptr;
+        if (f & SHADER_FREQUENCY_VERTEX) context_->VSSetShaderResources(s, 1, &null_srv);
+        if (f & SHADER_FREQUENCY_FRAGMENT) context_->PSSetShaderResources(s, 1, &null_srv);
+        if (f & SHADER_FREQUENCY_COMPUTE) context_->CSSetShaderResources(s, 1, &null_srv);
+        return;
+    }
     auto* dx11_texture = static_cast<DX11Texture*>(t.get());
-    if (!dx11_texture) return;
     
     // Create or get SRV
     auto srv = dx11_texture->get_srv();
@@ -1362,6 +1612,53 @@ void DX11CommandContext::bind_texture(RHITextureRef t, uint32_t s, ShaderFrequen
     if (f & SHADER_FREQUENCY_VERTEX) context_->VSSetShaderResources(s, 1, &srv_ptr);
     if (f & SHADER_FREQUENCY_FRAGMENT) context_->PSSetShaderResources(s, 1, &srv_ptr);
     if (f & SHADER_FREQUENCY_COMPUTE) context_->CSSetShaderResources(s, 1, &srv_ptr);
+#ifdef _DEBUG
+    { auto b = backend_.lock(); if (b) b->check_debug_messages("bind_texture"); }
+#endif
+}
+
+void DX11CommandContext::bind_rw_texture(RHITextureRef t, uint32_t s, uint32_t mip_level, ShaderFrequency f) {
+    if (!(f & SHADER_FREQUENCY_COMPUTE)) return; // UAV only valid for compute
+    
+    if (!t) {
+        ID3D11UnorderedAccessView* null_uav = nullptr;
+        context_->CSSetUnorderedAccessViews(s, 1, &null_uav, nullptr);
+        return;
+    }
+    auto* dx11_texture = static_cast<DX11Texture*>(t.get());
+    
+    // Create UAV for the texture
+    // For cubemap arrays, we need to create a UAV for the specific subresource
+    auto backend = backend_.lock();
+    if (!backend || !backend->is_valid()) return;
+    
+    D3D11_TEXTURE2D_DESC desc;
+    dx11_texture->get_handle()->GetDesc(&desc);
+    
+    D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
+    uav_desc.Format = desc.Format;
+    
+    if (desc.ArraySize > 1) {
+        // For texture arrays/cubemaps
+        uav_desc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2DARRAY;
+        uav_desc.Texture2DArray.MipSlice = mip_level;
+        uav_desc.Texture2DArray.FirstArraySlice = 0;
+        uav_desc.Texture2DArray.ArraySize = desc.ArraySize;
+    } else {
+        uav_desc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+        uav_desc.Texture2D.MipSlice = mip_level;
+    }
+    
+    ComPtr<ID3D11UnorderedAccessView> uav;
+    HRESULT hr = backend->get_device()->CreateUnorderedAccessView(
+        dx11_texture->get_handle().Get(), &uav_desc, uav.GetAddressOf());
+    if (FAILED(hr)) return;
+    
+    ID3D11UnorderedAccessView* uav_ptr = uav.Get();
+    context_->CSSetUnorderedAccessViews(s, 1, &uav_ptr, nullptr);
+#ifdef _DEBUG
+    if (backend) backend->check_debug_messages("bind_rw_texture");
+#endif
 }
 void DX11CommandContext::bind_sampler(RHISamplerRef s, uint32_t slot, ShaderFrequency f) {
     auto* dx11_sampler = static_cast<DX11Sampler*>(s.get());
@@ -1374,13 +1671,43 @@ void DX11CommandContext::bind_sampler(RHISamplerRef s, uint32_t slot, ShaderFreq
 }
 void DX11CommandContext::bind_vertex_buffer(RHIBufferRef b, uint32_t s, uint32_t o) { ID3D11Buffer* vb = (ID3D11Buffer*)b->raw_handle(); UINT stride = b->get_info().stride; UINT uo = (UINT)o; context_->IASetVertexBuffers(s, 1, &vb, &stride, &uo); }
 void DX11CommandContext::bind_index_buffer(RHIBufferRef b, uint32_t o) { context_->IASetIndexBuffer((ID3D11Buffer*)b->raw_handle(), DXGI_FORMAT_R32_UINT, (UINT)o); }
-void DX11CommandContext::dispatch(uint32_t x, uint32_t y, uint32_t z) { context_->Dispatch(x, y, z); }
-void DX11CommandContext::dispatch_indirect(RHIBufferRef b, uint32_t o) { context_->DispatchIndirect((ID3D11Buffer*)b->raw_handle(), (UINT)o); }
+void DX11CommandContext::dispatch(uint32_t x, uint32_t y, uint32_t z) {
+    context_->Dispatch(x, y, z);
+#ifdef _DEBUG
+    { auto b = backend_.lock(); if (b) b->check_debug_messages("dispatch"); }
+#endif
+}
+void DX11CommandContext::dispatch_indirect(RHIBufferRef b, uint32_t o) {
+    context_->DispatchIndirect((ID3D11Buffer*)b->raw_handle(), (UINT)o);
+#ifdef _DEBUG
+    { auto bk = backend_.lock(); if (bk) bk->check_debug_messages("dispatch_indirect"); }
+#endif
+}
 void DX11CommandContext::trace_rays(uint32_t x, uint32_t y, uint32_t z) {}
-void DX11CommandContext::draw(uint32_t vc, uint32_t ic, uint32_t fv, uint32_t fi) { if (ic > 1) context_->DrawInstanced(vc, ic, fv, fi); else context_->Draw(vc, fv); }
-void DX11CommandContext::draw_indexed(uint32_t ic, uint32_t instc, uint32_t fi, uint32_t vo, uint32_t finst) { if (instc > 1) context_->DrawIndexedInstanced(ic, instc, fi, vo, finst); else context_->DrawIndexed(ic, fi, vo); }
-void DX11CommandContext::draw_indirect(RHIBufferRef b, uint32_t o, uint32_t c) { context_->DrawInstancedIndirect((ID3D11Buffer*)b->raw_handle(), (UINT)o); }
-void DX11CommandContext::draw_indexed_indirect(RHIBufferRef b, uint32_t o, uint32_t c) { context_->DrawIndexedInstancedIndirect((ID3D11Buffer*)b->raw_handle(), (UINT)o); }
+void DX11CommandContext::draw(uint32_t vc, uint32_t ic, uint32_t fv, uint32_t fi) {
+    if (ic > 1) context_->DrawInstanced(vc, ic, fv, fi); else context_->Draw(vc, fv);
+#ifdef _DEBUG
+    { auto b = backend_.lock(); if (b) b->check_debug_messages("draw"); }
+#endif
+}
+void DX11CommandContext::draw_indexed(uint32_t ic, uint32_t instc, uint32_t fi, uint32_t vo, uint32_t finst) {
+    if (instc > 1) context_->DrawIndexedInstanced(ic, instc, fi, vo, finst); else context_->DrawIndexed(ic, fi, vo);
+#ifdef _DEBUG
+    { auto b = backend_.lock(); if (b) b->check_debug_messages("draw_indexed"); }
+#endif
+}
+void DX11CommandContext::draw_indirect(RHIBufferRef b, uint32_t o, uint32_t c) {
+    context_->DrawInstancedIndirect((ID3D11Buffer*)b->raw_handle(), (UINT)o);
+#ifdef _DEBUG
+    { auto bk = backend_.lock(); if (bk) bk->check_debug_messages("draw_indirect"); }
+#endif
+}
+void DX11CommandContext::draw_indexed_indirect(RHIBufferRef b, uint32_t o, uint32_t c) {
+    context_->DrawIndexedInstancedIndirect((ID3D11Buffer*)b->raw_handle(), (UINT)o);
+#ifdef _DEBUG
+    { auto bk = backend_.lock(); if (bk) bk->check_debug_messages("draw_indexed_indirect"); }
+#endif
+}
 void DX11CommandContext::imgui_create_fonts_texture() {
     ImGui_ImplDX11_CreateDeviceObjects();
 }

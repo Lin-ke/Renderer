@@ -27,7 +27,7 @@ cbuffer PerObject : register(b1) {
 
 cbuffer SkyboxParams : register(b2) {
     float intensity;
-    float _padding1[3];
+    // 不要写padding
 };
 
 VSOutput VSMain(VSInput input) {

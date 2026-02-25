@@ -32,6 +32,7 @@ public:
     virtual AssetType get_asset_type() const override { return AssetType::Texture; }
 
     virtual void on_load_asset() override;
+    virtual void on_save_asset() override;
 
     TextureType get_texture_type() { return texture_type_; }
     const std::string& get_name() const { return name_; }
@@ -68,8 +69,15 @@ protected:
 
     void init_rhi();
     void load_from_file();
+    void ensure_virtual_paths();  // Convert physical paths to virtual paths before saving
 
 private:
     Texture() = default;
+    
+public:
+    // Constructor for internal use (e.g., PanoramaConverter) that skips init_rhi
+    // Use this when you need to set texture_ and texture_view_ manually
+    enum SkipInit { SkipInitTag };
+    Texture(SkipInit, TextureType type, RHIFormat format, Extent3D extent, uint32_t array_layer = 1, uint32_t mip_levels = 0);
 };
 using TextureRef = std::shared_ptr<Texture>;

@@ -3,7 +3,7 @@ add_rules("plugin.compile_commands.autoupdate", {outputdir = ".vscode"})
 
 
 add_requires("glog", {configs = {gflags = false}})
-add_requires("stb", "assimp", "cereal", "eventpp", "eigen",  "stduuid", "catch2")
+add_requires("stb", "assimp", "cereal", "stduuid", "catch2")
 add_requires("imgui", {configs = {win32 = true, dx11 = true}})
 add_requires("imguizmo", {configs = {cxflags = "-DIMGUI_DEFINE_MATH_OPERATORS"}})
 
@@ -22,8 +22,7 @@ if is_mode("release") then
     set_options("optimize", "O3")
 end
 
--- Disable Eigen alignment to fix alignment assertions
-add_defines("EIGEN_DONT_ALIGN")
+
 
 target("engine")
     set_kind("static")
@@ -33,7 +32,7 @@ target("engine")
     add_files("engine/**.cpp")
     remove_files("RD/**.cpp")
 
-    add_packages("imgui", "imguizmo", "stb", "assimp", "cereal", "eventpp",  "eigen", "glog", "stduuid", {public = true} )
+    add_packages("imgui", "imguizmo", "stb", "assimp", "cereal", "glog", "stduuid", {public = true} )
     add_syslinks("d3d11", "dxgi", "dxguid", "D3DCompiler", "d2d1", "dwrite", "winmm", "user32", "gdi32", "ole32")
 
     -- Compile shaders before building the engine
@@ -74,48 +73,73 @@ target("engine")
             local filename = path.basename(hlsl_file)
             local hlsl_mtime = os.mtime(hlsl_file)
             
-            -- Compile vertex shader (check if needs recompilation)
-            local vs_output = path.join(output_dir, filename .. "_vs.cso")
-            local needs_vs_compile = true
-            if os.exists(vs_output) then
-                local cso_mtime = os.mtime(vs_output)
-                if cso_mtime >= hlsl_mtime then
-                    needs_vs_compile = false
+            -- Check if it's a compute shader (filename ends with _cs)
+            if filename:match("_cs$") then
+                -- Compile compute shader
+                local cs_output = path.join(output_dir, filename .. ".cso")
+                local needs_cs_compile = true
+                if os.exists(cs_output) then
+                    local cso_mtime = os.mtime(cs_output)
+                    if cso_mtime >= hlsl_mtime then
+                        needs_cs_compile = false
+                    end
                 end
-            end
-            
-            if needs_vs_compile then
-                local vs_cmd = string.format('"%s" /T vs_5_0 /E VSMain /Fo "%s" /O3 "%s"', fxc.program, vs_output, hlsl_file)
-                print("Compiling VS: " .. filename)
-                local out = os.iorun(vs_cmd)
-                if out and #out > 0 then
-                    print(out)
+                
+                if needs_cs_compile then
+                    local cs_cmd = string.format('"%s" /T cs_5_0 /E CSMain /Fo "%s" /O3 "%s"', fxc.program, cs_output, hlsl_file)
+                    print("Compiling CS: " .. filename)
+                    local out = os.iorun(cs_cmd)
+                    if out and #out > 0 then
+                        print(out)
+                    end
+                    compiled_count = compiled_count + 1
+                else
+                    skipped_count = skipped_count + 1
                 end
-                compiled_count = compiled_count + 1
             else
-                skipped_count = skipped_count + 1
-            end
-            
-            -- Compile pixel shader (check if needs recompilation)
-            local ps_output = path.join(output_dir, filename .. "_ps.cso")
-            local needs_ps_compile = true
-            if os.exists(ps_output) then
-                local cso_mtime = os.mtime(ps_output)
-                if cso_mtime >= hlsl_mtime then
-                    needs_ps_compile = false
+                -- Compile vertex shader
+                local vs_output = path.join(output_dir, filename .. "_vs.cso")
+                local needs_vs_compile = true
+                if os.exists(vs_output) then
+                    local cso_mtime = os.mtime(vs_output)
+                    if cso_mtime >= hlsl_mtime then
+                        needs_vs_compile = false
+                    end
                 end
-            end
-            
-            if needs_ps_compile then
-                local ps_cmd = string.format('"%s" /T ps_5_0 /E PSMain /Fo "%s" /O3 "%s"', fxc.program, ps_output, hlsl_file)
-                print("Compiling PS: " .. filename)
-                local out = os.iorun(ps_cmd)
-                if out and #out > 0 then
-                    print(out)
+                
+                if needs_vs_compile then
+                    local vs_cmd = string.format('"%s" /T vs_5_0 /E VSMain /Fo "%s" /O3 "%s"', fxc.program, vs_output, hlsl_file)
+                    print("Compiling VS: " .. filename)
+                    local out = os.iorun(vs_cmd)
+                    if out and #out > 0 then
+                        print(out)
+                    end
+                    compiled_count = compiled_count + 1
+                else
+                    skipped_count = skipped_count + 1
                 end
-                compiled_count = compiled_count + 1
-            else
-                skipped_count = skipped_count + 1
+                
+                -- Compile pixel shader
+                local ps_output = path.join(output_dir, filename .. "_ps.cso")
+                local needs_ps_compile = true
+                if os.exists(ps_output) then
+                    local cso_mtime = os.mtime(ps_output)
+                    if cso_mtime >= hlsl_mtime then
+                        needs_ps_compile = false
+                    end
+                end
+                
+                if needs_ps_compile then
+                    local ps_cmd = string.format('"%s" /T ps_5_0 /E PSMain /Fo "%s" /O3 "%s"', fxc.program, ps_output, hlsl_file)
+                    print("Compiling PS: " .. filename)
+                    local out = os.iorun(ps_cmd)
+                    if out and #out > 0 then
+                        print(out)
+                    end
+                    compiled_count = compiled_count + 1
+                else
+                    skipped_count = skipped_count + 1
+                end
             end
         end
         

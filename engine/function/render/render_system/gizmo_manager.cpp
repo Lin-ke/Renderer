@@ -82,7 +82,7 @@ void GizmoManager::draw_gizmo(CameraComponent* camera, Entity* selected_entity,
                     local_offset = (box.min + box.max) * 0.5f;
                 } else if (current_anchor_ == Anchor::Bottom) {
                     local_offset = (box.min + box.max) * 0.5f;
-                    local_offset.y() = box.min.y();
+                    local_offset.y = box.min.y;
                 }
             }
         }
@@ -91,7 +91,9 @@ void GizmoManager::draw_gizmo(CameraComponent* camera, Entity* selected_entity,
     Mat4 gizmo_matrix = model;
     if (local_offset.norm() > 0.0001f) {
         Mat4 offset_mat = Mat4::Identity();
-        offset_mat.block<3, 1>(0, 3) = local_offset;
+        offset_mat.m[0][3] = local_offset.x;
+        offset_mat.m[1][3] = local_offset.y;
+        offset_mat.m[2][3] = local_offset.z;
         gizmo_matrix = model * offset_mat;
     }
 
@@ -141,21 +143,23 @@ void GizmoManager::draw_gizmo(CameraComponent* camera, Entity* selected_entity,
         Mat4 new_model = new_gizmo_matrix;
         if (local_offset.norm() > 0.0001f) {
             Mat4 inv_offset_mat = Mat4::Identity();
-            inv_offset_mat.block<3, 1>(0, 3) = -local_offset;
+            inv_offset_mat.m[0][3] = -local_offset.x;
+            inv_offset_mat.m[1][3] = -local_offset.y;
+            inv_offset_mat.m[2][3] = -local_offset.z;
             new_model = new_gizmo_matrix * inv_offset_mat;
         }
         
-            Vec3 position = new_model.block<3, 1>(0, 3);
+        Vec3 position = Vec3(new_model.m[0][3], new_model.m[1][3], new_model.m[2][3]);
         
         Vec3 scale;
-        scale.x() = new_model.block<3, 1>(0, 0).norm();
-        scale.y() = new_model.block<3, 1>(0, 1).norm();
-        scale.z() = new_model.block<3, 1>(0, 2).norm();
+        scale.x = std::sqrt(new_model.m[0][0] * new_model.m[0][0] + new_model.m[1][0] * new_model.m[1][0] + new_model.m[2][0] * new_model.m[2][0]);
+        scale.y = std::sqrt(new_model.m[0][1] * new_model.m[0][1] + new_model.m[1][1] * new_model.m[1][1] + new_model.m[2][1] * new_model.m[2][1]);
+        scale.z = std::sqrt(new_model.m[0][2] * new_model.m[0][2] + new_model.m[1][2] * new_model.m[1][2] + new_model.m[2][2] * new_model.m[2][2]);
 
         Mat3 rotation_matrix;
-        rotation_matrix.col(0) = new_model.block<3, 1>(0, 0) / scale.x();
-        rotation_matrix.col(1) = new_model.block<3, 1>(0, 1) / scale.y();
-        rotation_matrix.col(2) = new_model.block<3, 1>(0, 2) / scale.z();
+        rotation_matrix.set_col(0, Vec3(new_model.m[0][0], new_model.m[1][0], new_model.m[2][0]) / scale.x);
+        rotation_matrix.set_col(1, Vec3(new_model.m[0][1], new_model.m[1][1], new_model.m[2][1]) / scale.y);
+        rotation_matrix.set_col(2, Vec3(new_model.m[0][2], new_model.m[1][2], new_model.m[2][2]) / scale.z);
 
         transform->transform.set_position(position);
         transform->transform.set_rotation(Math::extract_euler_angles(rotation_matrix));

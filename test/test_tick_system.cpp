@@ -52,9 +52,9 @@ public:
         
         // 计算新的位置：x = center.x + radius * cos(angle), z = center.z + radius * sin(angle)
         Vec3 new_position;
-        new_position.x() = center_.x() + radius_ * std::cos(current_angle_);
-        new_position.y() = center_.y();  // 保持 y 不变（在 xz 平面运动）
-        new_position.z() = center_.z() + radius_ * std::sin(current_angle_);
+        new_position.x = center_.x + radius_ * std::cos(current_angle_);
+        new_position.y = center_.y;  // 保持 y 不变（在 xz 平面运动）
+        new_position.z = center_.z + radius_ * std::sin(current_angle_);
         
         // 更新 TransformComponent 的位置
         if (auto* transform = get_owner()->get_component<TransformComponent>()) {
@@ -68,9 +68,9 @@ public:
     // 获取当前位置（计算得出）
     Vec3 get_current_position() const {
         Vec3 pos;
-        pos.x() = center_.x() + radius_ * std::cos(current_angle_);
-        pos.y() = center_.y();
-        pos.z() = center_.z() + radius_ * std::sin(current_angle_);
+        pos.x = center_.x + radius_ * std::cos(current_angle_);
+        pos.y = center_.y;
+        pos.z = center_.z + radius_ * std::sin(current_angle_);
         return pos;
     }
     
@@ -78,9 +78,9 @@ public:
     Vec3 get_expected_position(float delta_time) const {
         float future_angle = current_angle_ + angular_speed_ * delta_time;
         Vec3 pos;
-        pos.x() = center_.x() + radius_ * std::cos(future_angle);
-        pos.y() = center_.y();
-        pos.z() = center_.z() + radius_ * std::sin(future_angle);
+        pos.x = center_.x + radius_ * std::cos(future_angle);
+        pos.y = center_.y;
+        pos.z = center_.z + radius_ * std::sin(future_angle);
         return pos;
     }
     
@@ -130,8 +130,8 @@ TEST_CASE("Tick system basic functionality", "[tick]") {
         orbit->set_initial_angle(0.0f);  // 从 x 轴正方向开始
         
         // 验证初始位置
-        REQUIRE(transform->transform.get_position().x() == Approx(10.0f));
-        REQUIRE(transform->transform.get_position().z() == Approx(0.0f));
+        REQUIRE(transform->transform.get_position().x == Approx(10.0f));
+        REQUIRE(transform->transform.get_position().z == Approx(0.0f));
         
         // 模拟一帧：delta_time = 1.0 秒
         ship->tick(1.0f);
@@ -140,8 +140,8 @@ TEST_CASE("Tick system basic functionality", "[tick]") {
         float expected_x = 10.0f * std::cos(1.0f);
         float expected_z = 10.0f * std::sin(1.0f);
         
-        REQUIRE(transform->transform.get_position().x() == Approx(expected_x).epsilon(0.001));
-        REQUIRE(transform->transform.get_position().z() == Approx(expected_z).epsilon(0.001));
+        REQUIRE(transform->transform.get_position().x == Approx(expected_x).epsilon(0.001));
+        REQUIRE(transform->transform.get_position().z == Approx(expected_z).epsilon(0.001));
         
         // 验证 OrbitComponent 的角度更新
         REQUIRE(orbit->get_current_angle() == Approx(1.0f).epsilon(0.001));
@@ -167,8 +167,8 @@ TEST_CASE("Tick system basic functionality", "[tick]") {
         float expected_z = 5.0f * std::sin(expected_angle);
         
         REQUIRE(orbit->get_current_angle() == Approx(expected_angle).epsilon(0.001));
-        REQUIRE(transform->transform.get_position().x() == Approx(expected_x).epsilon(0.001));
-        REQUIRE(transform->transform.get_position().z() == Approx(expected_z).epsilon(0.001));
+        REQUIRE(transform->transform.get_position().x == Approx(expected_x).epsilon(0.001));
+        REQUIRE(transform->transform.get_position().z == Approx(expected_z).epsilon(0.001));
     }
     
     test_utils::TestContext::reset();
@@ -264,10 +264,10 @@ TEST_CASE("Frame rate independent movement", "[tick]") {
         auto* transform1 = ship1->get_component<TransformComponent>();
         auto* transform2 = ship2->get_component<TransformComponent>();
         
-        REQUIRE(transform1->transform.get_position().x() == 
-                Approx(transform2->transform.get_position().x()).epsilon(0.001));
-        REQUIRE(transform1->transform.get_position().z() == 
-                Approx(transform2->transform.get_position().z()).epsilon(0.001));
+        REQUIRE(transform1->transform.get_position().x == 
+                Approx(transform2->transform.get_position().x).epsilon(0.001));
+        REQUIRE(transform1->transform.get_position().z == 
+                Approx(transform2->transform.get_position().z).epsilon(0.001));
         
         REQUIRE(orbit1->get_current_angle() == 
                 Approx(orbit2->get_current_angle()).epsilon(0.001));
@@ -290,8 +290,8 @@ TEST_CASE("Frame rate independent movement", "[tick]") {
         // 应该回到接近起点（角度归一化会导致微小差异）
         Vec3 end_pos = orbit->get_current_position();
         
-        REQUIRE(end_pos.x() == Approx(start_pos.x()).margin(0.001));
-        REQUIRE(end_pos.z() == Approx(start_pos.z()).margin(0.001));
+        REQUIRE(end_pos.x == Approx(start_pos.x).margin(0.001));
+        REQUIRE(end_pos.z == Approx(start_pos.z).margin(0.001));
         REQUIRE(orbit->get_current_angle() == Approx(0.0f).margin(0.001));
     }
     

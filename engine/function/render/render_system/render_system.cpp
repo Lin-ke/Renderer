@@ -5,14 +5,18 @@
 #include "engine/function/framework/component/camera_component.h"
 #include "engine/function/framework/component/directional_light_component.h"
 #include "engine/function/framework/component/mesh_renderer_component.h"
+#include "engine/function/render/render_resource/model.h"
 #include "engine/function/framework/component/point_light_component.h"
+#include "engine/function/framework/component/skybox_component.h"
 #include "engine/function/framework/component/transform_component.h"
 #include "engine/function/framework/entity.h"
 #include "engine/function/framework/scene.h"
+#include "engine/function/framework/world.h"
 #include "engine/function/render/graph/rdg_builder.h"
 #include "engine/function/render/graph/rdg_edge.h"
 #include "engine/function/render/graph/rdg_node.h"
 #include "engine/function/render/render_system/reflect_inspector.h"
+#include "engine/function/render/render_system/gpu_profiler_widget.h"
 #include "engine/function/render/rhi/rhi.h"
 #include "engine/function/render/rhi/rhi_structs.h"
 #include "engine/main/engine_context.h"
@@ -190,6 +194,18 @@ void RenderSystem::init_base_resource() {
 		per_frame_common_resources_[i].fence = backend_->create_fence(true);
 	}
 
+	// Initialize GPU Profiler (backend-agnostic factory)
+	{
+		gpu_profiler_ = backend_->create_gpu_profiler();
+
+		// Set profiler on all command contexts
+		if (gpu_profiler_) {
+			for (uint32_t i = 0; i < FRAMES_IN_FLIGHT; i++) {
+				per_frame_common_resources_[i].command->set_gpu_profiler(gpu_profiler_.get());
+			}
+		}
+	}
+
 	// Depth buffer visualization
 	RHITextureInfo viz_info = {};
 	viz_info.format = COLOR_FORMAT;
@@ -248,6 +264,24 @@ void RenderSystem::init_passes() {
 		INFO(LogRenderSystem, "DepthPrePass initialized successfully");
 	}
 
+	// Initialize skybox pass
+	skybox_pass_ = std::make_shared<render::SkyboxPass>();
+	skybox_pass_->init();
+
+	if (skybox_pass_->is_ready()) {
+		INFO(LogRenderSystem, "SkyboxPass initialized successfully");
+	} else {
+		WARN(LogRenderSystem, "SkyboxPass initialization failed or incomplete");
+	}
+
+	// Initialize editor UI pass
+	editor_ui_pass_ = std::make_shared<render::EditorUIPass>();
+	editor_ui_pass_->init();
+
+	if (editor_ui_pass_->is_ready()) {
+		INFO(LogRenderSystem, "EditorUIPass initialized successfully");
+	}
+
 	// Initialize depth prepass resources
 }
 
@@ -289,22 +323,7 @@ void RenderSystem::build_and_execute_rdg(uint32_t frame_index, const RenderPacke
 	std::vector<render::DrawBatch> batches;
 	mesh_manager_->collect_draw_batches(batches);
 
-	if (batches.empty()) {
-		// No geometry to render, just clear the screen
-		rdg_builder.create_render_pass("ClearPass")
-				.color(0, color_target, ATTACHMENT_LOAD_OP_CLEAR, ATTACHMENT_STORE_OP_STORE,
-						Color4{ 0.1f, 0.2f, 0.4f, 1.0f })
-				.execute([extent](RDGPassContext context) {
-					context.command->set_viewport({ 0, 0 }, { extent.width, extent.height });
-					context.command->set_scissor({ 0, 0 }, { extent.width, extent.height });
-				})
-				.finish();
-
-		rdg_builder.execute();
-		return;
-	}
-
-	// Get camera data
+	// Get camera data early (needed for both batches and skybox)
 	CameraComponent *camera = packet.active_camera;
 	if (!camera && mesh_manager_) {
 		camera = mesh_manager_->get_active_camera();
@@ -314,6 +333,20 @@ void RenderSystem::build_and_execute_rdg(uint32_t frame_index, const RenderPacke
 		WARN(LogRenderSystem, "No active camera for RDG rendering");
 		rdg_builder.execute();
 		return;
+	}
+
+	if (batches.empty()) {
+		// No geometry to render, just clear the screen
+		INFO(LogRenderSystem, "ClearPass executed (no geometry to render)");
+		rdg_builder.create_render_pass("ClearPass")
+				.color(0, color_target, ATTACHMENT_LOAD_OP_CLEAR, ATTACHMENT_STORE_OP_STORE,
+						Color4{ 1.0f, 0.0f, 0.0f, 1.0f })
+				.execute([extent](RDGPassContext context) {
+					context.command->set_viewport({ 0, 0 }, { extent.width, extent.height });
+					context.command->set_scissor({ 0, 0 }, { extent.width, extent.height });
+				})
+				.finish();
+		// Note: Continue to skybox pass even with empty batches
 	}
 
 	// Get light data
@@ -340,7 +373,7 @@ void RenderSystem::build_and_execute_rdg(uint32_t frame_index, const RenderPacke
 	}
 
 	// Execute depth prepass first
-	{
+	if (enable_depth_prepass_) {
 		PROFILE_SCOPE("RenderSystem_DepthPrepass");
 
 		depth_prepass_->set_per_frame_data(
@@ -351,9 +384,121 @@ void RenderSystem::build_and_execute_rdg(uint32_t frame_index, const RenderPacke
 	}
 
 	// Build forward passes using the mesh manager
-	{
+	if (enable_forward_pass_) {
 		PROFILE_SCOPE("RenderSystem_ForwardPasses");
 		mesh_manager_->build_rdg(rdg_builder, color_target, depth_target);
+	}
+
+	// Build skybox pass (renders after opaque objects)
+	if (enable_skybox_pass_ && skybox_pass_ && skybox_pass_->is_ready() && packet.active_scene) {
+		PROFILE_SCOPE("RenderSystem_SkyboxPass");
+		
+		// Collect skybox components from scene
+		std::vector<SkyboxComponent*> skyboxes = 
+			packet.active_scene->get_components<SkyboxComponent>();
+		
+		if (!skyboxes.empty()) {
+			skybox_pass_->build(rdg_builder, color_target, depth_target,
+				camera->get_view_matrix(),
+				camera->get_projection_matrix(),
+				skyboxes);
+		}
+	}
+
+	// Build editor UI pass (renders on top of everything)
+	if (show_ui_ && editor_ui_pass_ && editor_ui_pass_->is_ready()) {
+		// Set the UI draw function for this frame (will be called during build)
+		editor_ui_pass_->set_ui_draw_function([this, &packet]() {
+			draw_scene_hierarchy(packet.active_scene);
+			draw_inspector_panel();
+			
+			if (show_buffer_debug_) {
+				draw_buffer_debug();
+			}
+			
+			draw_rdg_visualizer();
+			
+			ImGui::Begin("Renderer Debug", &show_ui_);
+			
+			if (ImGui::Checkbox("Wireframe", &wireframe_mode_)) {
+				if (mesh_manager_) {
+					mesh_manager_->set_wireframe(wireframe_mode_);
+				}
+			}
+			
+			ImGui::Checkbox("Show Buffer Debug", &show_buffer_debug_);
+			ImGui::Checkbox("Show RDG Visualizer", &show_rdg_visualizer_);
+			
+			ImGui::Separator();
+			ImGui::Text("Render Passes:");
+			ImGui::Checkbox("Depth Prepass", &enable_depth_prepass_);
+			ImGui::Checkbox("Forward Pass", &enable_forward_pass_);
+			ImGui::Checkbox("Skybox Pass", &enable_skybox_pass_);
+			ImGui::Checkbox("Depth Visualize", &enable_depth_visualize_);
+			
+			if (gizmo_manager_) {
+				gizmo_manager_->draw_controls();
+			}
+			
+			ImGui::Text("Application average %.3f ms/frame (%.1f FPS)",
+					1000.0f / ImGui::GetIO().Framerate,
+					ImGui::GetIO().Framerate);
+			
+			ImGui::Separator();
+			ImGui::Separator();
+			if (ImGui::Button("Toggle Profiler")) {
+				ProfilerWidget::toggle_visibility();
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("Toggle GPU Profiler")) {
+				GPUProfilerWidget::toggle_visibility();
+			}
+			
+			ImGui::End();
+			
+			if (ProfilerWidget::is_visible()) {
+				ProfilerWidget::draw_window();
+			}
+			
+			if (GPUProfilerWidget::is_visible() && gpu_profiler_) {
+				GPUProfilerWidget::draw_window(*gpu_profiler_);
+			}
+			
+			// Draw gizmo on top of everything with fullscreen transparent window
+			if (gizmo_manager_ && selected_entity_ && packet.active_camera) {
+				ImGuiIO &io = ImGui::GetIO();
+				
+				ImGui::SetNextWindowPos(ImVec2(0, 0));
+				ImGui::SetNextWindowSize(io.DisplaySize);
+				ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+				ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
+				
+				ImGui::Begin("GizmoViewport", nullptr,
+						ImGuiWindowFlags_NoTitleBar |
+								ImGuiWindowFlags_NoResize |
+								ImGuiWindowFlags_NoScrollbar |
+								ImGuiWindowFlags_NoNavFocus |
+								ImGuiWindowFlags_NoMove |
+								ImGuiWindowFlags_NoInputs);
+				
+				ImVec2 window_pos = ImGui::GetWindowPos();
+				ImVec2 window_size = ImGui::GetWindowSize();
+				gizmo_manager_->draw_gizmo(packet.active_camera, selected_entity_,
+						window_pos, window_size);
+				
+				if (packet.active_camera) {
+					draw_light_gizmo(packet.active_camera, selected_entity_,
+							Extent2D{ static_cast<uint32_t>(io.DisplaySize.x),
+									static_cast<uint32_t>(io.DisplaySize.y) });
+				}
+				
+				ImGui::End();
+				ImGui::PopStyleColor();
+				ImGui::PopStyleVar();
+			}
+		});
+		
+		editor_ui_pass_->build(rdg_builder);
 	}
 
 	// Capture RDG info for visualization
@@ -528,15 +673,32 @@ bool RenderSystem::tick(const RenderPacket &packet) {
 
 	Extent2D extent = swapchain_->get_extent();
 
+	// Start ImGui new frame BEFORE building RDG (UI building happens in EditorUIPass)
+	if (backend_ && show_ui_) {
+		backend_->imgui_new_frame();
+		ImGuizmo::BeginFrame();
+	}
+
 	command->begin_command();
 	{
 		PROFILE_SCOPE("RenderSystem_SceneRender");
 
+		// Collect GPU profiler results from previous frames
+		if (gpu_profiler_) {
+			gpu_profiler_->collect_results();
+		}
+
+		// Begin GPU timestamp frame
+		command->gpu_timestamp_begin_frame();
+
 		// Use RDG-based rendering
 		build_and_execute_rdg(frame_index, packet);
 
+		// End GPU timestamp frame
+		command->gpu_timestamp_end_frame();
+
 		// Depth visualization
-		if (depth_visualize_initialized_ && depth_visualize_pass_ && depth_visualize_texture_view_) {
+		if (enable_depth_visualize_ && depth_visualize_initialized_ && depth_visualize_pass_ && depth_visualize_texture_view_) {
 			PROFILE_SCOPE("RenderSystem_DepthVisualize");
 			CameraComponent *camera = packet.active_camera;
 			if (!camera && mesh_manager_) {
@@ -557,95 +719,11 @@ bool RenderSystem::tick(const RenderPacket &packet) {
 			}
 		}
 
-		if (backend_ && show_ui_) {
-			backend_->imgui_new_frame();
-
-			ImGuizmo::BeginFrame();
-
-			draw_scene_hierarchy(packet.active_scene);
-
-			draw_inspector_panel();
-
-			if (show_buffer_debug_) {
-				draw_buffer_debug();
-			}
-
-			draw_rdg_visualizer();
-
-			ImGui::Begin("Renderer Debug", &show_ui_);
-
-			if (ImGui::Checkbox("Wireframe", &wireframe_mode_)) {
-				if (mesh_manager_) {
-					mesh_manager_->set_wireframe(wireframe_mode_);
-				}
-			}
-
-			ImGui::Checkbox("Show Buffer Debug", &show_buffer_debug_);
-			ImGui::Checkbox("Show RDG Visualizer", &show_rdg_visualizer_);
-
-			if (gizmo_manager_) {
-				gizmo_manager_->draw_controls();
-			}
-
-			ImGui::Text("Application average %.3f ms/frame (%.1f FPS)",
-					1000.0f / ImGui::GetIO().Framerate,
-					ImGui::GetIO().Framerate);
-
-			ImGui::Separator();
-			ImGui::Separator();
-			if (ImGui::Button("Toggle Profiler")) {
-				ProfilerWidget::toggle_visibility();
-			}
-
-			ImGui::End();
-
-			if (ProfilerWidget::is_visible()) {
-				ProfilerWidget::draw_window();
-			}
-
-			// Draw gizmo on top of everything with fullscreen transparent window
-			if (gizmo_manager_ && selected_entity_ && packet.active_camera) {
-				ImGuiIO &io = ImGui::GetIO();
-
-				ImGui::SetNextWindowPos(ImVec2(0, 0));
-				ImGui::SetNextWindowSize(io.DisplaySize);
-				ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-				ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
-
-				ImGui::Begin("GizmoViewport", nullptr,
-						ImGuiWindowFlags_NoTitleBar |
-								ImGuiWindowFlags_NoResize |
-								ImGuiWindowFlags_NoScrollbar |
-								ImGuiWindowFlags_NoNavFocus |
-								ImGuiWindowFlags_NoMove |
-								ImGuiWindowFlags_NoInputs);
-
-				ImVec2 window_pos = ImGui::GetWindowPos();
-				ImVec2 window_size = ImGui::GetWindowSize();
-				gizmo_manager_->draw_gizmo(packet.active_camera, selected_entity_,
-						window_pos, window_size);
-
-				if (packet.active_camera) {
-					draw_light_gizmo(packet.active_camera, selected_entity_,
-							Extent2D{ static_cast<uint32_t>(io.DisplaySize.x),
-									static_cast<uint32_t>(io.DisplaySize.y) });
-				}
-
-				ImGui::End();
-				ImGui::PopStyleColor();
-				ImGui::PopStyleVar();
-			}
-		}
-
 		command->end_render_pass();
 	}
 	command->end_command();
 
 	command->execute(resource.fence, resource.start_semaphore, resource.finish_semaphore);
-
-	if (backend_ && show_ui_) {
-		backend_->imgui_render();
-	}
 
 	swapchain_->present(resource.finish_semaphore);
 
@@ -702,6 +780,12 @@ void RenderSystem::cleanup_for_test() {
 void RenderSystem::destroy() {
 	WARN(LogRenderSystem, "RenderSystem::destroy() called! backend_={}", (void*)backend_.get());
 	
+	// Destroy GPU profiler before backend
+	if (gpu_profiler_) {
+		gpu_profiler_->destroy();
+		gpu_profiler_.reset();
+	}
+
 	// Shutdown ImGui
 	if (backend_) {
 		backend_->imgui_shutdown();
@@ -721,6 +805,11 @@ void RenderSystem::destroy() {
 		light_manager_->destroy();
 		light_manager_.reset();
 	}
+	
+	// Clear passes
+	editor_ui_pass_.reset();
+	skybox_pass_.reset();
+	depth_prepass_.reset();
 
 	// Clear per-frame resources
 	for (auto &resource : per_frame_common_resources_) {
@@ -820,12 +909,121 @@ void RenderSystem::draw_entity_node(Entity *entity) {
 		selected_entity_ = entity;
 		INFO(LogRenderSystem, "Selected entity: {}", name);
 	}
+	
+	// Handle double-click: move camera to view the entity
+	if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+		move_camera_to_view_entity(entity);
+	}
 
 	if (node_open) {
 		// Recursively draw children (when hierarchy is implemented)
 		// for (auto& child : entity->get_children()) { draw_entity_node(child); }
 		ImGui::TreePop();
 	}
+}
+
+void RenderSystem::move_camera_to_view_entity(Entity* target_entity) {
+	if (!target_entity) {
+		return;
+	}
+	
+	// Get target entity's transform
+	auto* target_transform = target_entity->get_component<TransformComponent>();
+	if (!target_transform) {
+		WARN(LogRenderSystem, "Cannot move camera: target entity has no TransformComponent");
+		return;
+	}
+	
+	// Get active camera
+	auto* world = EngineContext::world();
+	if (!world) {
+		return;
+	}
+	
+	auto* scene = world->get_active_scene();
+	if (!scene) {
+		return;
+	}
+	
+	CameraComponent* camera = scene->get_camera();
+	if (!camera) {
+		WARN(LogRenderSystem, "Cannot move camera: no active camera");
+		return;
+	}
+	
+	// Get camera's owner entity and its transform component
+	Entity* camera_entity = camera->get_owner();
+	if (!camera_entity) {
+		WARN(LogRenderSystem, "Cannot move camera: camera has no owner entity");
+		return;
+	}
+	
+	auto* camera_transform = camera_entity->get_component<TransformComponent>();
+	if (!camera_transform) {
+		WARN(LogRenderSystem, "Cannot move camera: camera entity has no TransformComponent");
+		return;
+	}
+	
+	// ★ 计算目标中心点：使用包围盒中心，而不是模型原点（通常在脚下）
+	Vec3 target_center = target_transform->transform.get_position();
+	
+	// 尝试从 MeshRendererComponent 获取包围盒
+	auto* mesh_renderer = target_entity->get_component<MeshRendererComponent>();
+	if (mesh_renderer && mesh_renderer->get_model()) {
+		BoundingBox bbox = mesh_renderer->get_model()->get_bounding_box();
+		// 包围盒中心（本地空间）
+		Vec3 local_center = (bbox.min + bbox.max) * 0.5f;
+		// 手动转换到世界空间: world_pos = position + front * local_x + up * local_y + right * local_z
+		const auto& t = target_transform->transform;
+		target_center = t.get_position() 
+			+ t.front() * local_center.x 
+			+ t.up() * local_center.y 
+			+ t.right() * local_center.z;
+		INFO(LogRenderSystem, "Using bounding box center: ({:.2f}, {:.2f}, {:.2f})", 
+			 target_center.x, target_center.y, target_center.z);
+	} else {
+		// 没有 MeshRenderer，使用 transform position 并假设中心在 Y 轴上方 1 米处
+		target_center.y += 1.0f;
+	}
+	
+	// Get target front direction
+	Vec3 target_front = target_transform->transform.front();
+	
+	// Calculate camera position: 0.5 meters behind the target center (opposite to target's front)
+	Vec3 camera_pos = target_center - target_front * 0.5f;
+	
+	// Calculate rotation to look at target center
+	// Direction from camera to target
+	Vec3 look_dir = (target_center - camera_pos).normalized();
+	
+	// Calculate euler angles (pitch, yaw, roll) from look direction
+	// Based on coordinate system: X=front, Y=up, Z=right
+	// pitch: rotation around Z (right) axis - up/down
+	// yaw: rotation around Y (up) axis - left/right
+	// roll: rotation around X (front) axis - usually 0
+	
+	float pitch = 0.0f;
+	float yaw = 0.0f;
+	
+	// Calculate yaw from front direction projected onto XZ plane
+	// atan2(front.z, front.x) gives yaw
+	yaw = std::atan2(look_dir.z, look_dir.x);
+	
+	// Calculate pitch from front direction
+	// asin(front.y) gives pitch (clamped to avoid gimbal lock)
+	float horizontal_dist = std::sqrt(look_dir.x * look_dir.x + look_dir.z * look_dir.z);
+	pitch = std::atan2(look_dir.y, horizontal_dist);
+	
+	// Convert to degrees
+	pitch = Math::to_angle(pitch);
+	yaw = Math::to_angle(yaw);
+	
+	// Set camera position and rotation
+	camera_transform->transform.set_position(camera_pos);
+	camera_transform->transform.set_rotation(Vec3(pitch, yaw, 0.0f));
+	
+	INFO(LogRenderSystem, "Camera moved to view entity: pos=({:.2f}, {:.2f}, {:.2f}), pitch={:.1f}, yaw={:.1f}",
+		 camera_pos.x, camera_pos.y, camera_pos.z, pitch, yaw);
 }
 
 // Draw Inspector panel for selected entity
@@ -1165,15 +1363,15 @@ void RenderSystem::draw_light_gizmo(CameraComponent *camera, Entity *entity, con
 	Mat4 proj = camera->get_projection_matrix();
 	Mat4 view_proj = proj * view;
 
-	Vec4 pos_clip = view_proj * Vec4(position.x(), position.y(), position.z(), 1.0f);
-	if (pos_clip.w() <= 0) {
+	Vec4 pos_clip = view_proj * Vec4(position.x, position.y, position.z, 1.0f);
+	if (pos_clip.w <= 0) {
 		return; // Behind camera
 	}
 
-	Vec3 pos_ndc = pos_clip.head<3>() / pos_clip.w();
+	Vec3 pos_ndc = pos_clip.xyz() / pos_clip.w;
 	ImVec2 screen_pos;
-	screen_pos.x = (pos_ndc.x() * 0.5f + 0.5f) * extent.width;
-	screen_pos.y = (1.0f - (pos_ndc.y() * 0.5f + 0.5f)) * extent.height; // Flip Y for screen coords
+	screen_pos.x = (pos_ndc.x * 0.5f + 0.5f) * extent.width;
+	screen_pos.y = (1.0f - (pos_ndc.y * 0.5f + 0.5f)) * extent.height; // Flip Y for screen coords
 
 	ImDrawList *draw_list = ImGui::GetWindowDrawList();
 
@@ -1201,9 +1399,9 @@ void RenderSystem::draw_light_gizmo(CameraComponent *camera, Entity *entity, con
 	if (auto *point_light = entity->get_component<PointLightComponent>()) {
 		Vec3 color_vec = point_light->get_color();
 		ImU32 color = IM_COL32(
-				static_cast<int>(color_vec.x() * 255),
-				static_cast<int>(color_vec.y() * 255),
-				static_cast<int>(color_vec.z() * 255),
+				static_cast<int>(color_vec.x * 255),
+				static_cast<int>(color_vec.y * 255),
+				static_cast<int>(color_vec.z * 255),
 				255);
 		float radius = 12.0f;
 
@@ -1240,8 +1438,8 @@ void DefaultRenderResource::init(RHIBackendRef backend_) {
 
 		RHIBufferInfo buf_info = {};
 		buf_info.size = sizeof(uint32_t);
-		buf_info.type = RESOURCE_TYPE_VERTEX_BUFFER; // Use VertexBuffer as generic staging
-		buf_info.memory_usage = MEMORY_USAGE_CPU_TO_GPU;
+		buf_info.type = RESOURCE_TYPE_BUFFER; // Use VertexBuffer as generic staging
+		buf_info.memory_usage = MEMORY_USAGE_CPU_ONLY;
 		buf_info.creation_flag = BUFFER_CREATION_PERSISTENT_MAP;
 		auto staging = backend_->create_buffer(buf_info);
 
@@ -1282,8 +1480,8 @@ void DefaultRenderResource::init(RHIBackendRef backend_) {
 
 		RHIBufferInfo buf_info = {};
 		buf_info.size = sizeof(uint32_t);
-		buf_info.type = RESOURCE_TYPE_VERTEX_BUFFER;
-		buf_info.memory_usage = MEMORY_USAGE_CPU_TO_GPU;
+		buf_info.type = RESOURCE_TYPE_BUFFER;
+		buf_info.memory_usage = MEMORY_USAGE_CPU_ONLY;
 		buf_info.creation_flag = BUFFER_CREATION_PERSISTENT_MAP;
 		auto staging = backend_->create_buffer(buf_info);
 
@@ -1325,8 +1523,8 @@ void DefaultRenderResource::init(RHIBackendRef backend_) {
 
 		RHIBufferInfo buf_info = {};
 		buf_info.size = sizeof(uint32_t);
-		buf_info.type = RESOURCE_TYPE_VERTEX_BUFFER;
-		buf_info.memory_usage = MEMORY_USAGE_CPU_TO_GPU;
+		buf_info.type = RESOURCE_TYPE_BUFFER;
+		buf_info.memory_usage = MEMORY_USAGE_CPU_ONLY;
 		buf_info.creation_flag = BUFFER_CREATION_PERSISTENT_MAP;
 		auto staging = backend_->create_buffer(buf_info);
 

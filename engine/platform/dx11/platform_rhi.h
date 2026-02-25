@@ -74,6 +74,7 @@ private:
     ComPtr<IDXGISwapChain3> swap_chain_;
     std::vector<RHITextureRef> textures_;
     std::vector<ComPtr<ID3D11RenderTargetView>> back_buffer_rtvs_;
+    std::weak_ptr<DX11Backend> backend_;
     uint32_t current_index_ = 0;
     bool supports_frame_index_query_ = false;
 };
@@ -283,9 +284,15 @@ private:
  */
 class DX11ComputePipeline : public RHIComputePipeline {
 public:
-    DX11ComputePipeline(const RHIComputePipelineInfo& info, DX11Backend& backend) : RHIComputePipeline(info) {}
-    virtual void destroy() override final {}
+    DX11ComputePipeline(const RHIComputePipelineInfo& info, std::shared_ptr<DX11Backend> backend);
+    virtual bool init() override final;
+    virtual void destroy() override final;
     virtual void* raw_handle() override final { return nullptr; }
+
+    void bind(ID3D11DeviceContext* context);
+
+private:
+    std::weak_ptr<DX11Backend> backend_;
 };
 
 /**
@@ -370,6 +377,7 @@ public:
     virtual void bind_vertex_buffer(RHIBufferRef buffer, uint32_t stream_index, uint32_t offset) override final;
     virtual void bind_index_buffer(RHIBufferRef buffer, uint32_t offset) override final;
     virtual void bind_texture(RHITextureRef texture, uint32_t slot, ShaderFrequency frequency) override final;
+    virtual void bind_rw_texture(RHITextureRef texture, uint32_t slot, uint32_t mip_level, ShaderFrequency frequency) override final;
     virtual void bind_sampler(RHISamplerRef sampler, uint32_t slot, ShaderFrequency frequency) override final;
 
     virtual void dispatch(uint32_t group_count_x, uint32_t group_count_y, uint32_t group_count_z) override final;
@@ -474,17 +482,23 @@ public:
 
     virtual std::vector<uint8_t> compile_shader(const char* source, const char* entry, const char* profile) override final;
 
+    virtual GPUProfilerRef create_gpu_profiler() override final;
+
     ComPtr<IDXGIFactory> get_factory() const { return factory_; }
     ComPtr<ID3D11Device> get_device() const { return device_; }
     ComPtr<ID3D11DeviceContext> get_context() const { return context_; }
     
     // Check if backend is still valid (device not destroyed)
     bool is_valid() const { return device_ != nullptr; }
+    
+    /// Platform override – reads ID3D11InfoQueue, logs, and __debugbreak().
+    virtual bool check_debug_messages(const char* caller_tag = nullptr) override final;
 
 private:
     ComPtr<IDXGIFactory> factory_;
     ComPtr<ID3D11Device> device_;
     ComPtr<ID3D11DeviceContext> context_;
+    ComPtr<ID3D11InfoQueue> info_queue_;
     RHICommandContextImmediateRef immediate_context_;
 
     struct StagingTextureKey {

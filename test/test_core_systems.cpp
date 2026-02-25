@@ -122,9 +122,9 @@ TEST_CASE("Directional Light Component", "[core]") {
     
     // Test color (default is Vec3::Ones() = {1, 1, 1})
     auto color = light->get_color();
-    CHECK(color.x() == Catch::Approx(1.0f));
-    CHECK(color.y() == Catch::Approx(1.0f));
-    CHECK(color.z() == Catch::Approx(1.0f));
+    CHECK(color.x == Catch::Approx(1.0f));
+    CHECK(color.y == Catch::Approx(1.0f));
+    CHECK(color.z == Catch::Approx(1.0f));
     
     // Test setters
     light->set_color({0.5f, 0.6f, 0.7f});
@@ -134,9 +134,9 @@ TEST_CASE("Directional Light Component", "[core]") {
     
     // Verify new values
     color = light->get_color();
-    CHECK(color.x() == Catch::Approx(0.5f));
-    CHECK(color.y() == Catch::Approx(0.6f));
-    CHECK(color.z() == Catch::Approx(0.7f));
+    CHECK(color.x == Catch::Approx(0.5f));
+    CHECK(color.y == Catch::Approx(0.6f));
+    CHECK(color.z == Catch::Approx(0.7f));
     CHECK(light->get_intensity() == Catch::Approx(5.0f));
     CHECK(light->cast_shadow() == false);
     CHECK(light->enable() == false);
@@ -168,9 +168,9 @@ TEST_CASE("Point Light Component", "[core]") {
     
     // Test color
     auto color = light->get_color();
-    CHECK(color.x() == Catch::Approx(1.0f));
-    CHECK(color.y() == Catch::Approx(1.0f));
-    CHECK(color.z() == Catch::Approx(1.0f));
+    CHECK(color.x == Catch::Approx(1.0f));
+    CHECK(color.y == Catch::Approx(1.0f));
+    CHECK(color.z == Catch::Approx(1.0f));
     
     // Test setters
     light->set_color({0.8f, 0.4f, 0.2f});
@@ -181,9 +181,9 @@ TEST_CASE("Point Light Component", "[core]") {
     
     // Verify new values
     color = light->get_color();
-    CHECK(color.x() == Catch::Approx(0.8f));
-    CHECK(color.y() == Catch::Approx(0.4f));
-    CHECK(color.z() == Catch::Approx(0.2f));
+    CHECK(color.x == Catch::Approx(0.8f));
+    CHECK(color.y == Catch::Approx(0.4f));
+    CHECK(color.z == Catch::Approx(0.2f));
     CHECK(light->get_intensity() == Catch::Approx(3.5f));
     CHECK(light->cast_shadow() == false);
     CHECK(light->enable() == false);
@@ -207,8 +207,6 @@ TEST_CASE("Light Component Serialization", "[core]") {
     
     // Phase 1: Save scene with lights
     {
-        EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
-        
         auto scene = std::make_shared<Scene>();
         
         // Create entity with directional light
@@ -238,8 +236,6 @@ TEST_CASE("Light Component Serialization", "[core]") {
     
     // Phase 2: Load and verify
     {
-        EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
-        
         auto loaded_scene = EngineContext::asset()->load_asset<Scene>(scene_path);
         REQUIRE(loaded_scene != nullptr);
         REQUIRE(loaded_scene->entities_.size() == 2);
@@ -260,9 +256,9 @@ TEST_CASE("Light Component Serialization", "[core]") {
         // Verify directional light
         REQUIRE(loaded_dir_light != nullptr);
         auto dir_color = loaded_dir_light->get_color();
-        CHECK(dir_color.x() == Catch::Approx(1.0f).margin(0.05f));
-        CHECK(dir_color.y() == Catch::Approx(0.9f).margin(0.05f));
-        CHECK(dir_color.z() == Catch::Approx(0.8f).margin(0.05f));
+        CHECK(dir_color.x == Catch::Approx(1.0f).margin(0.05f));
+        CHECK(dir_color.y == Catch::Approx(0.9f).margin(0.05f));
+        CHECK(dir_color.z == Catch::Approx(0.8f).margin(0.05f));
         CHECK(loaded_dir_light->get_intensity() == Catch::Approx(3.0f).margin(0.01f));
         CHECK(loaded_dir_light->cast_shadow() == true);
         CHECK(loaded_dir_light->enable() == true);
@@ -270,9 +266,9 @@ TEST_CASE("Light Component Serialization", "[core]") {
         // Verify point light
         REQUIRE(loaded_point_light != nullptr);
         auto point_color = loaded_point_light->get_color();
-        CHECK(point_color.x() == Catch::Approx(0.5f).margin(0.05f));
-        CHECK(point_color.y() == Catch::Approx(0.5f).margin(0.05f));
-        CHECK(point_color.z() == Catch::Approx(1.0f).margin(0.05f));
+        CHECK(point_color.x == Catch::Approx(0.5f).margin(0.05f));
+        CHECK(point_color.y == Catch::Approx(0.5f).margin(0.05f));
+        CHECK(point_color.z == Catch::Approx(1.0f).margin(0.05f));
         CHECK(loaded_point_light->get_intensity() == Catch::Approx(2.5f).margin(0.01f));
         CHECK(loaded_point_light->cast_shadow() == false);
     }
