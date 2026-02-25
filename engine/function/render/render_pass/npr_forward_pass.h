@@ -54,16 +54,16 @@ struct NPRMaterialData {
 };
 
 // Helper to access NPRMaterialData fields
-inline float get_lambert_clamp(const NPRMaterialData& data) { return data.npr_params1.x(); }
-inline float get_ramp_tex_offset(const NPRMaterialData& data) { return data.npr_params1.y(); }
-inline float get_rim_threshold(const NPRMaterialData& data) { return data.npr_params1.z(); }
-inline float get_rim_strength(const NPRMaterialData& data) { return data.npr_params1.w(); }
-inline float get_rim_width(const NPRMaterialData& data) { return data.npr_params2.x(); }
-inline float get_use_albedo_map(const NPRMaterialData& data) { return data.npr_params2.y(); }
-inline float get_use_normal_map(const NPRMaterialData& data) { return data.npr_params2.z(); }
-inline float get_use_light_map(const NPRMaterialData& data) { return data.npr_params2.w(); }
-inline Vec3 get_rim_color(const NPRMaterialData& data) { return Vec3(data.rim_color_and_use_ramp.x(), data.rim_color_and_use_ramp.y(), data.rim_color_and_use_ramp.z()); }
-inline float get_use_ramp_map(const NPRMaterialData& data) { return data.rim_color_and_use_ramp.w(); }
+inline float get_lambert_clamp(const NPRMaterialData& data) { return data.npr_params1.x; }
+inline float get_ramp_tex_offset(const NPRMaterialData& data) { return data.npr_params1.y; }
+inline float get_rim_threshold(const NPRMaterialData& data) { return data.npr_params1.z; }
+inline float get_rim_strength(const NPRMaterialData& data) { return data.npr_params1.w; }
+inline float get_rim_width(const NPRMaterialData& data) { return data.npr_params2.x; }
+inline float get_use_albedo_map(const NPRMaterialData& data) { return data.npr_params2.y; }
+inline float get_use_normal_map(const NPRMaterialData& data) { return data.npr_params2.z; }
+inline float get_use_light_map(const NPRMaterialData& data) { return data.npr_params2.w; }
+inline Vec3 get_rim_color(const NPRMaterialData& data) { return Vec3(data.rim_color_and_use_ramp.x, data.rim_color_and_use_ramp.y, data.rim_color_and_use_ramp.z); }
+inline float get_use_ramp_map(const NPRMaterialData& data) { return data.rim_color_and_use_ramp.w; }
 
 inline void set_npr_params(NPRMaterialData& data, 
     float lambert_clamp, float ramp_tex_offset, float rim_threshold, float rim_strength,
@@ -71,7 +71,7 @@ inline void set_npr_params(NPRMaterialData& data,
     const Vec3& rim_color, float use_ramp_map) {
     data.npr_params1 = Vec4(lambert_clamp, ramp_tex_offset, rim_threshold, rim_strength);
     data.npr_params2 = Vec4(rim_width, use_albedo_map, use_normal_map, use_light_map);
-    data.rim_color_and_use_ramp = Vec4(rim_color.x(), rim_color.y(), rim_color.z(), use_ramp_map);
+    data.rim_color_and_use_ramp = Vec4(rim_color.x, rim_color.y, rim_color.z, use_ramp_map);
 }
 
 class NPRForwardPass : public RenderPass {
@@ -96,12 +96,12 @@ public:
     /**
      * @brief Draw a single batch
      */
-    void draw_batch(RHICommandContextRef command, const DrawBatch& batch);
+    void draw_batch(RHICommandContextRef command, const DrawBatch& batch, const Extent2D& extent);
 
     /**
      * @brief Execute rendering of batches directly
      */
-    void execute_batches(RHICommandListRef command, const std::vector<DrawBatch>& batches);
+    void execute_batches(RHICommandListRef command, const std::vector<DrawBatch>& batches, const Extent2D& extent);
 
     /**
      * @brief Build the render pass into the RDG

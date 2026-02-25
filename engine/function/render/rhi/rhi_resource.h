@@ -260,6 +260,10 @@ class RHIComputePipeline : public RHIResource {
 public:
     RHIComputePipeline(const RHIComputePipelineInfo& info) : RHIResource(RHI_COMPUTE_PIPELINE), info_(info) {}
 
+    virtual bool init() { return true; }
+
+    const RHIComputePipelineInfo& get_info() { return info_; }
+
 protected:
     RHIComputePipelineInfo info_;
 };

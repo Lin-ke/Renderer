@@ -96,8 +96,8 @@ static bool create_npr_scene(const std::string& scene_path) {
     cam_trans->transform.set_position(center + Vec3(-dist, size * 0.5f, 0.0f));
     
     INFO(LogNPRTest, "Model bounds: min=({},{},{}), max=({},{},{}), size={}",
-         box.min.x(), box.min.y(), box.min.z(), 
-         box.max.x(), box.max.y(), box.max.z(), size);
+         box.min.x, box.min.y, box.min.z, 
+         box.max.x, box.max.y, box.max.z, size);
     
     // Save scene
     INFO(LogNPRTest, "Saving scene to: {}", scene_path);
@@ -131,8 +131,6 @@ TEST_CASE("NPR Klee rendering", "[npr]") {
     test_utils::TestContext::reset();
     
     std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
-    EngineContext::asset()->init(test_asset_dir);
-    
     REQUIRE(EngineContext::rhi() != nullptr);
     REQUIRE(EngineContext::render_system() != nullptr);
     REQUIRE(EngineContext::world() != nullptr);

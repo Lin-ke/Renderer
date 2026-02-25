@@ -13,7 +13,6 @@
 DEFINE_LOG_TAG(LogSkyboxComponent, "SkyboxComponent");
 
 SkyboxComponent::SkyboxComponent() {
-    ensure_default_resources();
 }
 
 SkyboxComponent::~SkyboxComponent() {
@@ -25,6 +24,7 @@ void SkyboxComponent::on_init() {
     if (!material_) {
         // Create default material if none set
         material_ = std::make_shared<SkyboxMaterial>();
+        material_->set_intensity(intensity_);
     }
     
     initialized_ = true;
@@ -41,6 +41,10 @@ void SkyboxComponent::on_update(float delta_time) {
 
     // Update material intensity
     material_->set_intensity(intensity_);
+    
+    // Ensure cube texture is ready for rendering
+    // This will convert panorama to cubemap if needed
+    material_->ensure_cube_texture_ready();
 
     // Skybox follows camera position
     update_transform();
@@ -50,28 +54,37 @@ void SkyboxComponent::set_material(SkyboxMaterialRef material) {
     material_ = material;
 }
 
-void SkyboxComponent::set_cube_texture(TextureRef texture) {
+void SkyboxComponent::set_panorama_texture(TextureRef texture) {
     if (!texture) {
-        ERR(LogSkyboxComponent, "set_cube_texture: texture is null");
+        ERR(LogSkyboxComponent, "set_panorama_texture: texture is null");
         return;
     }
 
-    if (texture->get_texture_type() != TextureType::TextureCube) {
-        ERR(LogSkyboxComponent, "SkyboxComponent requires a cube texture!");
+    if (texture->get_texture_type() != TextureType::Texture2D) {
+        ERR(LogSkyboxComponent, "SkyboxComponent requires a 2D equirectangular panorama texture!");
         return;
     }
 
     if (!material_) {
         material_ = std::make_shared<SkyboxMaterial>();
+        material_->set_intensity(intensity_);
     }
     
-    material_->set_cube_texture(texture);
+    material_->set_panorama_texture(texture);
 }
 
 void SkyboxComponent::set_intensity(float intensity) {
     intensity_ = intensity;
     if (material_) {
         material_->set_intensity(intensity);
+    }
+}
+
+void SkyboxComponent::set_cube_texture_resolution(uint32_t resolution) {
+    cube_texture_resolution_ = resolution;
+    if (material_) {
+        // Mark cube texture as dirty so it regenerates with new resolution
+        material_->mark_cube_texture_dirty();
     }
 }
 
@@ -82,6 +95,11 @@ uint32_t SkyboxComponent::get_material_id() const {
 void SkyboxComponent::collect_draw_batch(std::vector<render::DrawBatch>& batches) {
     if (!material_ || !mesh_) {
         return;
+    }
+
+    // Ensure cube texture is ready before rendering
+    if (!material_->ensure_cube_texture_ready()) {
+        return;  // Can't render without valid cube texture
     }
 
     render::DrawBatch batch;
@@ -100,20 +118,6 @@ void SkyboxComponent::collect_draw_batch(std::vector<render::DrawBatch>& batches
     batches.push_back(batch);
 }
 
-void SkyboxComponent::ensure_default_resources() {
-    // Try to load a default cube mesh
-    // If it doesn't exist, we'll need to create one programmatically
-    if (!mesh_) {
-        // Try to load from standard path
-        try {
-            mesh_ = Mesh::Load("/Engine/meshes/cube.mesh");
-        } catch (...) {
-            // Create a simple cube mesh if loading fails
-            // Note: This is a fallback, ideally the cube mesh should be available
-            WARN(LogSkyboxComponent, "Could not load cube mesh, skybox will not render");
-        }
-    }
-}
 
 void SkyboxComponent::update_transform() {
     // Get active camera position
@@ -143,5 +147,6 @@ void SkyboxComponent::register_class() {
     // Register component properties for reflection/editor
     Registry::add<SkyboxComponent>("SkyboxComponent")
         .member("intensity", &SkyboxComponent::intensity_)
-        .member("skybox_scale", &SkyboxComponent::skybox_scale_);
+        .member("skybox_scale", &SkyboxComponent::skybox_scale_)
+        .member("cube_texture_resolution", &SkyboxComponent::cube_texture_resolution_);
 }

@@ -83,8 +83,6 @@ TEST_CASE("Bunny model rendering", "[render]") {
     test_utils::TestContext::reset();
     
     std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
-    EngineContext::asset()->init(test_asset_dir);
-    
     REQUIRE(EngineContext::rhi() != nullptr);
     REQUIRE(EngineContext::render_system() != nullptr);
     REQUIRE(EngineContext::world() != nullptr);

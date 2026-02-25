@@ -30,11 +30,11 @@ void Texture::set_name(const std::string& name) {
     }
 }
 
-Texture::Texture(const std::string& path)
+Texture::Texture(const std::string& virtual_path)
     : texture_type_(TextureType::Texture2D), format_(FORMAT_R8G8B8A8_SRGB), array_layer_(1) {
-    paths_.push_back(path);
-    name_ = std::filesystem::path(path).filename().string();
-    set_uid(UID::from_hash(path));
+    paths_.push_back(virtual_path);
+    name_ = std::filesystem::path(virtual_path).filename().string();
+    set_uid(UID::from_hash(virtual_path));
     load_from_file();
 }
 
@@ -53,6 +53,12 @@ Texture::Texture(TextureType type, RHIFormat format, Extent3D extent, uint32_t a
     init_rhi();
 }
 
+Texture::Texture(SkipInit, TextureType type, RHIFormat format, Extent3D extent, uint32_t array_layer, uint32_t mip_levels)
+    : texture_type_(type), format_(format), extent_(extent), array_layer_(array_layer) {
+    mip_levels_ = mip_levels == 0 ? extent.mip_size() : mip_levels;
+    // Skip init_rhi() - caller is responsible for setting texture_ and texture_view_
+}
+
 Texture::~Texture() {
 }
 
@@ -61,6 +67,31 @@ void Texture::on_load_asset() {
         load_from_file();
     } else {
         init_rhi();
+    }
+}
+
+void Texture::on_save_asset() {
+    // Ensure paths_ contains virtual paths for portability
+    ensure_virtual_paths();
+}
+
+void Texture::ensure_virtual_paths() {
+    if (!EngineContext::asset()) {
+        return;
+    }
+    
+    for (auto& path : paths_) {
+        // If path is already a virtual path, skip
+        if (EngineContext::asset()->is_virtual_path(path)) {
+            continue;
+        }
+        
+        // Try to convert physical path to virtual path
+        auto virtual_path_opt = EngineContext::asset()->get_virtual_path(path);
+        if (virtual_path_opt) {
+            path = virtual_path_opt->string();
+        }
+        // If conversion fails, keep the original path (will likely fail to load on other machines)
     }
 }
 

@@ -7,9 +7,12 @@
 #include "engine/function/render/render_system/render_light_manager.h"
 #include "engine/function/render/render_system/render_mesh_manager.h"
 #include "engine/function/render/render_system/gizmo_manager.h"
+#include "engine/function/render/render_system/gpu_profiler.h"
 #include "engine/function/render/render_pass/forward_pass.h"
 #include "engine/function/render/render_pass/depth_pre_pass.h"
 #include "engine/function/render/render_pass/depth_visualize_pass.h"
+#include "engine/function/render/render_pass/skybox_pass.h"
+#include "engine/function/render/render_pass/editor_ui_pass.h"
 // #include "engine/function/render/render_system/render_surface_cache_manager.h"
 #include <imgui.h>
 
@@ -127,6 +130,12 @@ public:
     bool wireframe_mode_ = false;
     bool show_ui_ = true;
     bool show_buffer_debug_ = true;   // Toggle for buffer debug visualization (default ON for debugging)
+    
+    // Pass toggles
+    bool enable_depth_prepass_ = true;
+    bool enable_forward_pass_ = true;
+    bool enable_skybox_pass_ = true;
+    bool enable_depth_visualize_ = true;
 
     // DependencyGraphRef get_rdg_dependency_graph() { return rdg_dependency_graph_; } //####TODO####
 
@@ -176,6 +185,7 @@ public:
     void draw_inspector_panel();
     void draw_buffer_debug();
     void draw_light_gizmo(class CameraComponent* camera, class Entity* entity, const Extent2D& extent);
+    void move_camera_to_view_entity(class Entity* target_entity);
 
     std::shared_ptr<RenderMeshManager> mesh_manager_;
     std::shared_ptr<RenderLightManager> light_manager_;
@@ -183,6 +193,8 @@ public:
     std::shared_ptr<render::ForwardPass> forward_pass_;
     std::shared_ptr<render::DepthPrePass> depth_prepass_;
     std::shared_ptr<render::DepthVisualizePass> depth_visualize_pass_;
+    std::shared_ptr<render::SkyboxPass> skybox_pass_;
+    std::shared_ptr<render::EditorUIPass> editor_ui_pass_;
     
     // Depth buffer visualization
     RHITextureRef depth_visualize_texture_;
@@ -213,4 +225,9 @@ public:
     bool depth_visualize_initialized_ = false;
 
     Entity* selected_entity_ = nullptr;
+
+    // GPU Profiler
+    std::unique_ptr<GPUProfiler> gpu_profiler_;
+public:
+    GPUProfiler* get_gpu_profiler() { return gpu_profiler_.get(); }
 };

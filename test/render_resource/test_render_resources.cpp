@@ -48,8 +48,6 @@ TEST_CASE("Texture RHI Initialization", "[render_resource]") {
     test_utils::TestContext::reset();
     
     std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
-    EngineContext::asset()->init(test_asset_dir);
-
     REQUIRE(EngineContext::rhi() != nullptr);
 
     Extent3D extent = { 128, 128, 1 };
@@ -70,8 +68,6 @@ TEST_CASE("Shader Loading and Serialization", "[render_resource]") {
     test_utils::TestContext::reset();
     
     std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
-    EngineContext::asset()->init(test_asset_dir);
-
     const std::string vs_source = R"(
         float4 main(float3 position : POSITION) : SV_POSITION {
             return float4(position, 1.0);
@@ -111,8 +107,6 @@ TEST_CASE("Material System", "[render_resource]") {
     test_utils::TestContext::reset();
     
     std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
-    EngineContext::asset()->init(test_asset_dir);
-
     SECTION("Material Parameters and Serialization") {
         // Use PBRMaterial for specific properties
         auto material = std::make_shared<PBRMaterial>();
@@ -122,7 +116,7 @@ TEST_CASE("Material System", "[render_resource]") {
         material->set_roughness(0.75f);
         material->set_metallic(0.1f);
         
-        REQUIRE(material->get_diffuse().x() == Catch::Approx(1.0f));
+        REQUIRE(material->get_diffuse().x == Catch::Approx(1.0f));
         REQUIRE(material->get_roughness() == Catch::Approx(0.75f));
         
         std::string material_path = "/Game/test_material.asset";
@@ -134,7 +128,7 @@ TEST_CASE("Material System", "[render_resource]") {
         
         auto loaded_pbr = std::dynamic_pointer_cast<PBRMaterial>(loaded_asset);
         REQUIRE(loaded_pbr != nullptr);
-        REQUIRE(loaded_pbr->get_diffuse().y() == Catch::Approx(0.5f));
+        REQUIRE(loaded_pbr->get_diffuse().y == Catch::Approx(0.5f));
         REQUIRE(loaded_pbr->get_metallic() == Catch::Approx(0.1f));
 
         loaded_asset.reset();
@@ -163,7 +157,7 @@ TEST_CASE("Material System", "[render_resource]") {
         auto loaded_npr = std::dynamic_pointer_cast<NPRMaterial>(loaded_asset);
         REQUIRE(loaded_npr != nullptr);
         REQUIRE(loaded_npr->get_rim_width() == Catch::Approx(0.4f));
-        REQUIRE(loaded_npr->get_rim_color().z() == Catch::Approx(0.9f));
+        REQUIRE(loaded_npr->get_rim_color().z == Catch::Approx(0.9f));
 
         loaded_asset.reset();
         loaded_npr.reset();
@@ -191,8 +185,6 @@ TEST_CASE("Material System", "[render_resource]") {
         test_utils::TestContext::reset();
         
         // Cold reload
-        EngineContext::asset()->init(test_asset_dir);
-
         auto loaded_material = EngineContext::asset()->load_asset<Material>(material_path);
         REQUIRE(loaded_material != nullptr);
         
@@ -211,8 +203,6 @@ TEST_CASE("Model System", "[render_resource]") {
     test_utils::TestContext::reset();
     
     std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
-    EngineContext::asset()->init(test_asset_dir);
-
     SECTION("Model Loading with bunny.obj") {
         REQUIRE(EngineContext::rhi() != nullptr);
         
@@ -269,8 +259,6 @@ TEST_CASE("FBX Material System", "[render_resource][fbx]") {
     test_utils::TestContext::reset();
     
     std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
-    EngineContext::asset()->init(test_asset_dir);
-
     SECTION("FBX Model Loading with Materials") {
         // Load FBX model with materials using Model::Load
         std::string model_path = "/Engine/models/material_ball/material_ball.fbx";

@@ -63,6 +63,12 @@ public:
     void push_event(const std::string& name, Color3 color = {0.0f, 0.0f, 0.0f});
     void pop_event();
 
+    // GPU Timestamp profiling
+    void gpu_timestamp_begin_frame();
+    void gpu_timestamp_end_frame();
+    void gpu_timestamp_begin(const std::string& name);
+    void gpu_timestamp_end();
+
     void begin_render_pass(RHIRenderPassRef render_pass);
     void end_render_pass();
 
@@ -79,6 +85,7 @@ public:
     void bind_descriptor_set(RHIDescriptorSetRef descriptor, uint32_t set = 0);
     void bind_constant_buffer(RHIBufferRef buffer, uint32_t slot, ShaderFrequency frequency);
     void bind_texture(RHITextureRef texture, uint32_t slot, ShaderFrequency frequency);
+    void bind_rw_texture(RHITextureRef texture, uint32_t slot, uint32_t mip_level, ShaderFrequency frequency);
     void bind_sampler(RHISamplerRef sampler, uint32_t slot, ShaderFrequency frequency);
     void bind_vertex_buffer(RHIBufferRef vertex_buffer, uint32_t stream_index = 0, uint32_t offset = 0);
     void bind_index_buffer(RHIBufferRef index_buffer, uint32_t offset = 0);
@@ -308,6 +315,15 @@ struct RHICommandBindTexture : public RHICommand {
     void execute(RHICommandContextRef context) override { context->bind_texture(texture, slot, frequency); }
 };
 
+struct RHICommandBindRWTexture : public RHICommand {
+    RHITextureRef texture;
+    uint32_t slot;
+    uint32_t mip_level;
+    ShaderFrequency frequency;
+    RHICommandBindRWTexture(RHITextureRef t, uint32_t s, uint32_t m, ShaderFrequency f) : texture(t), slot(s), mip_level(m), frequency(f) {}
+    void execute(RHICommandContextRef context) override { context->bind_rw_texture(texture, slot, mip_level, frequency); }
+};
+
 struct RHICommandBindSampler : public RHICommand {
     RHISamplerRef sampler;
     uint32_t slot;
@@ -516,6 +532,22 @@ inline void RHICommandList::pop_event() {
     else ADD_COMMAND(RHICommandPopEvent);
 }
 
+inline void RHICommandList::gpu_timestamp_begin_frame() {
+    if (info_.bypass) info_.context->gpu_timestamp_begin_frame();
+}
+
+inline void RHICommandList::gpu_timestamp_end_frame() {
+    if (info_.bypass) info_.context->gpu_timestamp_end_frame();
+}
+
+inline void RHICommandList::gpu_timestamp_begin(const std::string& name) {
+    if (info_.bypass) info_.context->gpu_timestamp_begin(name);
+}
+
+inline void RHICommandList::gpu_timestamp_end() {
+    if (info_.bypass) info_.context->gpu_timestamp_end();
+}
+
 inline void RHICommandList::begin_render_pass(RHIRenderPassRef render_pass) {
     if (info_.bypass) info_.context->begin_render_pass(render_pass);
     else ADD_COMMAND(RHICommandBeginRenderPass, render_pass);
@@ -579,6 +611,11 @@ inline void RHICommandList::bind_constant_buffer(RHIBufferRef buffer, uint32_t s
 inline void RHICommandList::bind_texture(RHITextureRef texture, uint32_t slot, ShaderFrequency frequency) {
     if (info_.bypass) info_.context->bind_texture(texture, slot, frequency);
     else ADD_COMMAND(RHICommandBindTexture, texture, slot, frequency);
+}
+
+inline void RHICommandList::bind_rw_texture(RHITextureRef texture, uint32_t slot, uint32_t mip_level, ShaderFrequency frequency) {
+    if (info_.bypass) info_.context->bind_rw_texture(texture, slot, mip_level, frequency);
+    else ADD_COMMAND(RHICommandBindRWTexture, texture, slot, mip_level, frequency);
 }
 
 inline void RHICommandList::bind_sampler(RHISamplerRef sampler, uint32_t slot, ShaderFrequency frequency) {

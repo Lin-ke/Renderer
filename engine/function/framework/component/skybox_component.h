@@ -15,6 +15,9 @@
  * SkyboxComponent renders a cube-mapped environment that follows the camera.
  * The skybox is rendered as a cube centered at the camera position, with
  * depth write disabled so it appears at infinity.
+ * 
+ * Rendering flow starts from a panorama (equirectangular 2D texture), which
+ * is converted to a cube texture for rendering.
  */
 class SkyboxComponent : public Component {
     CLASS_DEF(SkyboxComponent, Component)
@@ -27,7 +30,7 @@ public:
 
     /**
      * @brief Set the skybox material
-     * @param material The skybox material with cube texture
+     * @param material The skybox material with panorama texture
      */
     void set_material(SkyboxMaterialRef material);
     
@@ -37,10 +40,18 @@ public:
     SkyboxMaterialRef get_material() const { return material_; }
 
     /**
-     * @brief Set the cube texture directly (creates/updates material if needed)
-     * @param texture The cube texture for the skybox
+     * @brief Set the panorama texture (equirectangular 2D texture)
+     * This will be converted to a cube texture for rendering.
+     * @param texture The panorama texture (2D equirectangular)
      */
-    void set_cube_texture(TextureRef texture);
+    void set_panorama_texture(TextureRef texture);
+    
+    /**
+     * @brief Get the panorama texture
+     */
+    TextureRef get_panorama_texture() const { 
+        return material_ ? material_->get_panorama_texture() : nullptr; 
+    }
 
     /**
      * @brief Set the intensity/brightness of the skybox
@@ -71,22 +82,30 @@ public:
      */
     void set_skybox_scale(float scale) { skybox_scale_ = scale; }
 
+    /**
+     * @brief Set the resolution of the generated cube texture
+     * @param resolution Resolution in pixels (default 512)
+     */
+    void set_cube_texture_resolution(uint32_t resolution);
+    uint32_t get_cube_texture_resolution() const { return cube_texture_resolution_; }
+
     static void register_class();
 
 private:
-    void ensure_default_resources();
     void update_transform();
 
-    // Asset dependencies - ASSET_DEPS macro declares these members:
-    // SkyboxMaterialRef material_;
-    // MeshRef mesh_;
+    // Asset dependencies - only material needs to be serialized
+    // mesh_ is loaded/generated at runtime (standard cube mesh)
     ASSET_DEPS(
-        (SkyboxMaterialRef, material_),
-        (MeshRef, mesh_)
+        (SkyboxMaterialRef, material_)
     )
+    
+    // Runtime mesh - not serialized
+    MeshRef mesh_;
     
     float intensity_ = 1.0f;
     float skybox_scale_ = 1000.0f;
+    uint32_t cube_texture_resolution_ = 512;
     bool initialized_ = false;
 
     friend class cereal::access;
@@ -95,6 +114,7 @@ private:
         serialize_deps(ar);
         ar(cereal::make_nvp("intensity", intensity_));
         ar(cereal::make_nvp("skybox_scale", skybox_scale_));
+        ar(cereal::make_nvp("cube_texture_resolution", cube_texture_resolution_));
     }
 };
 

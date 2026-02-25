@@ -18,6 +18,7 @@ enum class PassType {
     DeferredLighting,
     PostProcess,
     Present,
+    EditorUI,
     MaxEnum
 };
 

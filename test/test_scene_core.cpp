@@ -39,8 +39,6 @@ TEST_CASE("Scene Dependency System", "[scene]") {
     try {
         std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
         std::filesystem::create_directories(test_asset_dir);
-        EngineContext::asset()->init(test_asset_dir);
-        
         REQUIRE(EngineContext::rhi() != nullptr);
         REQUIRE(EngineContext::asset() != nullptr);
         
@@ -192,7 +190,7 @@ TEST_CASE("Scene Dependency System", "[scene]") {
                 }
             }
             REQUIRE(loaded_light != nullptr);
-            CHECK(loaded_light->get_color().x() == 1.0f);
+            CHECK(loaded_light->get_color().x == 1.0f);
             CHECK(loaded_light->get_intensity() == 1.5f);
             
             // Find and verify model entity
@@ -210,9 +208,9 @@ TEST_CASE("Scene Dependency System", "[scene]") {
             
             // Verify transform data
             auto scale = loaded_model_trans->transform.get_scale();
-            CHECK(scale.x() == 0.5f);
-            CHECK(scale.y() == 0.5f);
-            CHECK(scale.z() == 0.5f);
+            CHECK(scale.x == 0.5f);
+            CHECK(scale.y == 0.5f);
+            CHECK(scale.z == 0.5f);
             
             // Verify model reference is restored
             auto loaded_model = loaded_mesh_renderer->get_model();
@@ -240,8 +238,6 @@ TEST_CASE("Scene Dependency System", "[scene]") {
 TEST_CASE("Scene Serialization", "[scene]") {
     test_utils::TestContext::reset();
     {
-        EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
-
         auto scene = std::make_shared<Scene>();
         auto entity = scene->create_entity();
         
@@ -255,8 +251,6 @@ TEST_CASE("Scene Serialization", "[scene]") {
 
     {
         INFO(LogAsset, "--- Phase 2: Loading Scene ---");
-        EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
-
         std::string scene_path = "/Game/test_scene.asset";
         auto loaded_scene = EngineContext::asset()->load_asset<Scene>(scene_path);
 
@@ -269,14 +263,14 @@ TEST_CASE("Scene Serialization", "[scene]") {
         REQUIRE(transform_comp != nullptr);
 
         auto pos = transform_comp->transform.get_position();
-        CHECK(pos.x() == (10.0f));
-        CHECK(pos.y() == (20.0f));
-        CHECK(pos.z() == (30.0f));
+        CHECK(pos.x == (10.0f));
+        CHECK(pos.y == (20.0f));
+        CHECK(pos.z == (30.0f));
 
         auto scale = transform_comp->transform.get_scale();
-        CHECK(scale.x() == (2.0f));
-        CHECK(scale.y() == (2.0f));
-        CHECK(scale.z() == (2.0f));
+        CHECK(scale.x == (2.0f));
+        CHECK(scale.y == (2.0f));
+        CHECK(scale.z == (2.0f));
     }
     test_utils::TestContext::reset();
 }

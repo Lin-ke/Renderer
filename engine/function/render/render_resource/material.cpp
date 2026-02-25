@@ -103,7 +103,7 @@ void NPRMaterial::update() {
     material_info_.floats[2] = rim_threshold_;
     material_info_.floats[3] = rim_strength_;
     material_info_.floats[4] = rim_width_;
-    material_info_.colors[0] = Vec4(rim_color_.x(), rim_color_.y(), rim_color_.z(), 1.0f);
+    material_info_.colors[0] = Vec4(rim_color_.x, rim_color_.y, rim_color_.z, 1.0f);
 
     material_info_.ints = ints_;
     for (uint32_t i = 5; i < 8; ++i) {

@@ -149,8 +149,8 @@ TEST_CASE("Simplified Serialization", "[reflection]") {
 
         Vec2 deserialized(0, 0);
         ReflectScheme::deserialize(serialized, deserialized);
-        CHECK(deserialized.x() == 1.5f);
-        CHECK(deserialized.y() == 2.5f);
+        CHECK(deserialized.x == 1.5f);
+        CHECK(deserialized.y == 2.5f);
     }
 
     // 4. Test Legacy Format Compatibility
@@ -171,8 +171,6 @@ TEST_CASE("Prefab Modifications", "[prefab]") {
 
     // Phase 1: Create Prefab with HealthComponent
     {
-        EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
-
         auto prefab = std::make_shared<Prefab>();
         prefab->set_root_entity(std::make_unique<Entity>());
         auto* hp = prefab->get_root_entity()->add_component<HealthComponent>();
@@ -185,8 +183,6 @@ TEST_CASE("Prefab Modifications", "[prefab]") {
 
     // Phase 2: Instantiate and Add Modification
     {
-        EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
-
         auto prefab = EngineContext::asset()->load_asset<Prefab>(prefab_uid);
         auto scene = std::make_shared<Scene>();
         auto* instance = scene->instantiate(prefab);
@@ -206,8 +202,6 @@ TEST_CASE("Prefab Modifications", "[prefab]") {
 
     // Phase 3: Verify JSON Structure and Reload
     {
-        EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
-
         auto scene = EngineContext::asset()->load_asset<Scene>("/Game/scene_mod.asset");
         auto* instance = scene->entities_[0].get();
         auto* prefab_comp = instance->get_component<PrefabComponent>();
@@ -239,8 +233,6 @@ TEST_CASE("Complex Prefab System", "[prefab]") {
 
     // Phase 1: Create and Save Two Prefabs
     {
-        EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
-
         // 1. Create "Ball" Prefab at (1, 2, 3)
         {
             auto ball_prefab = std::make_shared<Prefab>();
@@ -270,8 +262,6 @@ TEST_CASE("Complex Prefab System", "[prefab]") {
 
     // Phase 2: Instantiate Multiple Copies and Distinct Prefabs
     {
-        EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
-
         auto ball_prefab = EngineContext::asset()->load_asset<Prefab>(ball_uid);
         auto cube_prefab = EngineContext::asset()->load_asset<Prefab>(cube_uid);
         REQUIRE(ball_prefab != nullptr);
@@ -285,23 +275,23 @@ TEST_CASE("Complex Prefab System", "[prefab]") {
         auto* ball1 = scene->instantiate(ball_prefab);
         REQUIRE(ball1 != nullptr);
         auto* t1 = ball1->get_component<TransformComponent>();
-        CHECK(t1->transform.get_position().x() == 1.0f);
+        CHECK(t1->transform.get_position().x == 1.0f);
 
         // 2. Instantiate Ball Copy 2 (verify independent copy)
         auto* ball2 = scene->instantiate(ball_prefab);
         REQUIRE(ball2 != nullptr);
         auto* t2 = ball2->get_component<TransformComponent>();
-        CHECK(t2->transform.get_position().x() == 1.0f);
+        CHECK(t2->transform.get_position().x == 1.0f);
 
         // Modify Ball 1, Ball 2 should NOT change
         t1->transform.set_position({99.0f, 99.0f, 99.0f});
-        CHECK(t2->transform.get_position().x() == 1.0f);
+        CHECK(t2->transform.get_position().x == 1.0f);
 
         // 3. Instantiate Cube (verify distinct prefab)
         auto* cube1 = scene->instantiate(cube_prefab);
         REQUIRE(cube1 != nullptr);
         auto* t3 = cube1->get_component<TransformComponent>();
-        CHECK(t3->transform.get_position().x() == 10.0f);
+        CHECK(t3->transform.get_position().x == 10.0f);
 
         // Check Dependencies
         auto* pc1 = ball1->get_component<PrefabComponent>();
@@ -318,8 +308,6 @@ TEST_CASE("Complex Prefab System", "[prefab]") {
 
     // Phase 3: Reload and Verify
     {
-        EngineContext::asset()->init(std::string(ENGINE_PATH) + "/test/test_internal");
-
         auto scene = EngineContext::asset()->load_asset<Scene>("/Game/complex_scene.asset");
         REQUIRE(scene != nullptr);
         REQUIRE(scene->entities_.size() == 3);
@@ -330,9 +318,9 @@ TEST_CASE("Complex Prefab System", "[prefab]") {
         auto* ent3 = scene->entities_[2].get(); // Cube 1 (Original)
 
         // Verify Data
-        CHECK(ent1->get_component<TransformComponent>()->transform.get_position().x() == 99.0f);
-        CHECK(ent2->get_component<TransformComponent>()->transform.get_position().x() == 1.0f);
-        CHECK(ent3->get_component<TransformComponent>()->transform.get_position().x() == 10.0f);
+        CHECK(ent1->get_component<TransformComponent>()->transform.get_position().x == 99.0f);
+        CHECK(ent2->get_component<TransformComponent>()->transform.get_position().x == 1.0f);
+        CHECK(ent3->get_component<TransformComponent>()->transform.get_position().x == 10.0f);
 
         // Verify Dependencies
         auto* pc1 = ent1->get_component<PrefabComponent>();

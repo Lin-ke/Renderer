@@ -42,10 +42,11 @@ void CameraComponent::input_move(float delta_time) {
         input.get_mouse_delta(dx, dy);
         Vec2 offset(-dx * sensitivity, -dy * sensitivity);
 
+        // Get current euler angles (pitch, yaw, roll)
         Vec3 euler_angle = transform_component->transform.get_euler_angle();
-        euler_angle = Math::clamp_euler_angle(euler_angle + Vec3(0.0f, offset.x(), offset.y()));
+        // Apply rotation: offset.x affects yaw (horizontal), offset.y affects pitch (vertical)
+        euler_angle = Math::clamp_euler_angle(euler_angle + Vec3(offset.y, offset.x, 0.0f));
         transform_component->transform.set_rotation(euler_angle);
-
     }
 }
 
@@ -65,7 +66,9 @@ void CameraComponent::update_matrix() {
     prev_view_ = view_;
     prev_proj_ = proj_;
 
-    view_ = Math::look_at(position_, position_ + front_, up_);
+    // Use world up (UnitY) for look_at to prevent roll when pitching
+    // The front direction already contains the correct orientation from transform
+    view_ = Math::look_at(position_, position_ + front_, Vec3::UnitY());
     proj_ = Math::perspective(Math::to_radians(fovy_), aspect_, near_, far_);
 
 

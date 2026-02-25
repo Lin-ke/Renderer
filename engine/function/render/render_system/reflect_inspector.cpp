@@ -60,19 +60,19 @@ void ReflectInspector::draw_component(Component* component) {
         }
         else if (prop->type_index == typeid(Vec2)) {
             Vec2 val = std::any_cast<Vec2>(current_any);
-            if (ImGui::DragFloat2(prop->name.c_str(), &val.x(), 0.1f)) {
+            if (ImGui::DragFloat2(prop->name.c_str(), &val.x, 0.1f)) {
                 prop->setter_any(component, std::any(val));
             }
         }
         else if (prop->type_index == typeid(Vec3)) {
             Vec3 val = std::any_cast<Vec3>(current_any);
-            if (ImGui::DragFloat3(prop->name.c_str(), &val.x(), 0.1f)) {
+            if (ImGui::DragFloat3(prop->name.c_str(), &val.x, 0.1f)) {
                 prop->setter_any(component, std::any(val));
             }
         }
         else if (prop->type_index == typeid(Vec4)) {
             Vec4 val = std::any_cast<Vec4>(current_any);
-            if (ImGui::DragFloat4(prop->name.c_str(), &val.x(), 0.1f)) {
+            if (ImGui::DragFloat4(prop->name.c_str(), &val.x, 0.1f)) {
                 prop->setter_any(component, std::any(val));
             }
         }
@@ -95,9 +95,9 @@ void ReflectInspector::draw_component(Component* component) {
             bool transform_edited = false;
             
             ImGui::PushID(prop->name.c_str());
-            if (ImGui::DragFloat3("Position", &position.x(), 0.1f)) transform_edited = true;
-            if (ImGui::DragFloat3("Rotation", &rotation.x(), 1.0f)) transform_edited = true;
-            if (ImGui::DragFloat3("Scale", &scale.x(), 0.1f)) transform_edited = true;
+            if (ImGui::DragFloat3("Position", &position.x, 0.1f)) transform_edited = true;
+            if (ImGui::DragFloat3("Rotation", &rotation.x, 1.0f)) transform_edited = true;
+            if (ImGui::DragFloat3("Scale", &scale.x, 0.1f)) transform_edited = true;
             ImGui::PopID();
             
             if (transform_edited) {

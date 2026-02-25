@@ -728,10 +728,10 @@ void ModelImporter::extract_bone_weights(std::shared_ptr<Mesh> target_mesh, aiMe
         
         // Convert offset matrix
         aiMatrix4x4 m = bone->mOffsetMatrix;
-        info.offset << m.a1, m.b1, m.c1, m.d1,
-                       m.a2, m.b2, m.c2, m.d2,
-                       m.a3, m.b3, m.c3, m.d3,
-                       m.a4, m.b4, m.c4, m.d4;
+        info.offset.m[0][0] = m.a1; info.offset.m[0][1] = m.b1; info.offset.m[0][2] = m.c1; info.offset.m[0][3] = m.d1;
+        info.offset.m[1][0] = m.a2; info.offset.m[1][1] = m.b2; info.offset.m[1][2] = m.c2; info.offset.m[1][3] = m.d2;
+        info.offset.m[2][0] = m.a3; info.offset.m[2][1] = m.b3; info.offset.m[2][2] = m.c3; info.offset.m[2][3] = m.d3;
+        info.offset.m[3][0] = m.a4; info.offset.m[3][1] = m.b4; info.offset.m[3][2] = m.c4; info.offset.m[3][3] = m.d4;
         bones.push_back(info);
         
         // Process weights
@@ -741,9 +741,9 @@ void ModelImporter::extract_bone_weights(std::shared_ptr<Mesh> target_mesh, aiMe
             
             // Find first empty slot
             for (int i = 0; i < 4; ++i) {
-                if (bone_indices[vertex_id](i) < 0) {
-                    bone_indices[vertex_id](i) = bone_idx;
-                    bone_weights[vertex_id](i) = weight;
+                if (bone_indices[vertex_id][i] < 0) {
+                    bone_indices[vertex_id][i] = bone_idx;
+                    bone_weights[vertex_id][i] = weight;
                     break;
                 }
             }

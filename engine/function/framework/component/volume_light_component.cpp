@@ -30,9 +30,9 @@ void VolumeLightComponent::update_light_info() {
     auto transform = get_owner()->get_component<TransformComponent>();
     if (!transform) return;
 
-    Vec3 extent = { (probe_counts_.x() - 1) * grid_step_.x(),
-                    (probe_counts_.y() - 1) * grid_step_.y(),
-                    (probe_counts_.z() - 1) * grid_step_.z() };
+    Vec3 extent = { (probe_counts_.x - 1) * grid_step_.x,
+                    (probe_counts_.y - 1) * grid_step_.y,
+                    (probe_counts_.z - 1) * grid_step_.z };
     box_ = BoundingBox(transform->transform.get_position() - extent / 2.0f, transform->transform.get_position() + extent / 2.0f);
 
     info_.setting.grid_start_position = box_.min;

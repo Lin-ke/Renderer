@@ -79,12 +79,12 @@ namespace cereal {
     IMPLEMENT_COMPACT_SERIALIZE(UVec3, 3)
     IMPLEMENT_COMPACT_SERIALIZE(UVec4, 4)
 
-    // Quaternion 包含 x,y,z,w (Eigen内部存储顺序可能不同，这里统一用 x y z w 接口)
+    // Quaternion 包含 x,y,z,w
     template <class Archive>
     std::string save_minimal(const Archive&, const Quaternion& q) {
         std::stringstream ss;
         ss << std::fixed << std::setprecision(6);
-        ss << q.x() << " " << q.y() << " " << q.z() << " " << q.w();
+        ss << q.x << " " << q.y << " " << q.z << " " << q.w;
         return ss.str();
     }
     template <class Archive>
@@ -92,7 +92,7 @@ namespace cereal {
         std::stringstream ss(s);
         float x, y, z, w;
         ss >> x >> y >> z >> w;
-        q = Quaternion(w, x, y, z); // Eigen constructor order: w, x, y, z
+        q = Quaternion(x, y, z, w);
     }
 
     // Matrices - each column as separate string
@@ -101,7 +101,7 @@ namespace cereal {
         Vec2 c0 = m.col(0); Vec2 c1 = m.col(1);
         ar(cereal::make_nvp("col0", c0), cereal::make_nvp("col1", c1));
         if constexpr (Archive::is_loading::value) {
-            m.col(0) = c0; m.col(1) = c1;
+            m.set_col(0, c0); m.set_col(1, c1);
         }
     }
 
@@ -110,7 +110,7 @@ namespace cereal {
         Vec3 c0 = m.col(0); Vec3 c1 = m.col(1); Vec3 c2 = m.col(2);
         ar(cereal::make_nvp("col0", c0), cereal::make_nvp("col1", c1), cereal::make_nvp("col2", c2));
         if constexpr (Archive::is_loading::value) {
-            m.col(0) = c0; m.col(1) = c1; m.col(2) = c2;
+            m.set_col(0, c0); m.set_col(1, c1); m.set_col(2, c2);
         }
     }
 
@@ -120,7 +120,7 @@ namespace cereal {
         ar(cereal::make_nvp("col0", c0), cereal::make_nvp("col1", c1), 
            cereal::make_nvp("col2", c2), cereal::make_nvp("col3", c3));
         if constexpr (Archive::is_loading::value) {
-            m.col(0) = c0; m.col(1) = c1; m.col(2) = c2; m.col(3) = c3;
+            m.set_col(0, c0); m.set_col(1, c1); m.set_col(2, c2); m.set_col(3, c3);
         }
     }
 

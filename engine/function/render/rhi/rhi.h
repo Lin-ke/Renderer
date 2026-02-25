@@ -9,6 +9,9 @@
 #include <string>
 #include <vector>
 
+class GPUProfiler;
+using GPUProfilerRef = std::unique_ptr<GPUProfiler>;
+
 enum RHIBackendType {
     BACKEND_VULKAN = 0,
     BACKEND_DX11,
@@ -105,10 +108,25 @@ public:
      */
     virtual std::vector<uint8_t> compile_shader(const char* source, const char* entry, const char* profile) = 0;
 
+    // GPU Profiler factory – override to return a platform-specific implementation.
+    virtual GPUProfilerRef create_gpu_profiler();
+
     const RHIBackendInfo& get_backend_info() const { return backend_info_; }
     
     // Check if backend is valid (device/context not destroyed)
     virtual bool is_valid() const { return true; }
+
+    /**
+     * @brief Read and log any queued debug-layer messages from the graphics API.
+     *
+     * Override per-platform: DX11 reads ID3D11InfoQueue, Vulkan reads
+     * VK_EXT_debug_utils, etc.  The default implementation is a no-op.
+     *
+     * @param caller_tag  Short label indicating which operation triggered
+     *                    the check (e.g. "bind_texture", "draw_indexed").
+     * @return true if any warning-or-above message was found.
+     */
+    virtual bool check_debug_messages(const char* caller_tag = nullptr) { return false; }
 
 protected:
     RHIBackend() = delete;
@@ -152,6 +170,15 @@ public:
 
     virtual void pop_event() = 0;
 
+    // GPU Timestamp profiling – default implementations forward to the
+    // profiler set via set_gpu_profiler().  Subclasses may override.
+    virtual void gpu_timestamp_begin_frame();
+    virtual void gpu_timestamp_end_frame();
+    virtual void gpu_timestamp_begin(const std::string& name);
+    virtual void gpu_timestamp_end();
+
+    void set_gpu_profiler(GPUProfiler* profiler) { gpu_profiler_ = profiler; }
+
     virtual void begin_render_pass(RHIRenderPassRef render_pass) = 0;
 
     virtual void end_render_pass() = 0;
@@ -177,6 +204,8 @@ public:
     virtual void bind_constant_buffer(RHIBufferRef buffer, uint32_t slot, ShaderFrequency frequency) = 0;
     
     virtual void bind_texture(RHITextureRef texture, uint32_t slot, ShaderFrequency frequency) = 0;
+
+    virtual void bind_rw_texture(RHITextureRef texture, uint32_t slot, uint32_t mip_level, ShaderFrequency frequency) = 0;
     
     virtual void bind_sampler(RHISamplerRef sampler, uint32_t slot, ShaderFrequency frequency) = 0;
 
@@ -214,6 +243,9 @@ public:
 
 private:
     RHICommandPoolRef pool_;
+
+protected:
+    GPUProfiler* gpu_profiler_ = nullptr;
 };
 
 // Immediate Command Context Interface

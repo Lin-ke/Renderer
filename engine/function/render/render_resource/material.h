@@ -51,8 +51,6 @@ using TextureRef = std::shared_ptr<Texture>;
  */
 class Material : public Asset {
 public:
-    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-    
     Material();
     Material(const Material& other) = default;
     virtual ~Material();
@@ -132,8 +130,6 @@ using MaterialRef = std::shared_ptr<Material>;
 
 class PBRMaterial : public Material {
 public:
-    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-    
     PBRMaterial();
     virtual ~PBRMaterial() override = default;
 
@@ -230,8 +226,6 @@ using PBRMaterialRef = std::shared_ptr<PBRMaterial>;
 
 class NPRMaterial : public Material {
 public:
-    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-    
     NPRMaterial();
     virtual ~NPRMaterial() override = default;
 

@@ -1,6 +1,6 @@
 # 渲染系统架构 (Render System Architecture)
 
-本文档概述了引擎的核心渲染架构，包含了 Render Dependency Graph (RDG) 的语法说明、RHI Context 与 Immediate 的语义区分、DX11 后端实现细节以及 Shader 的自动编译机制。
+本文档概述了引擎的核心渲染架构，包含了 Render Dependency Graph (RDG) 的语法说明、RHI Context 中 Immediate 的语义区分、DX11 后端实现细节以及 Shader 的自动编译机制。
 
 ---
 
@@ -31,13 +31,13 @@ auto back_buffer = builder.import_texture("BackBuffer", swapchain_texture);
 ```cpp
 builder.create_render_pass("DeferredLighting")
     .root_signature(lighting_root_sig)
-    
+
     // 将 color_tex 绑定为 RenderTarget
     .color(0, color_tex, ATTACHMENT_LOAD_OP_CLEAR, ATTACHMENT_STORE_OP_STORE, {0,0,0,1})
-    
-    // 声明为 Shader SRV，绑定到 set 0, binding 1
+
+    // 声明一个 Shader SRV，绑定到 set 0, binding 1
     .read(0, 1, 0, gbuffer_albedo)
-    
+
     // 用户自定义的底层 RHI 绘制闭包
     .execute([](RDGPassContext ctx) {
         ctx.command->set_graphics_pipeline(lighting_pipeline);
@@ -54,6 +54,16 @@ builder.create_render_pass("DeferredLighting")
 ## 2. RHI 语义：Immediate vs Deferred
 
 渲染硬件接口 (RHI) 为命令上下文 (`CommandContext`) 提供两种设计模式：延迟记录和即时执行。
+**注意：** 全局 RHI 后端接口应通过 `EngineContext::rhi()` 获取，而非实例化具体的后端类。
+
+```cpp
+// 获取全局 RHI 后端
+auto rhi_backend = EngineContext::rhi();
+
+// 创建 RHI 资源示例
+RHITextureRef texture = rhi_backend->create_texture(info);
+RHIBufferRef buffer = rhi_backend->create_buffer(info);
+```
 
 ### 2.1 延迟执行语义 (`RHICommandContext` & `RHICommandList`)
 - **生命周期**：每帧动态分配。
@@ -74,17 +84,17 @@ builder.create_render_pass("DeferredLighting")
 本项目提供了现代图形 API 统一抽象的实现，其中就包括基于 DirectX 11 的平台封装（`platform/dx11/platform_rhi`）。
 
 ### 3.1 `ComPtr` 资源管理
-DX11 后端的实现高度利用了 `Microsoft::WRL::ComPtr` 来管理 COM 接口。
-- `RHITexture` -> `ComPtr<ID3D11Texture2D>` 
+DX11 后端的实现高度利用了 `Microsoft::WRL::ComPtr` 来管理 COM 接口。      
+- `RHITexture` -> `ComPtr<ID3D11Texture2D>`
 - `RHITextureView` -> `ComPtr<ID3D11ShaderResourceView>` 等视图
-- `RHIBuffer` -> `ComPtr<ID3D11Buffer>` 
+- `RHIBuffer` -> `ComPtr<ID3D11Buffer>`
 - `RHICommandContext` -> `ComPtr<ID3D11DeviceContext>`
 
 这些类型通过 C++ CRTP 及模板元特性 (`DX11ResourceTraits`) 提供向基类的隐式抽象，以及向下转型的能力。
 
 ### 3.2 资源池化与别名
 DX11 的实现内部对于 RHI 抽象进行了精准映射：
-- DX11 没有原生 Command Buffer 池和记录的概念，因此 `DX11CommandContext` 是通过代理/封装 `ID3D11DeviceContext` 并自己维持内部 `std::vector` 的虚拟指令流，最终在 CPU `execute` 时将指令映射回 DX11 设备的立即执行。
+- DX11 没有原生 Command Buffer 池和记录的概念，因此 `DX11CommandContext` 是通过代理/封装 `ID3D11DeviceContext` 并自己维持内部 `std::vector` 的虚拟指令流，最终在 CPU `execute` 时将指令映射回 DX11 设备的立即执行。     
 - `DX11CommandContextImmediate` 会直接借用 `ID3D11DeviceContext` 即刻执行并使用 CPU-GPU Query 等待。
 
 ---
@@ -104,21 +114,7 @@ virtual std::vector<uint8_t> compile_shader(const char* source, const char* entr
 
 ```cpp
 std::vector<uint8_t> DX11Backend::compile_shader(const char* source, const char* entry, const char* profile) {
-    ID3DBlob* blob = nullptr;
-    ID3DBlob* error_blob = nullptr;
-
-    HRESULT hr = D3DCompile(source, strlen(source), nullptr, nullptr, nullptr,
-                            entry, profile, D3DCOMPILE_ENABLE_STRICTNESS, 0,
-                            &blob, &error_blob);
-                            
-    if (FAILED(hr)) {
-        if (error_blob) {
-            ERR(LogRHI, "Shader compilation failed: {}", (char*)error_blob->GetBufferPointer());
-            error_blob->Release();
-        }
-        return {};
-    }
-    // 返回 bytecode 供上游构造 DX11Shader...
+    // ...
 }
 ```
 

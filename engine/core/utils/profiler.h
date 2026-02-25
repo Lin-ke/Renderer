@@ -1,77 +1,61 @@
 #pragma once
 
-#include "time_scope.h"
-#include <map>
-#include <memory>
-#include <mutex>
-#include <thread>
+#include "cpu_profiler.h"
 
 /**
- * @brief Global profiler for multi-threaded performance analysis
- * 
- * Usage:
+ * @brief Thin wrapper that forwards the legacy Profiler API to CpuProfiler
+ *
+ * Usage (unchanged from before):
  *   PROFILE_SCOPE("MyFunction");
- *   Profiler::get().begin_scope("MyScope");
- *   // ... code ...
- *   Profiler::get().end_scope();
+ *   Profiler::get().end_frame();
  */
 class Profiler {
 public:
-    static Profiler& get();
+    static Profiler& get() {
+        static Profiler inst;
+        return inst;
+    }
 
-    
-    void begin_scope(const std::string& name);
-    
-    
-    void end_scope();
-    
-    
-    void clear();
-    
-    
-    void end_frame();
-    
-    
-    const std::map<std::thread::id, std::shared_ptr<TimeScopes>>& get_all_scopes() const;
-    
-    
-    std::shared_ptr<TimeScopes> get_current_thread_scopes();
-    
-    
-    bool is_enabled() const { return enabled_; }
-    
-    
-    void set_enabled(bool enabled) { enabled_ = enabled; }
+    void begin_scope(const char* name, const char* file = nullptr, uint32_t line = 0) {
+        CpuProfiler::instance().begin_scope(name, file, line);
+    }
+
+    void end_scope() {
+        CpuProfiler::instance().end_scope();
+    }
+
+    void end_frame() {
+        CpuProfiler::instance().end_frame();
+        CpuProfiler::instance().begin_frame();
+    }
+
+    void clear() { /* no-op: history is managed internally */ }
+
+    bool is_enabled() const { return CpuProfiler::instance().is_enabled(); }
+    void set_enabled(bool e) { CpuProfiler::instance().set_enabled(e); }
 
 private:
-    Profiler() = default;
+    Profiler() { CpuProfiler::instance().initialize(); }
     ~Profiler() = default;
-    
-    mutable std::mutex mutex_;
-    std::map<std::thread::id, std::shared_ptr<TimeScopes>> thread_scopes_;
-    bool enabled_ = true;
 };
 
 /**
- * @brief RAII helper for profiling a scope
+ * @brief RAII helper – records file + line through __FILE__ / __LINE__
  */
 class ProfileScopeHelper {
 public:
-    ProfileScopeHelper(const std::string& name) {
-        Profiler::get().begin_scope(name);
+    ProfileScopeHelper(const char* name, const char* file, int line) {
+        CpuProfiler::instance().begin_scope(name, file, static_cast<uint32_t>(line));
     }
-    
     ~ProfileScopeHelper() {
-        Profiler::get().end_scope();
+        CpuProfiler::instance().end_scope();
     }
 };
 
-
-#define PROFILE_SCOPE(name) ProfileScopeHelper _profile_scope_##__LINE__(name)
-
+#define PROFILE_SCOPE(name) \
+    ProfileScopeHelper _profile_scope_##__LINE__(name, __FILE__, __LINE__)
 
 #define PROFILE_FUNCTION() PROFILE_SCOPE(__FUNCTION__)
-
 
 #ifdef _MSC_VER
     #define PROFILE_FUNCTION_FULL() PROFILE_SCOPE(__FUNCSIG__)

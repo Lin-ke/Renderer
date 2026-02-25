@@ -344,8 +344,8 @@ void PBRForwardPass::add_point_light(const Vec3& pos, const Vec3& color,
     if (per_frame_data_.point_light_count >= 4) return;
     
     int idx = per_frame_data_.point_light_count;
-    per_frame_data_.point_light_pos[idx] = Vec4(pos.x(), pos.y(), pos.z(), range);
-    per_frame_data_.point_light_color[idx] = Vec4(color.x(), color.y(), color.z(), intensity);
+    per_frame_data_.point_light_pos[idx] = Vec4(pos.x, pos.y, pos.z, range);
+    per_frame_data_.point_light_color[idx] = Vec4(color.x, color.y, color.z, intensity);
     per_frame_data_.point_light_count++;
     per_frame_dirty_ = true;
 }

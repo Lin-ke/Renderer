@@ -3,6 +3,7 @@
 #include "engine/core/os/thread_pool.h"
 #include "engine/core/window/window.h"
 #include "engine/core/utils/profiler.h"
+#include "engine/core/utils/cpu_profiler.h"
 #include "engine/function/asset/asset_manager.h"
 #include "engine/function/input/input.h"
 #include "engine/function/framework/world.h"
@@ -61,6 +62,10 @@ void EngineContext::init(std::bitset<8> mode) {
 		instance_->render_resource_manager_ = std::make_unique<RenderResourceManager>();
 		instance_->render_resource_manager_->init();
 	}
+	// Register main game thread with profiler
+	CpuProfiler::instance().initialize();
+	CpuProfiler::instance().register_thread("Main Game");
+
 	// workers
 	instance_->thread_pool_ = std::make_unique<ThreadPool>(std::thread::hardware_concurrency());
 	
@@ -68,6 +73,7 @@ void EngineContext::init(std::bitset<8> mode) {
 	if (!mode.test(StartMode::SingleThread)) {
 		instance_->render_thread_ = std::make_unique<std::jthread>([](std::stop_token stoken) {
 			instance_->set_thread_role(ThreadRole::Renderer);
+			CpuProfiler::instance().register_thread("Render");
 			INFO(LogEngine, "Render thread started.");
 			while (!stoken.stop_requested()) {
 				RenderPacket packet;

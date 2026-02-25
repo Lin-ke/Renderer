@@ -201,7 +201,7 @@ bool RenderTestApp::run(const Config& config, std::vector<uint8_t>& out_screensh
         RenderPacket packet;
         packet.active_camera = result.camera;
         packet.active_scene = result.scene.get();
-        packet.frame_index = frames % 2;
+        packet.frame_index = frames % FRAMES_IN_FLIGHT;
         
         bool should_continue = EngineContext::render_system()->tick(packet);
         if (!should_continue) break;
