@@ -3,7 +3,7 @@
 #include "engine/core/math/math.h"
 
 /** Coordinate system definition
- * World Space:      +X Forward, +Y Up, +Z Right
+ * World Space:      +X Right, +Y Up, +Z Forward
  * View Space:       +X Right,   +Y Up, +Z Forward
  * Clip Space:       +X Right,   -Y Up, +Z Forward
  * NDC Space:        Top-Left [-1, -1], Bottom-Right [1, 1]
@@ -92,7 +92,7 @@ class Transform {
   Vec3 euler_angle_ = Vec3::Zero(); 
 
   
-  Vec3 front_ = Vec3::UnitX();
+  Vec3 front_ = Vec3::UnitZ();
   Vec3 up_ = Vec3::UnitY();
-  Vec3 right_ = Vec3::UnitZ();
+  Vec3 right_ = Vec3::UnitX();
 };

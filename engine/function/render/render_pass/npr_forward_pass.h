@@ -49,8 +49,9 @@ struct NPRMaterialData {
     // use_ramp_map is in w component
     Vec4 rim_color_and_use_ramp;
     
-    // Additional padding to ensure 16-byte alignment (80 bytes so far, need 16 more)
-    float _padding[4];     // 16 bytes padding
+    // face_mode + padding to ensure 16-byte alignment (80 bytes so far, need 16 more)
+    float face_mode;       // 1.0 = face mode (unlit, albedo only), 0.0 = normal NPR
+    float _padding[3];     // 12 bytes padding
 };
 
 // Helper to access NPRMaterialData fields
@@ -68,10 +69,11 @@ inline float get_use_ramp_map(const NPRMaterialData& data) { return data.rim_col
 inline void set_npr_params(NPRMaterialData& data, 
     float lambert_clamp, float ramp_tex_offset, float rim_threshold, float rim_strength,
     float rim_width, float use_albedo_map, float use_normal_map, float use_light_map,
-    const Vec3& rim_color, float use_ramp_map) {
+    const Vec3& rim_color, float use_ramp_map, float face_mode = 0.0f) {
     data.npr_params1 = Vec4(lambert_clamp, ramp_tex_offset, rim_threshold, rim_strength);
     data.npr_params2 = Vec4(rim_width, use_albedo_map, use_normal_map, use_light_map);
     data.rim_color_and_use_ramp = Vec4(rim_color.x, rim_color.y, rim_color.z, use_ramp_map);
+    data.face_mode = face_mode;
 }
 
 class NPRForwardPass : public RenderPass {

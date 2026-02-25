@@ -93,7 +93,11 @@ static bool create_npr_scene(const std::string& scene_path) {
     float dist = size * 1.5f;
     if (dist < 1.0f) dist = 5.0f;
     
-    cam_trans->transform.set_position(center + Vec3(-dist, size * 0.5f, 0.0f));
+    // In left-handed coordinate system (Z forward, Y up, X right):
+    // Default front is +Z. Place camera at -Z (behind model), it naturally looks toward +Z (model).
+    // Add slight negative pitch to tilt view downward toward model center.
+    cam_trans->transform.set_position(center + Vec3(0.0f, size * 0.5f, -dist));
+    cam_trans->transform.set_rotation({-15.0f, 0.0f, 0.0f});  // pitch down slightly to frame model
     
     INFO(LogNPRTest, "Model bounds: min=({},{},{}), max=({},{},{}), size={}",
          box.min.x, box.min.y, box.min.z, 

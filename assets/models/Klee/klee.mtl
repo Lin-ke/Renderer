@@ -12,6 +12,7 @@ MaterialType NPR
 
 # 脸
 newmtl m0
+FaceMode 1
 map_Kd Texture\face.jpg
 Kd 0.8 0.8 0.8
 d 1
@@ -55,11 +56,10 @@ RampOffset 0.0
 
 # 表情
 newmtl m3
+FaceMode 1
 map_Kd Texture\emoji.png
 Kd 0.8 0.8 0.8
 d 1
-map_Ke Texture\face_lightmap.png
-map_Ramp Texture\body_shadow_ramp.png
 RimWidth 0.25
 RimThreshold 0.2
 RimStrength 0.8

@@ -9,6 +9,24 @@
 
 DEFINE_LOG_TAG(LogGizmo, "GizmoManager");
 
+void GizmoManager::to_row_major_array(const Mat4& matrix, float out_matrix[16]) {
+    for (int i = 0; i < 4; ++i) {
+        for (int j = 0; j < 4; ++j) {
+            out_matrix[i * 4 + j] = matrix(i, j);
+        }
+    }
+}
+
+Mat4 GizmoManager::from_row_major_array(const float in_matrix[16]) {
+    Mat4 matrix;
+    for (int i = 0; i < 4; ++i) {
+        for (int j = 0; j < 4; ++j) {
+            matrix(i, j) = in_matrix[i * 4 + j];
+        }
+    }
+    return matrix;
+}
+
 GizmoManager::GizmoManager() = default;
 
 GizmoManager::~GizmoManager() {
@@ -54,18 +72,11 @@ void GizmoManager::draw_gizmo(CameraComponent* camera, Entity* selected_entity,
     Mat4 view = camera->get_view_matrix();
     Mat4 proj = camera->get_projection_matrix();
     
-    // Transpose to ImGuizmo's row-vector convention.
-    // Our Mat4 uses column-vector convention (translation in last column),
-    // but ImGuizmo expects row-vector convention (translation in last row).
     float view_matrix[16];
     float proj_matrix[16];
     float transform_matrix[16];
-    for (int i = 0; i < 4; ++i) {
-        for (int j = 0; j < 4; ++j) {
-            view_matrix[i * 4 + j] = view(j, i);
-            proj_matrix[i * 4 + j] = proj(j, i);
-        }
-    }
+    to_row_major_array(view, view_matrix);
+    to_row_major_array(proj, proj_matrix);
     
     ImGuizmo::SetOrthographic(false);
 
@@ -103,18 +114,12 @@ void GizmoManager::draw_gizmo(CameraComponent* camera, Entity* selected_entity,
     Mat4 gizmo_matrix = model;
     if (local_offset.norm() > 0.0001f) {
         Mat4 offset_mat = Mat4::Identity();
-        offset_mat.m[0][3] = local_offset.x;
-        offset_mat.m[1][3] = local_offset.y;
-        offset_mat.m[2][3] = local_offset.z;
-        gizmo_matrix = model * offset_mat;
+        offset_mat.m[3][0] = local_offset.x;
+        offset_mat.m[3][1] = local_offset.y;
+        offset_mat.m[3][2] = local_offset.z;
+        gizmo_matrix = offset_mat * model;
     }
-
-    for (int i = 0; i < 4; ++i) {
-        for (int j = 0; j < 4; ++j) {
-            // Transpose: column-vector → row-vector convention
-            transform_matrix[i * 4 + j] = gizmo_matrix(j, i);
-        }
-    }
+    to_row_major_array(gizmo_matrix, transform_matrix);
 
     // Enable gizmo
     ImGuizmo::Enable(true);
@@ -129,7 +134,7 @@ void GizmoManager::draw_gizmo(CameraComponent* camera, Entity* selected_entity,
     float original_transform[16];
     for (int i = 0; i < 16; ++i) original_transform[i] = transform_matrix[i];
     
-    bool manipulated = ImGuizmo::Manipulate(view_matrix, proj_matrix, 
+    ImGuizmo::Manipulate(view_matrix, proj_matrix,
                          static_cast<ImGuizmo::OPERATION>(current_operation_),
                          static_cast<ImGuizmo::MODE>(current_mode_),
                          transform_matrix, nullptr, nullptr);
@@ -147,39 +152,43 @@ void GizmoManager::draw_gizmo(CameraComponent* camera, Entity* selected_entity,
     }
     
     if (is_using && matrix_changed) {
-        // Transpose back from row-vector to column-vector convention
-        Mat4 new_gizmo_matrix;
-        for (int i = 0; i < 4; ++i) {
-            for (int j = 0; j < 4; ++j) {
-                new_gizmo_matrix(i, j) = transform_matrix[j * 4 + i];
-            }
-        }
+        Mat4 new_gizmo_matrix = from_row_major_array(transform_matrix);
 
         // Revert offset to get the new pivot matrix
         Mat4 new_model = new_gizmo_matrix;
         if (local_offset.norm() > 0.0001f) {
             Mat4 inv_offset_mat = Mat4::Identity();
-            inv_offset_mat.m[0][3] = -local_offset.x;
-            inv_offset_mat.m[1][3] = -local_offset.y;
-            inv_offset_mat.m[2][3] = -local_offset.z;
-            new_model = new_gizmo_matrix * inv_offset_mat;
+            inv_offset_mat.m[3][0] = -local_offset.x;
+            inv_offset_mat.m[3][1] = -local_offset.y;
+            inv_offset_mat.m[3][2] = -local_offset.z;
+            new_model = inv_offset_mat * new_gizmo_matrix;
         }
         
-        Vec3 position = Vec3(new_model.m[0][3], new_model.m[1][3], new_model.m[2][3]);
+        Vec3 position = Vec3(new_model.m[3][0], new_model.m[3][1], new_model.m[3][2]);
         
         Vec3 scale;
-        scale.x = std::sqrt(new_model.m[0][0] * new_model.m[0][0] + new_model.m[1][0] * new_model.m[1][0] + new_model.m[2][0] * new_model.m[2][0]);
-        scale.y = std::sqrt(new_model.m[0][1] * new_model.m[0][1] + new_model.m[1][1] * new_model.m[1][1] + new_model.m[2][1] * new_model.m[2][1]);
-        scale.z = std::sqrt(new_model.m[0][2] * new_model.m[0][2] + new_model.m[1][2] * new_model.m[1][2] + new_model.m[2][2] * new_model.m[2][2]);
+        scale.x = std::sqrt(new_model.m[0][0] * new_model.m[0][0] + new_model.m[0][1] * new_model.m[0][1] + new_model.m[0][2] * new_model.m[0][2]);
+        scale.y = std::sqrt(new_model.m[1][0] * new_model.m[1][0] + new_model.m[1][1] * new_model.m[1][1] + new_model.m[1][2] * new_model.m[1][2]);
+        scale.z = std::sqrt(new_model.m[2][0] * new_model.m[2][0] + new_model.m[2][1] * new_model.m[2][1] + new_model.m[2][2] * new_model.m[2][2]);
 
         Mat3 rotation_matrix;
-        rotation_matrix.set_col(0, Vec3(new_model.m[0][0], new_model.m[1][0], new_model.m[2][0]) / scale.x);
-        rotation_matrix.set_col(1, Vec3(new_model.m[0][1], new_model.m[1][1], new_model.m[2][1]) / scale.y);
-        rotation_matrix.set_col(2, Vec3(new_model.m[0][2], new_model.m[1][2], new_model.m[2][2]) / scale.z);
+        rotation_matrix.set_row(0, Vec3(new_model.m[0][0], new_model.m[0][1], new_model.m[0][2]) / scale.x);
+        rotation_matrix.set_row(1, Vec3(new_model.m[1][0], new_model.m[1][1], new_model.m[1][2]) / scale.y);
+        rotation_matrix.set_row(2, Vec3(new_model.m[2][0], new_model.m[2][1], new_model.m[2][2]) / scale.z);
 
-        transform->transform.set_position(position);
-        transform->transform.set_rotation(Math::extract_euler_angles(rotation_matrix));
-        transform->transform.set_scale(scale);
+        switch (current_operation_) {
+        case Operation::Translate:
+            transform->transform.set_position(position);
+            break;
+        case Operation::Rotate:
+            transform->transform.set_position(position);
+            transform->transform.set_rotation(Math::extract_euler_angles(rotation_matrix));
+            break;
+        case Operation::Scale:
+            transform->transform.set_position(position);
+            transform->transform.set_scale(scale);
+            break;
+        }
     }
 }
 

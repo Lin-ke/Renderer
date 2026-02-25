@@ -109,6 +109,9 @@ public:
 
     bool is_enabled() const { return enabled_; }
 
+    static void to_row_major_array(const Mat4& matrix, float out_matrix[16]);
+    static Mat4 from_row_major_array(const float in_matrix[16]);
+
 private:
     Operation current_operation_ = Operation::Translate;
     Mode current_mode_ = Mode::Local;

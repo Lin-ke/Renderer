@@ -902,7 +902,8 @@ void RenderSystem::draw_entity_node(Entity *entity) {
 	bool is_selected = (selected_entity_ == entity);
 
 	// Tree node flags
-	ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick;
+	// Note: Don't use OpenOnDoubleClick here - we handle double-click manually for camera move
+	ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow;
 	if (is_selected) {
 		flags |= ImGuiTreeNodeFlags_Selected;
 	}
@@ -987,12 +988,12 @@ void RenderSystem::move_camera_to_view_entity(Entity* target_entity) {
 		BoundingBox bbox = mesh_renderer->get_model()->get_bounding_box();
 		// 包围盒中心（本地空间）
 		Vec3 local_center = (bbox.min + bbox.max) * 0.5f;
-		// 手动转换到世界空间: world_pos = position + front * local_x + up * local_y + right * local_z
+		// 手动转换到世界空间: world_pos = position + right * local_x + up * local_y + front * local_z
 		const auto& t = target_transform->transform;
 		target_center = t.get_position() 
-			+ t.front() * local_center.x 
+			+ t.right() * local_center.x 
 			+ t.up() * local_center.y 
-			+ t.right() * local_center.z;
+			+ t.front() * local_center.z;
 		INFO(LogRenderSystem, "Using bounding box center: ({:.2f}, {:.2f}, {:.2f})", 
 			 target_center.x, target_center.y, target_center.z);
 	} else {
@@ -1011,17 +1012,17 @@ void RenderSystem::move_camera_to_view_entity(Entity* target_entity) {
 	Vec3 look_dir = (target_center - camera_pos).normalized();
 	
 	// Calculate euler angles (pitch, yaw, roll) from look direction
-	// Based on coordinate system: X=front, Y=up, Z=right
-	// pitch: rotation around Z (right) axis - up/down
+	// Based on coordinate system: X=right, Y=up, Z=front
+	// pitch: rotation around X (right) axis - up/down
 	// yaw: rotation around Y (up) axis - left/right
-	// roll: rotation around X (front) axis - usually 0
+	// roll: rotation around Z (front-facing screen axis) - usually 0
 	
 	float pitch = 0.0f;
 	float yaw = 0.0f;
 	
 	// Calculate yaw from front direction projected onto XZ plane
-	// atan2(front.z, front.x) gives yaw
-	yaw = std::atan2(look_dir.z, look_dir.x);
+	// atan2(front.x, front.z) gives yaw when +Z is forward
+	yaw = std::atan2(look_dir.x, look_dir.z);
 	
 	// Calculate pitch from front direction
 	// asin(front.y) gives pitch (clamped to avoid gimbal lock)
@@ -1375,7 +1376,7 @@ void RenderSystem::draw_light_gizmo(CameraComponent *camera, Entity *entity, con
 	// Project 3D position to screen space
 	Mat4 view = camera->get_view_matrix();
 	Mat4 proj = camera->get_projection_matrix();
-	Mat4 view_proj = proj * view;
+	Mat4 view_proj = view * proj;
 
 	Vec4 pos_clip = view_proj * Vec4(position.x, position.y, position.z, 1.0f);
 	if (pos_clip.w <= 0) {
@@ -1387,7 +1388,7 @@ void RenderSystem::draw_light_gizmo(CameraComponent *camera, Entity *entity, con
 	screen_pos.x = (pos_ndc.x * 0.5f + 0.5f) * extent.width;
 	screen_pos.y = (1.0f - (pos_ndc.y * 0.5f + 0.5f)) * extent.height; // Flip Y for screen coords
 
-	ImDrawList *draw_list = ImGui::GetWindowDrawList();
+	ImDrawList *draw_list = ImGui::GetForegroundDrawList();
 
 	// Draw Directional Light gizmo (sun icon)
 	if (entity->get_component<DirectionalLightComponent>()) {

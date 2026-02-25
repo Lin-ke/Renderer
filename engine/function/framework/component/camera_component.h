@@ -23,7 +23,7 @@ public:
 
     inline Vec3 get_position() const { return position_; }
     inline Vec3 get_front() const { return front_; }
-    inline Vec3 get_up() const { return right_.cross(front_).normalized(); }
+    inline Vec3 get_up() const { return front_.cross(right_).normalized(); }
     inline Vec3 get_right() const { return right_; }
     inline float get_near() const { return near_; }
     inline float get_far() const { return far_; }

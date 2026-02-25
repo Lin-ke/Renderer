@@ -277,7 +277,7 @@ void DeferredLightingPass::build(RDGBuilder& builder) {
             
             set_main_light(light_dir, light_color, light_intensity);
             
-            Mat4 inv_view_proj = (camera->get_projection_matrix() * camera->get_view_matrix()).inverse();
+            Mat4 inv_view_proj = (camera->get_view_matrix() * camera->get_projection_matrix()).inverse();
             set_per_frame_data(camera->get_position(), inv_view_proj);
         }
     }

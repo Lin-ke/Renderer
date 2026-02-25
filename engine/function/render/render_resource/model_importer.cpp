@@ -56,6 +56,7 @@ struct MtlMaterial {
     float rim_threshold = 0.1f;
     float rim_strength = 1.0f;
     Vec3 rim_color{1.0f, 1.0f, 1.0f};
+    bool face_mode = false;   // Face mode: output albedo directly without lighting
 };
 
 static std::string safe_ai_string(const aiString& ai_str) {
@@ -181,6 +182,10 @@ static bool parse_mtl_file(const std::filesystem::path& mtl_path,
             }
         }
         // NPR parameters
+        else if (keyword == "FaceMode" && current) {
+            int v = 0;
+            if (iss >> v) current->face_mode = (v != 0);
+        }
         else if (keyword == "LambertClamp" && current) {
             float v;
             if (iss >> v) current->lambert_clamp = v;
@@ -224,8 +229,6 @@ static std::optional<std::filesystem::path> safe_path_from_wstring(const std::ws
 }
 
 std::shared_ptr<Model> ModelImporter::import_model(const std::string& physical_path, const std::string& virtual_path, const ModelProcessSetting& settings) {
-    printf("DEBUG: ModelImporter::import_model called for %s\n", physical_path.c_str());
-
     source_path_ = std::filesystem::path(physical_path);
     virtual_path_ = virtual_path;
     model_name_ = source_path_.stem().string();
@@ -522,6 +525,7 @@ std::shared_ptr<Material> ModelImporter::get_or_create_material(
             npr_mat->set_rim_strength(mtl_mat->rim_strength);
             npr_mat->set_rim_width(mtl_mat->rim_width);
             npr_mat->set_rim_color(mtl_mat->rim_color);
+            npr_mat->set_face_mode(mtl_mat->face_mode);
         } else {
             // Set default NPR parameters
             npr_mat->set_lambert_clamp(0.5f);

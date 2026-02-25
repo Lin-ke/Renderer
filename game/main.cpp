@@ -38,8 +38,8 @@ Entity* setup_bunny_scene() {
     INFO(LogGame, "Creating camera...");
     auto* camera_ent = scene->create_entity();
     auto* cam_trans = camera_ent->add_component<TransformComponent>();
-    // Move back along X (World Forward) to see the origin (0,0,0)
-    cam_trans->transform.set_position({-5.0f, 0.0f, 0.0f});
+    // Z-forward convention: place camera at -Z so it looks toward origin with zero rotation
+    cam_trans->transform.set_position({0.0f, 0.0f, -5.0f});
     cam_trans->transform.set_rotation({0.0f, 0.0f, 0.0f});
     
     auto* cam_comp = camera_ent->add_component<CameraComponent>();

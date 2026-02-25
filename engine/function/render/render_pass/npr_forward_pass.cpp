@@ -439,12 +439,13 @@ void NPRForwardPass::draw_batch(RHICommandContextRef cmd, const DrawBatch& batch
         auto diffuse_tex = npr_mat->get_diffuse_texture();
         float use_albedo_map = diffuse_tex ? 1.0f : 0.0f;
         float use_normal_map = npr_mat->get_normal_texture() ? 1.0f : 0.0f;
+        float face_mode = npr_mat->get_face_mode() ? 1.0f : 0.0f;
         
         // Use helper to set all NPR params
         set_npr_params(mat_data, 
             lambert_clamp, ramp_tex_offset, rim_threshold, rim_strength,
             rim_width, use_albedo_map, use_normal_map, use_light_map,
-            rim_color, use_ramp_map);
+            rim_color, use_ramp_map, face_mode);
         
         void* mapped = material_buffer_->map();
         if (mapped) {
@@ -607,12 +608,13 @@ void NPRForwardPass::execute_batches(RHICommandListRef cmd, const std::vector<Dr
             
             float use_albedo_map = npr_mat->get_diffuse_texture() ? 1.0f : 0.0f;
             float use_normal_map = npr_mat->get_normal_texture() ? 1.0f : 0.0f;
+            float face_mode = npr_mat->get_face_mode() ? 1.0f : 0.0f;
             
             // Use helper to set all NPR params
             set_npr_params(mat_data, 
                 lambert_clamp, ramp_tex_offset, rim_threshold, rim_strength,
                 rim_width, use_albedo_map, use_normal_map, use_light_map,
-                rim_color, use_ramp_map);
+                rim_color, use_ramp_map, face_mode);
             
             void* mapped = material_buffer_->map();
             if (mapped) {

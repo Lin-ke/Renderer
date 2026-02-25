@@ -165,26 +165,26 @@ RHIGraphicsPipelineRef pipeline = backend->create_graphics_pipeline(info);
 
 #### 坐标系定义
 
-**右手坐标系**：
-- **X轴**: 前向 (front) - 相机/物体的前向方向
+**左手坐标系**：
+- **X轴**: 右 (right) - 水平右方向
 - **Y轴**: 上 (up) - 世界空间的上方向
-- **Z轴**: 右 (right) - 水平右方向
+- **Z轴**: 前向 (front) - 相机/物体的前向方向
 
 #### 旋转定义
 
-欧拉角存储顺序为 `(pitch, yaw, roll)`，但旋转轴与传统定义不同：    
+欧拉角存储顺序为 `(pitch, yaw, roll)`，采用 DirectX 常见定义：    
 
 | 分量 | 含义 | 旋转轴 | 鼠标映射 |
 |------|------|--------|----------|
-| `pitch` (x) | 垂直俯仰 | **Z轴** (right) | 上下滑动 |
+| `pitch` (x) | 垂直俯仰 | **X轴** (right) | 上下滑动 |
 | `yaw` (y) | 水平偏航 | **Y轴** (up) | 左右滑动 |
-| `roll` (z) | 侧倾 | **X轴** (front) | 通常不用 |
+| `roll` (z) | 侧倾 | **Z轴** (front) | 通常不用 |
 
 #### 矩阵存储格式
 
-**C++端**: `float m[4][4]` 使用**列优先**存储（为了HLSL兼容）
+**C++端**: `float m[4][4]` 使用**行优先**存储（DirectXMath 语义，行向量约定：`v * M`）
 
-**HLSL端**: `float4x4` 默认列优先，与C++端格式一致
+**HLSL端**: `float4x4` 默认列优先存储，**不需要CPU侧转置**。直接上传行优先数据，HLSL列优先读取自动完成转置，shader中使用列向量约定 `mul(M, v)`
 
 
 ---

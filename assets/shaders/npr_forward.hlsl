@@ -35,7 +35,9 @@ cbuffer Material : register(b2) {
     // rim_color_and_use_ramp: rim_color (xyz), use_ramp_map (w)
     float4 rim_color_and_use_ramp;
     
-    float4 _padding_mat;
+    // face_mode: 1.0 = face mode (unlit, output albedo directly), 0.0 = normal NPR
+    float face_mode;
+    float3 _padding_mat;
 };
 
 // Helper macros to access packed parameters
@@ -195,7 +197,14 @@ float4 PSMain(PSInput input) : SV_TARGET {
         float4 sampled = albedo_map.Sample(default_sampler, input.texcoord);
         base_color *= sampled.rgb;
     }
-    // return float4(input.world_normal, 1.0);
+    
+    // Face mode: output albedo directly without any lighting (reference: npr_klee_face.frag)
+    if (face_mode > 0.5) {
+        return float4(base_color, 1.0);
+    }
+    
+    float2 ndc = input.clip_pos.xy / input.clip_pos.w;
+    float2 screen_uv = float2(ndc.x * 0.5 + 0.5, -ndc.y * 0.5 + 0.5);
     // Get normal
     float3 N = GetNormal(input);
     
@@ -207,7 +216,7 @@ float4 PSMain(PSInput input) : SV_TARGET {
     
     if (use_light_map > 0.5) {
         float4 light_data = light_map.Sample(default_sampler, input.texcoord);
-        // Gamma correction for light map
+        // Gamma correction on light map (match reference: lightMap = pow(lightMap, vec4(1.0/2.2)))
         light_data = pow(light_data, 1.0 / 2.2);
         metallic = light_data.r;
         ao = light_data.g;
@@ -249,21 +258,23 @@ float4 PSMain(PSInput input) : SV_TARGET {
             surface_color = half_lambert * base_color;
         }
         
-        dir_color = max(float3(0.0, 0.0, 0.0), surface_color) * light_color * light_intensity;
+        // NPR does NOT multiply by light_intensity (reference: dirColor += max(vec3(0.0f), surfaceColor))
+        // light_intensity is for PBR; NPR uses artistic ramp/half-lambert control instead
+        dir_color = max(float3(0.0, 0.0, 0.0), surface_color) * light_color;
     }
 
 
     
-    // Screen space rim light
-    float3 rim_color_out = float3(0.0, 0.0, 0.0);
+    // Screen space rim light (match reference: outRimColor * rim + dirColor * (1.0 - rim))
+    float rim_factor = 0.0;
+    float3 rim_base = float3(0.0, 0.0, 0.0);
     if (rim_strength > 0.0) {
-        float rim = CalculateRim(input, N);
-        return float4(rim, rim, rim, 1.0);    
-        rim_color_out = rim_color * rim * rim_strength * base_color;
+        rim_factor = CalculateRim(input, N);
+        rim_base = rim_color * rim_strength * base_color;
     }
 
-    // Combine lighting
-    float3 final_color = rim_color_out + dir_color * (1.0 - saturate(length(rim_color_out) / length(dir_color + 0.001)));
+    // Combine lighting: lerp between dir_color and rim using rim_factor
+    float3 final_color = rim_base * rim_factor + dir_color * (1.0 - rim_factor);
     
     // Add emission
     final_color += emission.rgb;

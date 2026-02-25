@@ -129,7 +129,7 @@ public:
     // Debug settings
     bool wireframe_mode_ = false;
     bool show_ui_ = true;
-    bool show_buffer_debug_ = true;   // Toggle for buffer debug visualization (default ON for debugging)
+    bool show_buffer_debug_ = false;  // Toggle for buffer debug visualization (default OFF)
     
     // Pass toggles
     bool enable_depth_prepass_ = true;
@@ -217,7 +217,7 @@ public:
     std::vector<RDGNodeInfo> last_rdg_nodes_;
     std::vector<RDGEdgeInfo> last_rdg_edges_;
     std::mutex rdg_info_mutex_;
-    bool show_rdg_visualizer_ = true;
+    bool show_rdg_visualizer_ = false;
     bool rdg_graph_layout_dirty_ = true;
     ImVec2 rdg_graph_offset_ = ImVec2(50, 50);
     float rdg_graph_scale_ = 1.0f;

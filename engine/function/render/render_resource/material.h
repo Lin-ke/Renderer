@@ -238,6 +238,7 @@ public:
     void set_rim_strength(float value) { rim_strength_ = value; update(); }
     void set_rim_width(float value) { rim_width_ = value; update(); }
     void set_rim_color(Vec3 value) { rim_color_ = value; update(); }
+    void set_face_mode(bool value) { face_mode_ = value; update(); }
     
     // Generic parameters (for shader access)
     void set_int(int32_t data, uint32_t index) { 
@@ -272,6 +273,7 @@ public:
     inline float get_rim_strength() const { return rim_strength_; }
     inline float get_rim_width() const { return rim_width_; }
     inline Vec3 get_rim_color() const { return rim_color_; }
+    inline bool get_face_mode() const { return face_mode_; }
     inline int32_t get_int(uint32_t index) const { return ints_[index]; }
     inline float get_float(uint32_t index) const { return floats_[index]; }
     inline Vec4 get_color(uint32_t index) const { return colors_[index]; }
@@ -302,6 +304,7 @@ public:
         ar(cereal::make_nvp("rim_strength", rim_strength_));
         ar(cereal::make_nvp("rim_width", rim_width_));
         ar(cereal::make_nvp("rim_color", rim_color_));
+        ar(cereal::make_nvp("face_mode", face_mode_));
         ar(cereal::make_nvp("ints", ints_));
         ar(cereal::make_nvp("floats", floats_));
         ar(cereal::make_nvp("colors", colors_));
@@ -322,6 +325,7 @@ protected:
     float rim_strength_ = 1.0f;
     float rim_width_ = 0.5f;
     Vec3 rim_color_ = Vec3(1.0f, 1.0f, 1.0f);
+    bool face_mode_ = false;  // Face mode: output albedo directly, skip lighting
 
     // Generic parameter slots (for shader communication)
     std::array<int32_t, 8> ints_ = { 0 };
