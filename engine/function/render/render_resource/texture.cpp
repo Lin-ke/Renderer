@@ -62,7 +62,7 @@ Texture::Texture(SkipInit, TextureType type, RHIFormat format, Extent3D extent, 
 Texture::~Texture() {
 }
 
-void Texture::on_load_asset() {
+void Texture::on_load() {
     if (paths_.size() > 0) {
         load_from_file();
     } else {
@@ -70,7 +70,7 @@ void Texture::on_load_asset() {
     }
 }
 
-void Texture::on_save_asset() {
+void Texture::on_save() {
     // Ensure paths_ contains virtual paths for portability
     ensure_virtual_paths();
 }

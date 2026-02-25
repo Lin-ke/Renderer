@@ -221,34 +221,47 @@ std::vector<std::shared_future<AssetRef>> AssetManager::enqueue_load_task(UID ui
 
 	auto *pool = EngineContext::thread_pool();
 	std::vector<std::shared_future<AssetRef>> futures;
-	futures.reserve(load_order.size()); // 预分配内存
-	std::unique_lock<std::mutex> lock(asset_mutex_);
+	futures.reserve(load_order.size());
 
-	for (const auto &dep_uid : load_order) {
-		// Skip if already ready or processing
-		if (assets_.count(dep_uid)) {
-			futures.push_back(make_ready_future(assets_[dep_uid]));
-			continue;
+	// Phase 1: Under lock, plan all tasks and collect paths
+	struct LoadTask {
+		UID uid;
+		fs::path disk_path;
+		std::shared_ptr<std::promise<AssetRef>> promise;
+		std::shared_future<AssetRef> future;
+	};
+	std::vector<LoadTask> tasks_to_execute;
+
+	{
+		std::scoped_lock lock(asset_mutex_);
+		for (const auto &dep_uid : load_order) {
+			// Skip if already ready or processing
+			if (assets_.count(dep_uid)) {
+				futures.push_back(make_ready_future(assets_[dep_uid]));
+				continue;
+			}
+			if (pending_assets_.count(dep_uid)) {
+				futures.push_back(pending_assets_[dep_uid]);
+				continue;
+			}
+			if (!uid_to_path_.contains(dep_uid)) {
+				ERR(LogAsset, "Asset UID {} has no registered path.", dep_uid.to_string());
+				futures.push_back(make_ready_future<AssetRef>(nullptr));
+				continue;
+			}
+
+			auto promise = std::make_shared<std::promise<AssetRef>>();
+			std::shared_future<AssetRef> future = promise->get_future().share();
+			pending_assets_[dep_uid] = future;
+			futures.push_back(future);
+
+			tasks_to_execute.push_back({dep_uid, uid_to_path_[dep_uid], promise, future});
 		}
-		if (pending_assets_.count(dep_uid)) {
-			futures.push_back(pending_assets_[dep_uid]);
-			continue;
-		}
-		if (!uid_to_path_.contains(dep_uid)) {
-			ERR(LogAsset, "Asset UID {} has no registered path.", dep_uid.to_string());
-			futures.push_back(make_ready_future<AssetRef>(nullptr));
-			continue;
-		}
+	} // unlock
 
-		auto promise = std::make_shared<std::promise<AssetRef>>();
-		std::shared_future<AssetRef> future = promise->get_future().share();
-		pending_assets_[dep_uid] = future;
-		futures.push_back(future);
-
-		fs::path disk_path = uid_to_path_[dep_uid];
-
-		// Copy capture necessary data
-		auto task_lambda = [this, dep_uid, disk_path, promise]() {
+	// Phase 2: Execute all load tasks without holding the lock
+	for (auto &task : tasks_to_execute) {
+		auto task_lambda = [this, dep_uid = task.uid, disk_path = task.disk_path, promise = task.promise]() {
 			AssetRef loaded = this->perform_load_from_disk(dep_uid, disk_path);
 			{
 				std::scoped_lock inner_lock(this->asset_mutex_);
@@ -258,16 +271,13 @@ std::vector<std::shared_future<AssetRef>> AssetManager::enqueue_load_task(UID ui
 				this->pending_assets_.erase(dep_uid);
 			}
 			promise->set_value(loaded);
-			return loaded;
 		};
 
-		lock.unlock();
 		if (pool && use_thread_pool) {
 			pool->enqueue(std::move(task_lambda));
 		} else {
 			task_lambda();
 		}
-		lock.lock();
 	}
 
 	return futures;
@@ -287,13 +297,20 @@ AssetRef AssetManager::load_asset_blocking(UID uid) {
 	}
 	AssetRef result = nullptr;
 	for (auto &fut : futures) {
-		if (auto asset = fut.get(); asset && !asset->is_initialized()) {
-			if (asset->get_uid() == uid) {
-				result = asset;
-			}
+		auto asset = fut.get();
+		if (!asset) continue;
+
+		if (asset->get_uid() == uid) {
+			result = asset;
+		}
+
+		// Double-check under init_mutex_ to avoid double initialization
+		if (!asset->is_initialized()) {
 			std::unique_lock<std::mutex> init_lock(asset->init_mutex_);
-			asset->on_load_asset();
-			asset->mark_initialized();
+			if (!asset->is_initialized()) {
+				asset->on_load_asset();
+				asset->mark_initialized();
+			}
 		}
 	}
 	if (result == nullptr) {
@@ -308,6 +325,26 @@ AssetRef AssetManager::get_asset_immediate(UID uid) {
 		return it->second;
 	}
 	return nullptr;
+}
+
+void AssetManager::unload_asset(UID uid) {
+	std::scoped_lock lock(asset_mutex_);
+	assets_.erase(uid);
+}
+
+size_t AssetManager::unload_unused() {
+	std::scoped_lock lock(asset_mutex_);
+	size_t count = 0;
+	for (auto it = assets_.begin(); it != assets_.end(); ) {
+		// use_count == 1 means only the cache holds a reference
+		if (it->second.use_count() == 1) {
+			it = assets_.erase(it);
+			++count;
+		} else {
+			++it;
+		}
+	}
+	return count;
 }
 
 void AssetManager::scan_directory(const fs::path &dir_path) {
@@ -346,7 +383,7 @@ void AssetManager::scan_directory(const fs::path &dir_path) {
 	}
 }
 
-void AssetManager::register_path(UID uid, const std::string &path) {
+void AssetManager::register_path_internal(UID uid, const std::string &path) {
 	if (auto it = uid_to_path_.find(uid); it != uid_to_path_.end()) {
 		path_to_uid_.erase(it->second);
 	}
@@ -354,12 +391,17 @@ void AssetManager::register_path(UID uid, const std::string &path) {
 	path_to_uid_[path] = uid;
 }
 
+void AssetManager::register_path(UID uid, const std::string &path) {
+	std::scoped_lock lock(asset_mutex_);
+	register_path_internal(uid, path);
+}
+
 void AssetManager::register_asset(AssetRef asset, const std::string &path) {
 	if (!asset) {
 		return;
 	}
 	std::scoped_lock lock(asset_mutex_);
-	register_path(asset->get_uid(), path);
+	register_path_internal(asset->get_uid(), path);
 	assets_[asset->get_uid()] = asset;
 }
 
@@ -370,8 +412,10 @@ void AssetManager::collect_save_dependencies_recursive(AssetRef asset, std::vect
 	}
 	UID uid = asset->get_uid();
 	if (uid.is_empty()) {
-		INFO(LogAsset, "Asset {} has empty UID, skipping", asset->get_asset_type_name());
-		return;
+		// Auto-generate UID for dependencies without one
+		asset->set_uid(UID::generate());
+		uid = asset->get_uid();
+		INFO(LogAsset, "Auto-generated UID {} for {} dependency", uid.to_string(), asset->get_asset_type_name());
 	}
 	if (visited.count(uid)) {
 		return;
@@ -408,6 +452,11 @@ static std::string type_to_ext(AssetType type) {
 void AssetManager::save_asset(AssetRef asset, const std::string &virtual_path) {
 	if (!asset) {
 		return;
+	}
+
+	// Auto-generate UID if the asset doesn't have one
+	if (asset->get_uid().is_empty()) {
+		asset->set_uid(UID::generate());
 	}
 
 	// 1. Resolve Target Path
@@ -533,12 +582,6 @@ UID AssetManager::get_uid_by_path(const std::string &path_str) {
 				return it->second;
 			}
 		}
-		
-		// If both failed but it's a valid internal path, assign deterministic UID
-		UID new_uid = UID::from_hash(phys_str);
-		register_path(new_uid, phys_str);
-		register_path(new_uid, generic_path);
-		return new_uid;
 	}
 	return UID::empty();
 }

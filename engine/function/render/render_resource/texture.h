@@ -31,8 +31,8 @@ public:
     virtual std::string_view get_asset_type_name() const override { return "Texture Asset"; }
     virtual AssetType get_asset_type() const override { return AssetType::Texture; }
 
-    virtual void on_load_asset() override;
-    virtual void on_save_asset() override;
+    virtual void on_load() override;
+    virtual void on_save() override;
 
     TextureType get_texture_type() { return texture_type_; }
     const std::string& get_name() const { return name_; }

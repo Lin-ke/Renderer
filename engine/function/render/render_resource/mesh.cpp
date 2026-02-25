@@ -20,13 +20,11 @@ Mesh::Mesh(const std::string& name) : name_(name) {
 Mesh::~Mesh() {
 }
 
-void Mesh::on_load_asset() {
+void Mesh::on_load() {
     create_gpu_buffers();
-    clear_dirty();
 }
 
-void Mesh::on_save_asset() {
-    clear_dirty();
+void Mesh::on_save() {
 }
 
 std::shared_ptr<Mesh> Mesh::Load(const std::string& path) {

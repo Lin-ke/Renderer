@@ -167,7 +167,7 @@ TEST_CASE("Prefab Modifications", "[prefab]") {
     test_utils::TestContext::reset();
     utils::clean_old_files(std::filesystem::path(std::string(ENGINE_PATH) + "/test/test_internal/assets"), 5);
     
-    UID prefab_uid;
+    UID prefab_uid = UID::generate();
 
     // Phase 1: Create Prefab with HealthComponent
     {

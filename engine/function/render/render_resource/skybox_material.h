@@ -56,9 +56,6 @@ public:
         (TextureRef, panorama_texture_)
     )
 
-    // Sync deps before saving to ensure UIDs are correct
-    virtual void on_save_asset() override { save_asset_deps(); }
-
     friend class cereal::access;
     template <class Archive>
     void serialize(Archive& ar) {

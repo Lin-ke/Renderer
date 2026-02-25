@@ -88,8 +88,8 @@ namespace Math
     {
         // Manual implementation to match Eigen's column-major format
         Vec3 f = (center - eye).normalized();
-        Vec3 s = up.cross(f).normalized();
-        Vec3 u = f.cross(s);
+        Vec3 s = f.cross(up).normalized();
+        Vec3 u = s.cross(f);
 
         Mat4 mat;
         // Column-major layout (matching Eigen)

@@ -70,8 +70,7 @@ void Model::sync_deps_to_slots() {
     }
 }
 
-void Model::on_load_asset() {
-    load_asset_deps();  // Load mesh_deps_ and material_deps_ from UIDs
+void Model::on_load() {
     sync_deps_to_slots();  // Rebuild material_slots_ from deps
     
     total_vertex_ = 0;
@@ -82,13 +81,10 @@ void Model::on_load_asset() {
             total_index_ += slot.mesh_->get_index_count();
         }
     }
-    clear_dirty();
 }
 
-void Model::on_save_asset() {
+void Model::on_save() {
     sync_slots_to_deps();
-    save_asset_deps();
-    clear_dirty();
 }
 
 std::shared_ptr<Model> Model::Load(const std::string& virtual_path, 

@@ -6,12 +6,20 @@
 
 UID::UID()
 {
+    this->id_ = uuids::uuid(); // nil by default
+    this->str_ = uuids::to_string(this->id_);
+}
+
+UID UID::generate()
+{
     static thread_local std::random_device rd;
     static thread_local std::mt19937 gen(rd());
     static thread_local uuids::uuid_random_generator generator(gen);
     
-    this->id_ = generator();
-    this->str_ = uuids::to_string(this->id_);
+    UID uid;
+    uid.id_ = generator();
+    uid.str_ = uuids::to_string(uid.id_);
+    return uid;
 }
 
 UID::UID(const std::string& input_str)
@@ -50,7 +58,7 @@ UID UID::from_hash(const std::string& input_str) {
     std::memcpy(bytes.data(), &high, 8);
     std::memcpy(bytes.data() + 8, &low, 8);
     
-    UID uid;
+    UID uid; // default is nil, override below
     uid.id_ = uuids::uuid(bytes.begin(), bytes.end());
     uid.str_ = uuids::to_string(uid.id_);
     return uid;

@@ -96,8 +96,8 @@ public:
     virtual std::string_view get_asset_type_name() const override { return "Model Asset"; }
     virtual AssetType get_asset_type() const override { return AssetType::Model; }
 
-    virtual void on_load_asset() override;
-    virtual void on_save_asset() override;
+    virtual void on_load() override;
+    virtual void on_save() override;
 
     // Asset Dependencies - managed by ASSET_DEPS macro
     ASSET_DEPS(

@@ -86,8 +86,7 @@ public:
     void set_use_for_depth_pass(bool use) { use_for_depth_pass_ = use; }
     void set_cast_shadow(bool shadow) { cast_shadow_ = shadow; }
 
-    // Base class has no asset dependencies - subclasses manage their own
-    void traverse_deps(std::function<void(std::shared_ptr<Asset>)> callback) const override {}
+    // Base class has no asset dependencies - subclasses manage their own via ASSET_DEPS
 
     friend class cereal::access;
     template <class Archive>
@@ -184,9 +183,6 @@ public:
         (TextureRef, texture_normal_),
         (TextureRef, texture_arm_)
     )
-
-    // Sync deps before saving to ensure UIDs are correct
-    virtual void on_save_asset() override { save_asset_deps(); }
 
     friend class cereal::access;
     template <class Archive>
@@ -291,9 +287,6 @@ public:
         (TextureRef, texture_light_map_),
         (TextureRef, texture_ramp_)
     )
-
-    // Sync deps before saving to ensure UIDs are correct
-    virtual void on_save_asset() override { save_asset_deps(); }
 
     friend class cereal::access;
     template <class Archive>

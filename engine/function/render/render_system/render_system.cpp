@@ -464,37 +464,48 @@ void RenderSystem::build_and_execute_rdg(uint32_t frame_index, const RenderPacke
 				GPUProfilerWidget::draw_window(*gpu_profiler_);
 			}
 			
-			// Draw gizmo on top of everything with fullscreen transparent window
+			// Draw gizmo in a transparent viewport window for proper ImGuizmo input handling.
+			// ImGuizmo's IsHoveringWindow() requires the draw list to belong to a real
+			// ImGui window that matches g.HoveredWindow; using GetForegroundDrawList()
+			// breaks this check and prevents drag interaction.
 			if (gizmo_manager_ && selected_entity_ && packet.active_camera) {
 				ImGuiIO &io = ImGui::GetIO();
 				
-				ImGui::SetNextWindowPos(ImVec2(0, 0));
-				ImGui::SetNextWindowSize(io.DisplaySize);
-				ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+				// Calculate viewport area (exclude hierarchy and inspector panels)
+				float hierarchy_width = 250.0f;
+				float inspector_width = 300.0f;
+				ImVec2 viewport_pos(hierarchy_width, 0);
+				ImVec2 viewport_size(io.DisplaySize.x - hierarchy_width - inspector_width, io.DisplaySize.y);
+				
+				// Create a transparent overlay window so ImGuizmo can detect hover/click/drag
+				ImGui::SetNextWindowPos(viewport_pos);
+				ImGui::SetNextWindowSize(viewport_size);
 				ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
+				ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0, 0, 0, 0));
+				ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+				ImGui::Begin("##GizmoViewport", nullptr,
+						ImGuiWindowFlags_NoDecoration |
+						ImGuiWindowFlags_NoBackground |
+						ImGuiWindowFlags_NoSavedSettings |
+						ImGuiWindowFlags_NoFocusOnAppearing |
+						ImGuiWindowFlags_NoBringToFrontOnFocus |
+						ImGuiWindowFlags_NoNav |
+						ImGuiWindowFlags_NoMove |
+						ImGuiWindowFlags_NoResize);
 				
-				ImGui::Begin("GizmoViewport", nullptr,
-						ImGuiWindowFlags_NoTitleBar |
-								ImGuiWindowFlags_NoResize |
-								ImGuiWindowFlags_NoScrollbar |
-								ImGuiWindowFlags_NoNavFocus |
-								ImGuiWindowFlags_NoMove |
-								ImGuiWindowFlags_NoInputs);
-				
-				ImVec2 window_pos = ImGui::GetWindowPos();
-				ImVec2 window_size = ImGui::GetWindowSize();
+				// Use the window's own draw list (nullptr) so ImGuizmo's
+				// IsHoveringWindow() correctly matches g.HoveredWindow
 				gizmo_manager_->draw_gizmo(packet.active_camera, selected_entity_,
-						window_pos, window_size);
-				
-				if (packet.active_camera) {
-					draw_light_gizmo(packet.active_camera, selected_entity_,
-							Extent2D{ static_cast<uint32_t>(io.DisplaySize.x),
-									static_cast<uint32_t>(io.DisplaySize.y) });
-				}
+						viewport_pos, viewport_size, nullptr);
 				
 				ImGui::End();
-				ImGui::PopStyleColor();
 				ImGui::PopStyleVar();
+				ImGui::PopStyleColor(2);
+				
+				// Draw light gizmo at entity position
+				draw_light_gizmo(packet.active_camera, selected_entity_,
+						Extent2D{ static_cast<uint32_t>(io.DisplaySize.x),
+								static_cast<uint32_t>(io.DisplaySize.y) });
 			}
 		});
 		
@@ -905,9 +916,12 @@ void RenderSystem::draw_entity_node(Entity *entity) {
 	bool node_open = ImGui::TreeNodeEx(label.c_str(), flags);
 
 	// Handle selection click
-	if (ImGui::IsItemClicked()) {
-		selected_entity_ = entity;
-		INFO(LogRenderSystem, "Selected entity: {}", name);
+	if (ImGui::IsItemHovered() && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+		// Exclude double-click to avoid conflict with move camera feature
+		if (!ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+			selected_entity_ = entity;
+			INFO(LogRenderSystem, "Selected entity: {}", name);
+		}
 	}
 	
 	// Handle double-click: move camera to view the entity

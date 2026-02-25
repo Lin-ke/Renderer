@@ -155,8 +155,9 @@ float Linear01Depth(float depth, float near_plane, float far_plane) {
 
 // Calculate screen space rim light
 float CalculateRim(PSInput input, float3 N) {
-    // Calculate screen space position
-    float2 screen_uv = input.clip_pos.xy / input.clip_pos.w * 0.5 + 0.5;
+    // Calculate screen space position (flip Y: clip Y+ is up, but UV V=0 is top)
+    float2 ndc = input.clip_pos.xy / input.clip_pos.w;
+    float2 screen_uv = float2(ndc.x * 0.5 + 0.5, -ndc.y * 0.5 + 0.5);
     
     // Sample depth at current pixel
     float depth = depth_texture.Sample(default_sampler, screen_uv).r;
@@ -167,7 +168,8 @@ float CalculateRim(PSInput input, float3 N) {
     float3 offset_world_pos = input.world_pos + rim_width * normalize(input.world_normal);
     float4 offset_view_pos = mul(view, float4(offset_world_pos, 1.0));
     float4 offset_clip_pos = mul(proj, offset_view_pos);
-    float2 offset_screen_uv = offset_clip_pos.xy / offset_clip_pos.w * 0.5 + 0.5;
+    float2 offset_ndc = offset_clip_pos.xy / offset_clip_pos.w;
+    float2 offset_screen_uv = float2(offset_ndc.x * 0.5 + 0.5, -offset_ndc.y * 0.5 + 0.5);
     
     // Sample depth at offset position
     float offset_depth = depth_texture.Sample(default_sampler, offset_screen_uv).r;
@@ -193,7 +195,7 @@ float4 PSMain(PSInput input) : SV_TARGET {
         float4 sampled = albedo_map.Sample(default_sampler, input.texcoord);
         base_color *= sampled.rgb;
     }
-    
+    // return float4(input.world_normal, 1.0);
     // Get normal
     float3 N = GetNormal(input);
     
@@ -256,9 +258,10 @@ float4 PSMain(PSInput input) : SV_TARGET {
     float3 rim_color_out = float3(0.0, 0.0, 0.0);
     if (rim_strength > 0.0) {
         float rim = CalculateRim(input, N);
+        return float4(rim, rim, rim, 1.0);    
         rim_color_out = rim_color * rim * rim_strength * base_color;
     }
-    
+
     // Combine lighting
     float3 final_color = rim_color_out + dir_color * (1.0 - saturate(length(rim_color_out) / length(dir_color + 0.001)));
     

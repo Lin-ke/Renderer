@@ -15,7 +15,7 @@ class DirectionalLightComponent;
 class PointLightComponent;
 class VolumeLightComponent;
 
-class Scene : public Asset, public std::enable_shared_from_this<Scene> {
+class Scene : public Asset {
 public:
     std::vector<std::unique_ptr<Entity>> entities_;
 

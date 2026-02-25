@@ -36,7 +36,8 @@ void GizmoManager::shutdown() {
 }
 
 void GizmoManager::draw_gizmo(CameraComponent* camera, Entity* selected_entity,
-                              ImVec2 viewport_pos, ImVec2 viewport_size) {
+                              ImVec2 viewport_pos, ImVec2 viewport_size,
+                              ImDrawList* draw_list) {
     if (!initialized_ || !enabled_ || !camera || !selected_entity) {
         return;
     }
@@ -50,25 +51,36 @@ void GizmoManager::draw_gizmo(CameraComponent* camera, Entity* selected_entity,
         return; // Not in a valid frame
     }
     
-    ImGuiIO& io = ImGui::GetIO();
-    (void)io;
-    
     Mat4 view = camera->get_view_matrix();
     Mat4 proj = camera->get_projection_matrix();
     
+    // Transpose to ImGuizmo's row-vector convention.
+    // Our Mat4 uses column-vector convention (translation in last column),
+    // but ImGuizmo expects row-vector convention (translation in last row).
     float view_matrix[16];
     float proj_matrix[16];
     float transform_matrix[16];
     for (int i = 0; i < 4; ++i) {
         for (int j = 0; j < 4; ++j) {
-            view_matrix[i + j * 4] = view(i, j);
-            proj_matrix[i + j * 4] = proj(i, j);
+            view_matrix[i * 4 + j] = view(j, i);
+            proj_matrix[i * 4 + j] = proj(j, i);
         }
     }
-
+    
     ImGuizmo::SetOrthographic(false);
 
     ImGuizmo::SetRect(viewport_pos.x, viewport_pos.y, viewport_size.x, viewport_size.y);
+    
+    // Debug: check mouse position relative to viewport
+    ImVec2 mouse_pos = ImGui::GetMousePos();
+    bool mouse_in_viewport = mouse_pos.x >= viewport_pos.x && mouse_pos.x <= viewport_pos.x + viewport_size.x &&
+                             mouse_pos.y >= viewport_pos.y && mouse_pos.y <= viewport_pos.y + viewport_size.y;
+    static int debug_counter = 0;
+    if (++debug_counter % 60 == 0) {
+        INFO(LogGizmo, "Viewport: pos=({:.1f},{:.1f}), size=({:.1f},{:.1f}), mouse=({:.1f},{:.1f}), in_viewport={}",
+             viewport_pos.x, viewport_pos.y, viewport_size.x, viewport_size.y,
+             mouse_pos.x, mouse_pos.y, mouse_in_viewport);
+    }
     
     // Get current transform matrix
     Mat4 model = transform->transform.get_matrix();
@@ -99,15 +111,19 @@ void GizmoManager::draw_gizmo(CameraComponent* camera, Entity* selected_entity,
 
     for (int i = 0; i < 4; ++i) {
         for (int j = 0; j < 4; ++j) {
-            transform_matrix[i + j * 4] = gizmo_matrix(i, j);
+            // Transpose: column-vector → row-vector convention
+            transform_matrix[i * 4 + j] = gizmo_matrix(j, i);
         }
     }
 
     // Enable gizmo
     ImGuizmo::Enable(true);
     
-    // Draw gizmo - use window draw list since we're inside a window
-    ImGuizmo::SetDrawlist(ImGui::GetWindowDrawList());
+    // Use provided draw list or get window draw list
+    if (!draw_list) {
+        draw_list = ImGui::GetWindowDrawList();
+    }
+    ImGuizmo::SetDrawlist(draw_list);
 
     // Save original transform matrix to detect changes
     float original_transform[16];
@@ -131,11 +147,11 @@ void GizmoManager::draw_gizmo(CameraComponent* camera, Entity* selected_entity,
     }
     
     if (is_using && matrix_changed) {
-        // Convert back from column-major
+        // Transpose back from row-vector to column-vector convention
         Mat4 new_gizmo_matrix;
         for (int i = 0; i < 4; ++i) {
             for (int j = 0; j < 4; ++j) {
-                new_gizmo_matrix(i, j) = transform_matrix[i + j * 4];
+                new_gizmo_matrix(i, j) = transform_matrix[j * 4 + i];
             }
         }
 

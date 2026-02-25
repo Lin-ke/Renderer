@@ -65,7 +65,7 @@ protected:
     // save_asset_deps用于把依赖的UID保存到内部的deps_uid变量中
     virtual void save_asset_deps() {}
 
-private:
+protected:
     friend class AssetManager;
     virtual void on_load_asset() { // asset recall
         load_asset_deps();

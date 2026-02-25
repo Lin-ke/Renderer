@@ -108,7 +108,7 @@ public:
     void register_asset(AssetRef asset, const std::string &virtual_path);
     
     /**
-     * @brief Manually registers a UID-to-Path mapping.
+     * @brief Manually registers a UID-to-Path mapping. Thread-safe.
      * Typically called during the directory scan phase.
      */
     void register_path(UID uid, const std::string &physical_path_str);
@@ -117,6 +117,19 @@ public:
      * @brief Look up the UID associated with a given path (virtual or physical).
      */
     UID get_uid_by_path(const std::string &virtual_or_physical_path);
+
+    /**
+     * @brief Unload a specific asset from the cache.
+     * The asset will be removed from the internal cache. Existing shared_ptr holders
+     * will keep their references valid, but subsequent loads will re-read from disk.
+     */
+    void unload_asset(UID uid);
+
+    /**
+     * @brief Unload all assets that are only held by the cache (use_count == 1).
+     * @return Number of assets unloaded.
+     */
+    size_t unload_unused();
 
 private:
     /**
@@ -153,6 +166,9 @@ private:
 
     // Helper to check if a load is already in progress
     std::optional<std::shared_future<AssetRef>> check_pending_cache(UID uid);
+
+    // Internal register_path without lock (caller must hold asset_mutex_)
+    void register_path_internal(UID uid, const std::string &path);
 
 private:
     std::unordered_map<UID, AssetRef> assets_; ///< Cache of loaded assets.

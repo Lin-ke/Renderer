@@ -51,9 +51,11 @@ public:
      * @param selected_entity Entity to manipulate (nullptr to disable)
      * @param window_pos Viewport position in screen space
      * @param window_size Viewport size
+     * @param draw_list Optional external draw list (uses GetWindowDrawList() if null)
      */
     void draw_gizmo(CameraComponent* camera, Entity* selected_entity, 
-                    ImVec2 window_pos, ImVec2 window_size);
+                    ImVec2 window_pos, ImVec2 window_size,
+                    ImDrawList* draw_list = nullptr);
 
     /**
      * @brief Draw gizmo controls UI
