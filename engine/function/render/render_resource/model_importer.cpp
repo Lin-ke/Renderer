@@ -37,18 +37,34 @@ struct MtlGlobalSettings {
     ModelMaterialType default_material_type = ModelMaterialType::PBR;
 };
 
-// MTL material data structure for manual parsing (PBR Roughness-Metallic workflow)
-struct MtlMaterial {
+// Common material data (shared between PBR and NPR)
+struct MtlMaterialBase {
     std::string name;
-    std::string diffuse_map;
-    std::string light_map;      // NPR LightMap (map_Ke)
-    std::string ramp_map;       // NPR Ramp texture (map_Ramp)
     Vec4 diffuse_color{0.8f, 0.8f, 0.8f, 1.0f};  // Kd (BaseColor)
     float opacity = 1.0f;
-    float roughness = 0.5f;     // R field in PBR workflow
-    float metallic = 0.0f;      // M field in PBR workflow
     // Material type (overrides global setting if specified)
     MtlMaterialTypeHint material_type_hint = MtlMaterialTypeHint::Default;
+};
+
+// PBR specific material data (Roughness-Metallic workflow)
+struct MtlPBRData {
+    // PBR parameters
+    float roughness = 0.5f;     // R field
+    float metallic = 0.0f;      // M field
+    float alpha_clip = 0.0f;    // Alpha test threshold
+    
+    // PBR textures
+    std::string diffuse_map;      // map_Kd - Albedo/Diffuse
+    std::string normal_map;       // map_Bump / norm - Normal
+    std::string arm_map;          // map_ARM - Packed AO/Roughness/Metallic (preferred)
+    std::string roughness_map;    // map_Roughness - Individual roughness (when ARM not available)
+    std::string metallic_map;     // map_Metallic - Individual metallic (when ARM not available)
+    std::string ao_map;           // map_AO / map_Ao - Ambient Occlusion
+    std::string emission_map;     // map_Ke - Emission
+};
+
+// NPR specific material data (Toon shading workflow)
+struct MtlNPRData {
     // NPR parameters
     float lambert_clamp = 0.5f;
     float ramp_offset = 0.0f;
@@ -57,6 +73,29 @@ struct MtlMaterial {
     float rim_strength = 1.0f;
     Vec3 rim_color{1.0f, 1.0f, 1.0f};
     bool face_mode = false;   // Face mode: output albedo directly without lighting
+    
+    // NPR textures
+    std::string diffuse_map;      // map_Kd - Diffuse/Albedo
+    std::string normal_map;       // map_Bump / norm - Normal
+    std::string light_map;        // map_Ke / map_lightmap - Light map
+    std::string ramp_map;         // map_Ramp / map_ramp - Toon ramp texture
+};
+
+// Unified MTL material structure
+struct MtlMaterial {
+    MtlMaterialBase base;
+    MtlPBRData pbr;
+    MtlNPRData npr;
+    
+    // Convenience accessors (forward to appropriate struct based on type)
+    std::string& name() { return base.name; }
+    const std::string& name() const { return base.name; }
+    Vec4& diffuse_color() { return base.diffuse_color; }
+    const Vec4& diffuse_color() const { return base.diffuse_color; }
+    float& opacity() { return base.opacity; }
+    float opacity() const { return base.opacity; }
+    MtlMaterialTypeHint& type_hint() { return base.material_type_hint; }
+    MtlMaterialTypeHint type_hint() const { return base.material_type_hint; }
 };
 
 static std::string safe_ai_string(const aiString& ai_str) {
@@ -74,6 +113,17 @@ static std::string safe_ai_string(const aiString& ai_str) {
     return result;
 }
 
+// Helper to parse texture path from MTL line
+static std::string parse_texture_path(std::istringstream& iss) {
+    std::string rest;
+    std::getline(iss, rest);
+    size_t start = rest.find_first_not_of(" \t");
+    if (start != std::string::npos) {
+        return rest.substr(start);
+    }
+    return "";
+}
+
 static bool parse_mtl_file(const std::filesystem::path& mtl_path, 
                            std::vector<MtlMaterial>& out_materials,
                            MtlGlobalSettings& out_settings) {
@@ -87,6 +137,20 @@ static bool parse_mtl_file(const std::filesystem::path& mtl_path,
     MtlMaterial* current = nullptr;
     std::string line;
     
+    auto is_pbr = [&]() -> bool {
+        if (!current) return true; // Default to PBR
+        if (current->type_hint() == MtlMaterialTypeHint::PBR) return true;
+        if (current->type_hint() == MtlMaterialTypeHint::NPR) return false;
+        return out_settings.default_material_type == ModelMaterialType::PBR;
+    };
+    
+    auto is_npr = [&]() -> bool {
+        if (!current) return false;
+        if (current->type_hint() == MtlMaterialTypeHint::NPR) return true;
+        if (current->type_hint() == MtlMaterialTypeHint::PBR) return false;
+        return out_settings.default_material_type == ModelMaterialType::NPR;
+    };
+    
     while (std::getline(file, line)) {
         if (line.empty() || line[0] == '#') continue;
         
@@ -94,7 +158,9 @@ static bool parse_mtl_file(const std::filesystem::path& mtl_path,
         std::string keyword;
         iss >> keyword;
         
-        // Global MaterialType setting (can appear outside newmtl blocks)
+        // ========================================
+        // Global settings (outside newmtl blocks)
+        // ========================================
         if (keyword == "MaterialType") {
             std::string type_str;
             iss >> type_str;
@@ -106,93 +172,127 @@ static bool parse_mtl_file(const std::filesystem::path& mtl_path,
                 INFO(LogModelImporter, "MTL global MaterialType set to PBR");
             }
         }
+        // ========================================
+        // Material definition
+        // ========================================
         else if (keyword == "newmtl") {
             out_materials.emplace_back();
             current = &out_materials.back();
-            iss >> current->name;
-        } else if (keyword == "map_Kd" && current) {
-            std::string rest;
-            std::getline(iss, rest);
-            size_t start = rest.find_first_not_of(" \t");
-            if (start != std::string::npos) {
-                current->diffuse_map = rest.substr(start);
-            }
-        } else if (keyword == "Kd" && current) {
+            iss >> current->name();
+        }
+        // ========================================
+        // Common parameters (both PBR and NPR)
+        // ========================================
+        else if (keyword == "Kd" && current) {
             float r, g, b;
-            if (iss >> r >> g >> b) current->diffuse_color = Vec4(r, g, b, 1.0f);
-        // PBR workflow: R = roughness
-        } else if (keyword == "R" && current) {
-            float r;
-            if (iss >> r) {
-                current->roughness = std::clamp(r, 0.0f, 1.0f);
-            }
-        // PBR workflow: M = metallic
-        } else if (keyword == "M" && current) {
-            float m;
-            if (iss >> m) {
-                current->metallic = std::clamp(m, 0.0f, 1.0f);
-            }
-        } else if (keyword == "d" && current) {
+            if (iss >> r >> g >> b) current->diffuse_color() = Vec4(r, g, b, 1.0f);
+        }
+        else if (keyword == "d" && current) {
             float d;
-            if (iss >> d) current->opacity = d;
+            if (iss >> d) current->opacity() = d;
         }
-        // NPR LightMap (using map_Ke as custom extension)
-        else if ((keyword == "map_Ke" || keyword == "map_lightmap") && current) {
-            std::string rest;
-            std::getline(iss, rest);
-            size_t start = rest.find_first_not_of(" \t");
-            if (start != std::string::npos) {
-                current->light_map = rest.substr(start);
-            }
-        }
-        // NPR Ramp texture
-        else if ((keyword == "map_Ramp" || keyword == "map_ramp") && current) {
-            std::string rest;
-            std::getline(iss, rest);
-            size_t start = rest.find_first_not_of(" \t");
-            if (start != std::string::npos) {
-                current->ramp_map = rest.substr(start);
-            }
-        }
-        // RIM parameters
-        else if (keyword == "RimWidth" && current) {
-            float v;
-            if (iss >> v) current->rim_width = v;
-        }
-        else if (keyword == "RimThreshold" && current) {
-            float v;
-            if (iss >> v) current->rim_threshold = v;
-        }
-        else if (keyword == "RimStrength" && current) {
-            float v;
-            if (iss >> v) current->rim_strength = v;
-        }
-        else if (keyword == "RimColor" && current) {
-            float r, g, b;
-            if (iss >> r >> g >> b) current->rim_color = Vec3(r, g, b);
-        }
-        // Per-material MaterialType (overrides global setting)
+        // ========================================
+        // Per-material MaterialType override
+        // ========================================
         else if (keyword == "MaterialType" && current) {
             std::string type_str;
             iss >> type_str;
             if (type_str == "NPR" || type_str == "npr") {
-                current->material_type_hint = MtlMaterialTypeHint::NPR;
+                current->type_hint() = MtlMaterialTypeHint::NPR;
             } else if (type_str == "PBR" || type_str == "pbr") {
-                current->material_type_hint = MtlMaterialTypeHint::PBR;
+                current->type_hint() = MtlMaterialTypeHint::PBR;
             }
         }
-        // NPR parameters
-        else if (keyword == "FaceMode" && current) {
+        // ========================================
+        // PBR-specific parameters
+        // ========================================
+        else if ((keyword == "R" || keyword == "Roughness") && current && is_pbr()) {
+            float r;
+            if (iss >> r) {
+                current->pbr.roughness = std::clamp(r, 0.0f, 1.0f);
+            }
+        }
+        else if ((keyword == "M" || keyword == "Metallic") && current && is_pbr()) {
+            float m;
+            if (iss >> m) {
+                current->pbr.metallic = std::clamp(m, 0.0f, 1.0f);
+            }
+        }
+        else if ((keyword == "AlphaClip" || keyword == "AlphaTest") && current && is_pbr()) {
+            float a;
+            if (iss >> a) {
+                current->pbr.alpha_clip = std::clamp(a, 0.0f, 1.0f);
+            }
+        }
+        // ========================================
+        // PBR textures
+        // ========================================
+        else if (keyword == "map_Kd" && current && is_pbr()) {
+            current->pbr.diffuse_map = parse_texture_path(iss);
+        }
+        else if ((keyword == "map_Bump" || keyword == "map_bump" || keyword == "norm" || keyword == "map_Normal") && current && is_pbr()) {
+            current->pbr.normal_map = parse_texture_path(iss);
+        }
+        else if ((keyword == "map_ARM" || keyword == "map_arm") && current && is_pbr()) {
+            current->pbr.arm_map = parse_texture_path(iss);
+        }
+        else if ((keyword == "map_Roughness" || keyword == "map_roughness") && current && is_pbr()) {
+            current->pbr.roughness_map = parse_texture_path(iss);
+        }
+        else if ((keyword == "map_Metallic" || keyword == "map_metallic") && current && is_pbr()) {
+            current->pbr.metallic_map = parse_texture_path(iss);
+        }
+        else if ((keyword == "map_AO" || keyword == "map_Ao" || keyword == "map_ao" || keyword == "map_Ambient") && current && is_pbr()) {
+            current->pbr.ao_map = parse_texture_path(iss);
+        }
+        else if ((keyword == "map_Ke" || keyword == "map_Emission" || keyword == "map_emission") && current && is_pbr()) {
+            current->pbr.emission_map = parse_texture_path(iss);
+        }
+        // ========================================
+        // NPR-specific parameters
+        // ========================================
+        else if (keyword == "LambertClamp" && current && is_npr()) {
+            float v;
+            if (iss >> v) current->npr.lambert_clamp = v;
+        }
+        else if (keyword == "RampOffset" && current && is_npr()) {
+            float v;
+            if (iss >> v) current->npr.ramp_offset = v;
+        }
+        else if (keyword == "RimWidth" && current && is_npr()) {
+            float v;
+            if (iss >> v) current->npr.rim_width = v;
+        }
+        else if (keyword == "RimThreshold" && current && is_npr()) {
+            float v;
+            if (iss >> v) current->npr.rim_threshold = v;
+        }
+        else if (keyword == "RimStrength" && current && is_npr()) {
+            float v;
+            if (iss >> v) current->npr.rim_strength = v;
+        }
+        else if (keyword == "RimColor" && current && is_npr()) {
+            float r, g, b;
+            if (iss >> r >> g >> b) current->npr.rim_color = Vec3(r, g, b);
+        }
+        else if (keyword == "FaceMode" && current && is_npr()) {
             int v = 0;
-            if (iss >> v) current->face_mode = (v != 0);
+            if (iss >> v) current->npr.face_mode = (v != 0);
         }
-        else if (keyword == "LambertClamp" && current) {
-            float v;
-            if (iss >> v) current->lambert_clamp = v;
+        // ========================================
+        // NPR textures
+        // ========================================
+        else if (keyword == "map_Kd" && current && is_npr()) {
+            current->npr.diffuse_map = parse_texture_path(iss);
         }
-        else if (keyword == "RampOffset" && current) {
-            float v;
-            if (iss >> v) current->ramp_offset = v;
+        else if ((keyword == "map_Bump" || keyword == "map_bump" || keyword == "norm") && current && is_npr()) {
+            current->npr.normal_map = parse_texture_path(iss);
+        }
+        else if ((keyword == "map_Ke" || keyword == "map_lightmap" || keyword == "map_LightMap") && current && is_npr()) {
+            current->npr.light_map = parse_texture_path(iss);
+        }
+        else if ((keyword == "map_Ramp" || keyword == "map_ramp") && current && is_npr()) {
+            current->npr.ramp_map = parse_texture_path(iss);
         }
     }
     
@@ -286,7 +386,7 @@ std::shared_ptr<Model> ModelImporter::import_model(const std::string& physical_p
             mtl_path.replace_extension(".mtl");
             if (parse_mtl_file(mtl_path, mtl_materials, mtl_settings)) {
                 for (size_t i = 0; i < mtl_materials.size(); ++i) {
-                    mtl_name_to_index[mtl_materials[i].name] = i;
+                    mtl_name_to_index[mtl_materials[i].name()] = i;
                 }
                 if (mtl_settings.default_material_type != ModelMaterialType::PBR || 
                     mtl_materials.empty() == false) {
@@ -309,7 +409,7 @@ std::shared_ptr<Model> ModelImporter::import_model(const std::string& physical_p
             INFO(LogModelImporter, "[{}/{}] Processing mesh [{}]", i, scene->mNumMeshes, mesh_name_safe);
             
             std::shared_ptr<Material> material;
-            std::shared_ptr<Mesh> mesh_asset = process_mesh(mesh, scene, i, mtl_materials, mtl_name_to_index, material);
+            std::shared_ptr<Mesh> mesh_asset = process_mesh(mesh, scene, i, mtl_materials, mtl_name_to_index, mtl_settings, material);
             
             if (mesh_asset) {
                 model->add_slot(mesh_asset, material);
@@ -339,6 +439,7 @@ std::shared_ptr<Mesh> ModelImporter::process_mesh(
     int index,
     const std::vector<MtlMaterial>& mtl_materials,
     const std::unordered_map<std::string, size_t>& mtl_name_to_index,
+    const MtlGlobalSettings& mtl_settings,
     std::shared_ptr<Material>& out_material) {
     
     std::string mesh_name_safe = safe_ai_string(mesh->mName);
@@ -422,17 +523,10 @@ std::shared_ptr<Mesh> ModelImporter::process_mesh(
         // Query material properties from FBX
         aiColor4D base_color;
         float metallic = 0.0f, roughness = 0.5f;
-        aiString tex_path;
         
         if (AI_SUCCESS == ai_mat->Get(AI_MATKEY_COLOR_DIFFUSE, base_color)) {
             INFO(LogModelImporter, "    BaseColor: ({:.3f}, {:.3f}, {:.3f}, {:.3f})",
                  base_color.r, base_color.g, base_color.b, base_color.a);
-        }
-        if (AI_SUCCESS == ai_mat->Get(AI_MATKEY_METALLIC_FACTOR, metallic)) {
-            INFO(LogModelImporter, "    Metallic: {:.3f}", metallic);
-        }
-        if (AI_SUCCESS == ai_mat->Get(AI_MATKEY_ROUGHNESS_FACTOR, roughness)) {
-            INFO(LogModelImporter, "    Roughness: {:.3f}", roughness);
         }
         // Query diffuse texture from FBX
         if (ai_mat->GetTextureCount(aiTextureType_DIFFUSE) > 0) {
@@ -459,11 +553,33 @@ std::shared_ptr<Mesh> ModelImporter::process_mesh(
             }
         }
         
+        // Determine material type
+        ModelMaterialType mat_type = settings_.material_type;
+        if (mtl_mat) {
+            if (mtl_mat->type_hint() == MtlMaterialTypeHint::NPR) {
+                mat_type = ModelMaterialType::NPR;
+            } else if (mtl_mat->type_hint() == MtlMaterialTypeHint::PBR) {
+                mat_type = ModelMaterialType::PBR;
+            } else if (mtl_settings.default_material_type == ModelMaterialType::NPR) {
+                mat_type = ModelMaterialType::NPR;
+            }
+        }
+        
+        // Log PBR-specific properties
+        if (mat_type == ModelMaterialType::PBR) {
+            if (AI_SUCCESS == ai_mat->Get(AI_MATKEY_METALLIC_FACTOR, metallic)) {
+                INFO(LogModelImporter, "    Metallic: {:.3f}", metallic);
+            }
+            if (AI_SUCCESS == ai_mat->Get(AI_MATKEY_ROUGHNESS_FACTOR, roughness)) {
+                INFO(LogModelImporter, "    Roughness: {:.3f}", roughness);
+            }
+        }
+        
 
         
         // Use mesh's material index for consistent material caching
         int mat_index = (mesh->mMaterialIndex >= 0) ? static_cast<int>(mesh->mMaterialIndex) : index;
-        out_material = get_or_create_material(mat_name_str, ai_mat, mtl_mat, mat_index);
+        out_material = get_or_create_material(mat_name_str, ai_mat, mtl_mat, mat_index, mat_type);
     }
     
     return mesh_asset;
@@ -476,14 +592,30 @@ UID ModelImporter::generate_sub_asset_uid(const std::string& sub_name, const std
     return UID::from_hash(key);
 }
 
+// Helper to load texture with error handling
+std::shared_ptr<Texture> ModelImporter::load_texture_safe(const std::string& path_str, const std::string& type_name) {
+    try {
+        std::filesystem::path tex_path = output_dir_ / path_str;
+        if (settings_.force_png_texture) {
+            tex_path.replace_extension(".png");
+        }
+        if (std::filesystem::exists(tex_path)) {
+            return std::make_shared<Texture>(tex_path.string());
+        }
+    } catch (const std::exception& e) {
+        ERR(LogModelImporter, "Failed to load {} texture '{}': {}", type_name, path_str, e.what());
+    }
+    return nullptr;
+}
+
 std::shared_ptr<Material> ModelImporter::get_or_create_material(
     const std::string& mat_name,
     aiMaterial* ai_mat,
     const MtlMaterial* mtl_mat,
-    int mesh_index) {
+    int mesh_index,
+    ModelMaterialType mat_type) {
     
     // Use material index from aiMesh for cache key to ensure consistent mapping
-    // This ensures meshes with the same material share the same material instance
     std::string cache_key = mat_name + "_mat_" + std::to_string(mesh_index);
     
     // Check cache first (importer-local cache)
@@ -492,11 +624,8 @@ std::shared_ptr<Material> ModelImporter::get_or_create_material(
         return cache_it->second;
     }
     
-    // Deterministic UID for material (based on material index for consistency)
+    // Deterministic UID for material
     UID mat_uid = generate_sub_asset_uid(cache_key, "material");
-    
-    std::string base_path = !virtual_path_.empty() ? virtual_path_ : source_path_.string();
-    std::string mat_asset_path = base_path + "." + cache_key + ".asset";
     
     // Check if asset already exists in engine
     if (auto existing = EngineContext::asset()->get_asset_immediate(mat_uid)) {
@@ -507,25 +636,25 @@ std::shared_ptr<Material> ModelImporter::get_or_create_material(
         }
     }
     
-    ModelMaterialType mat_type = settings_.material_type;
-    if (mtl_mat && mtl_mat->material_type_hint != MtlMaterialTypeHint::Default) {
-        mat_type = (mtl_mat->material_type_hint == MtlMaterialTypeHint::NPR) 
-                   ? ModelMaterialType::NPR 
-                   : ModelMaterialType::PBR;
-    }
-    
     std::shared_ptr<Material> material;
+    
+    // ========================================
+    // Create NPR Material
+    // ========================================
     if (mat_type == ModelMaterialType::NPR) {
         auto npr_mat = std::make_shared<NPRMaterial>();
+        
         // Set NPR parameters from MTL or defaults
         if (mtl_mat) {
-            npr_mat->set_lambert_clamp(mtl_mat->lambert_clamp);
-            npr_mat->set_ramp_offset(mtl_mat->ramp_offset);
-            npr_mat->set_rim_threshold(mtl_mat->rim_threshold);
-            npr_mat->set_rim_strength(mtl_mat->rim_strength);
-            npr_mat->set_rim_width(mtl_mat->rim_width);
-            npr_mat->set_rim_color(mtl_mat->rim_color);
-            npr_mat->set_face_mode(mtl_mat->face_mode);
+            npr_mat->set_lambert_clamp(mtl_mat->npr.lambert_clamp);
+            npr_mat->set_ramp_offset(mtl_mat->npr.ramp_offset);
+            npr_mat->set_rim_threshold(mtl_mat->npr.rim_threshold);
+            npr_mat->set_rim_strength(mtl_mat->npr.rim_strength);
+            npr_mat->set_rim_width(mtl_mat->npr.rim_width);
+            npr_mat->set_rim_color(mtl_mat->npr.rim_color);
+            npr_mat->set_face_mode(mtl_mat->npr.face_mode);
+            npr_mat->set_diffuse(mtl_mat->diffuse_color());
+            npr_mat->set_alpha_clip(mtl_mat->opacity() < 1.0f ? 0.5f : 0.0f);
         } else {
             // Set default NPR parameters
             npr_mat->set_lambert_clamp(0.5f);
@@ -534,134 +663,138 @@ std::shared_ptr<Material> ModelImporter::get_or_create_material(
             npr_mat->set_rim_strength(1.0f);
             npr_mat->set_rim_width(0.5f);
             npr_mat->set_rim_color(Vec3(1.0f, 1.0f, 1.0f));
+            npr_mat->set_diffuse(Vec4(1.0f, 1.0f, 1.0f, 1.0f));
         }
+        
+        // Load NPR textures from MTL
+        if (mtl_mat) {
+            if (!mtl_mat->npr.diffuse_map.empty()) {
+                if (auto tex = load_texture_safe(mtl_mat->npr.diffuse_map, "NPR diffuse")) {
+                    npr_mat->set_diffuse_texture(tex);
+                }
+            }
+            if (!mtl_mat->npr.normal_map.empty()) {
+                if (auto tex = load_texture_safe(mtl_mat->npr.normal_map, "NPR normal")) {
+                    npr_mat->set_normal_texture(tex);
+                }
+            }
+            if (!mtl_mat->npr.light_map.empty()) {
+                if (auto tex = load_texture_safe(mtl_mat->npr.light_map, "NPR light")) {
+                    npr_mat->set_light_map_texture(tex);
+                }
+            }
+            if (!mtl_mat->npr.ramp_map.empty()) {
+                if (auto tex = load_texture_safe(mtl_mat->npr.ramp_map, "NPR ramp")) {
+                    npr_mat->set_ramp_texture(tex);
+                }
+            }
+        }
+        // Fall back to FBX textures if MTL didn't provide them
+        else {
+            if (auto tex = load_material_texture(ai_mat, aiTextureType_DIFFUSE)) {
+                npr_mat->set_diffuse_texture(tex);
+            }
+            aiColor4D base_color;
+            if (AI_SUCCESS == ai_mat->Get(AI_MATKEY_COLOR_DIFFUSE, base_color)) {
+                npr_mat->set_diffuse(Vec4(base_color.r, base_color.g, base_color.b, base_color.a));
+            }
+        }
+        
         material = npr_mat;
-    } else {
-        material = std::make_shared<PBRMaterial>();
     }
+    // ========================================
+    // Create PBR Material
+    // ========================================
+    else {
+        auto pbr_mat = std::make_shared<PBRMaterial>();
+        
+        // Set PBR parameters from MTL or defaults
+        if (mtl_mat) {
+            pbr_mat->set_roughness(mtl_mat->pbr.roughness);
+            pbr_mat->set_metallic(mtl_mat->pbr.metallic);
+            pbr_mat->set_alpha_clip(mtl_mat->pbr.alpha_clip);
+            pbr_mat->set_diffuse(mtl_mat->diffuse_color());
+        } else {
+            // Set default PBR parameters
+            pbr_mat->set_roughness(0.5f);
+            pbr_mat->set_metallic(0.0f);
+            pbr_mat->set_alpha_clip(0.0f);
+            pbr_mat->set_diffuse(Vec4(1.0f, 1.0f, 1.0f, 1.0f));
+        }
+        
+        // Load PBR textures from MTL
+        if (mtl_mat) {
+            // Diffuse/Albedo
+            if (!mtl_mat->pbr.diffuse_map.empty()) {
+                if (auto tex = load_texture_safe(mtl_mat->pbr.diffuse_map, "PBR diffuse")) {
+                    pbr_mat->set_diffuse_texture(tex);
+                }
+            }
+            // Normal
+            if (!mtl_mat->pbr.normal_map.empty()) {
+                if (auto tex = load_texture_safe(mtl_mat->pbr.normal_map, "PBR normal")) {
+                    pbr_mat->set_normal_texture(tex);
+                }
+            }
+            // ARM packed (preferred)
+            if (!mtl_mat->pbr.arm_map.empty()) {
+                if (auto tex = load_texture_safe(mtl_mat->pbr.arm_map, "PBR ARM")) {
+                    pbr_mat->set_arm_texture(tex);
+                }
+            }
+            // Individual maps (when ARM not available)
+            else {
+                if (!mtl_mat->pbr.roughness_map.empty()) {
+                    if (auto tex = load_texture_safe(mtl_mat->pbr.roughness_map, "PBR roughness")) {
+                        pbr_mat->set_roughness_texture(tex);
+                    }
+                }
+                if (!mtl_mat->pbr.metallic_map.empty()) {
+                    if (auto tex = load_texture_safe(mtl_mat->pbr.metallic_map, "PBR metallic")) {
+                        pbr_mat->set_metallic_texture(tex);
+                    }
+                }
+                if (!mtl_mat->pbr.ao_map.empty()) {
+                    if (auto tex = load_texture_safe(mtl_mat->pbr.ao_map, "PBR AO")) {
+                        pbr_mat->set_ao_texture(tex);
+                    }
+                }
+            }
+            // Emission
+            if (!mtl_mat->pbr.emission_map.empty()) {
+                if (auto tex = load_texture_safe(mtl_mat->pbr.emission_map, "PBR emission")) {
+                    pbr_mat->set_emission_texture(tex);
+                }
+            }
+        }
+        // Fall back to FBX material data
+        else {
+            // Diffuse texture
+            if (auto tex = load_material_texture(ai_mat, aiTextureType_DIFFUSE)) {
+                pbr_mat->set_diffuse_texture(tex);
+            }
+            // Normal texture
+            if (auto tex = load_material_texture(ai_mat, aiTextureType_NORMALS)) {
+                pbr_mat->set_normal_texture(tex);
+            }
+            // Roughness/Metallic from FBX properties
+            float metallic = 0.0f, roughness = 0.5f;
+            ai_mat->Get(AI_MATKEY_METALLIC_FACTOR, metallic);
+            ai_mat->Get(AI_MATKEY_ROUGHNESS_FACTOR, roughness);
+            if (roughness < 0.001f) roughness = 0.5f;
+            pbr_mat->set_metallic(metallic);
+            pbr_mat->set_roughness(roughness);
+            // Diffuse color
+            aiColor4D base_color;
+            if (AI_SUCCESS == ai_mat->Get(AI_MATKEY_COLOR_DIFFUSE, base_color)) {
+                pbr_mat->set_diffuse(Vec4(base_color.r, base_color.g, base_color.b, base_color.a));
+            }
+        }
+        
+        material = pbr_mat;
+    }
+    
     material->set_uid(mat_uid);
-    
-    if (mat_type == ModelMaterialType::NPR) {
-        auto npr_mat = std::dynamic_pointer_cast<NPRMaterial>(material);
-        if (npr_mat) npr_mat->set_diffuse(Vec4(1.0f, 1.0f, 1.0f, 1.0f));
-    } else {
-        auto pbr_mat = std::dynamic_pointer_cast<PBRMaterial>(material);
-        if (pbr_mat) pbr_mat->set_diffuse(Vec4(1.0f, 1.0f, 1.0f, 1.0f));
-    }
-    
-    if (mat_type == ModelMaterialType::PBR) {
-        auto pbr_mat = std::dynamic_pointer_cast<PBRMaterial>(material);
-        if (pbr_mat) {
-            // Use R and M fields from PBR workflow
-            if (mtl_mat) {
-                pbr_mat->set_roughness(mtl_mat->roughness);
-                pbr_mat->set_metallic(mtl_mat->metallic);
-            } else {
-                pbr_mat->set_roughness(0.5f);
-                pbr_mat->set_metallic(0.0f);
-            }
-        }
-    }
-    if (mtl_mat && !mtl_mat->diffuse_map.empty()) {
-        try {
-            std::filesystem::path tex_path = output_dir_ / mtl_mat->diffuse_map;
-            if (settings_.force_png_texture) {
-                tex_path.replace_extension(".png");
-            }
-            if (std::filesystem::exists(tex_path)) {
-                auto texture = std::make_shared<Texture>(tex_path.string());
-                // Texture constructor already sets UID from path and marks dirty
-                // Set texture based on material type
-                if (mat_type == ModelMaterialType::NPR) {
-                    auto npr_mat = std::dynamic_pointer_cast<NPRMaterial>(material);
-                    if (npr_mat) npr_mat->set_diffuse_texture(texture);
-                } else {
-                    auto pbr_mat = std::dynamic_pointer_cast<PBRMaterial>(material);
-                    if (pbr_mat) pbr_mat->set_diffuse_texture(texture);
-                }
-            }
-        } catch (const std::exception& e) {
-            ERR(LogModelImporter, "Failed to load diffuse texture: {}", e.what());
-        } catch (...) {
-            ERR(LogModelImporter, "Failed to load diffuse texture: unknown error");
-        }
-        
-        // Load NPR LightMap texture from MTL
-        if (mat_type == ModelMaterialType::NPR && !mtl_mat->light_map.empty()) {
-            try {
-                std::filesystem::path lightmap_path = output_dir_ / mtl_mat->light_map;
-                if (settings_.force_png_texture) {
-                    lightmap_path.replace_extension(".png");
-                }
-                if (std::filesystem::exists(lightmap_path)) {
-                    auto lightmap_tex = std::make_shared<Texture>(lightmap_path.string());
-                    auto npr_mat = std::dynamic_pointer_cast<NPRMaterial>(material);
-                    if (npr_mat) npr_mat->set_light_map_texture(lightmap_tex);
-                }
-            } catch (const std::exception& e) {
-                ERR(LogModelImporter, "Failed to load light map texture: {}", e.what());
-            } catch (...) {
-                ERR(LogModelImporter, "Failed to load light map texture: unknown error");
-            }
-        }
-        
-        // Load NPR Ramp texture from MTL
-        if (mat_type == ModelMaterialType::NPR && !mtl_mat->ramp_map.empty()) {
-            try {
-                std::filesystem::path ramp_path = output_dir_ / mtl_mat->ramp_map;
-                if (settings_.force_png_texture) {
-                    ramp_path.replace_extension(".png");
-                }
-                if (std::filesystem::exists(ramp_path)) {
-                    auto ramp_tex = std::make_shared<Texture>(ramp_path.string());
-                    auto npr_mat = std::dynamic_pointer_cast<NPRMaterial>(material);
-                    if (npr_mat) npr_mat->set_ramp_texture(ramp_tex);
-                }
-            } catch (const std::exception& e) {
-                ERR(LogModelImporter, "Failed to load ramp texture: {}", e.what());
-            } catch (...) {
-                ERR(LogModelImporter, "Failed to load ramp texture: unknown error");
-            }
-        }
-    } else if (!mtl_mat) {
-        // Fall back to FBX material data for texture
-        auto tex = load_material_texture(ai_mat, (aiTextureType)1 /* aiTextureType_DIFFUSE */);
-        if (tex) {
-            if (mat_type == ModelMaterialType::NPR) {
-                auto npr_mat = std::dynamic_pointer_cast<NPRMaterial>(material);
-                if (npr_mat) npr_mat->set_diffuse_texture(tex);
-            } else {
-                auto pbr_mat = std::dynamic_pointer_cast<PBRMaterial>(material);
-                if (pbr_mat) pbr_mat->set_diffuse_texture(tex);
-            }
-        }
-        
-        // For PBR, also load metallic/roughness from FBX
-        if (mat_type == ModelMaterialType::PBR) {
-            auto pbr_mat = std::dynamic_pointer_cast<PBRMaterial>(material);
-            if (pbr_mat) {
-                float metallic = 0.0f, roughness = 0.5f;
-                ai_mat->Get(AI_MATKEY_METALLIC_FACTOR, metallic);
-                ai_mat->Get(AI_MATKEY_ROUGHNESS_FACTOR, roughness);
-                if (roughness < 0.001f) roughness = 0.5f;
-                pbr_mat->set_metallic(metallic);
-                pbr_mat->set_roughness(roughness);
-            }
-        }
-        
-        // Load diffuse color from FBX
-        aiColor4D base_color;
-        if (AI_SUCCESS == ai_mat->Get(AI_MATKEY_COLOR_DIFFUSE, base_color)) {
-            if (mat_type == ModelMaterialType::NPR) {
-                auto npr_mat = std::dynamic_pointer_cast<NPRMaterial>(material);
-                if (npr_mat) npr_mat->set_diffuse(Vec4(base_color.r, base_color.g, base_color.b, base_color.a));
-            } else {
-                auto pbr_mat = std::dynamic_pointer_cast<PBRMaterial>(material);
-                if (pbr_mat) pbr_mat->set_diffuse(Vec4(base_color.r, base_color.g, base_color.b, base_color.a));
-            }
-        }
-    }
-    
     material->mark_dirty();
     
     material_cache_[cache_key] = material;

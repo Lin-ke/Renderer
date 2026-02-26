@@ -163,6 +163,11 @@ public:
     void set_diffuse_texture(TextureRef texture) { texture_diffuse_ = texture; update(); }
     void set_normal_texture(TextureRef texture) { texture_normal_ = texture; update(); }
     void set_arm_texture(TextureRef texture) { texture_arm_ = texture; update(); }
+    // Individual PBR textures (used when ARM is not available)
+    void set_roughness_texture(TextureRef texture) { texture_roughness_ = texture; update(); }
+    void set_metallic_texture(TextureRef texture) { texture_metallic_ = texture; update(); }
+    void set_ao_texture(TextureRef texture) { texture_ao_ = texture; update(); }
+    void set_emission_texture(TextureRef texture) { texture_emission_ = texture; update(); }
     
     // Getters
     inline Vec4 get_diffuse() const { return diffuse_; }
@@ -176,12 +181,20 @@ public:
     inline TextureRef get_diffuse_texture() const { return texture_diffuse_; }
     inline TextureRef get_normal_texture() const { return texture_normal_; }
     inline TextureRef get_arm_texture() const { return texture_arm_; }
+    inline TextureRef get_roughness_texture() const { return texture_roughness_; }
+    inline TextureRef get_metallic_texture() const { return texture_metallic_; }
+    inline TextureRef get_ao_texture() const { return texture_ao_; }
+    inline TextureRef get_emission_texture() const { return texture_emission_; }
 
     // PBR manages its own texture dependencies
     ASSET_DEPS(
         (TextureRef, texture_diffuse_),
         (TextureRef, texture_normal_),
-        (TextureRef, texture_arm_)
+        (TextureRef, texture_arm_),
+        (TextureRef, texture_roughness_),
+        (TextureRef, texture_metallic_),
+        (TextureRef, texture_ao_),
+        (TextureRef, texture_emission_)
     )
 
     friend class cereal::access;
@@ -212,6 +225,10 @@ protected:
     std::array<int32_t, 8> ints_ = { 0 };
     std::array<float, 8> floats_ = { 0.0f };
     std::array<Vec4, 8> colors_ = { Vec4::Zero() };
+    
+    // PBR textures are declared via ASSET_DEPS macro:
+    // texture_diffuse_, texture_normal_, texture_arm_
+    // texture_roughness_, texture_metallic_, texture_ao_, texture_emission_
 };
 
 using PBRMaterialRef = std::shared_ptr<PBRMaterial>;

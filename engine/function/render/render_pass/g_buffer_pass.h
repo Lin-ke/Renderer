@@ -46,6 +46,33 @@ struct GBufferPerObjectData {
 };
 
 /**
+ * @brief Material data for G-Buffer pass (matches HLSL cbuffer)
+ * 
+ * Texture slots:
+ * - t0: Albedo/Diffuse map
+ * - t1: Normal map
+ * - t2: ARM map (AO=R, Roughness=G, Metallic=B) - preferred
+ * - t3: Roughness map (when ARM not available)
+ * - t4: Metallic map (when ARM not available)
+ * - t5: AO map (when ARM not available)
+ * - t6: Emission map
+ */
+struct GBufferMaterialData {
+    Vec4 albedo;
+    float roughness;
+    float metallic;
+    float alpha_clip;
+    float use_albedo_map;
+    float use_normal_map;
+    float use_arm_map;
+    float use_roughness_map;
+    float use_metallic_map;
+    float use_ao_map;
+    float use_emission_map;
+    float _padding_mat[3];
+};
+
+/**
  * @brief G-Buffer rendering pass for deferred shading
  * 
  * Renders scene geometry into multiple render targets for deferred lighting.
@@ -85,6 +112,8 @@ private:
     void create_pipeline();
     void create_uniform_buffers();
 
+    void create_samplers();
+
     ShaderRef vertex_shader_;
     ShaderRef fragment_shader_;
     RHIGraphicsPipelineRef pipeline_;
@@ -93,6 +122,10 @@ private:
     // Uniform buffers
     RHIBufferRef per_frame_buffer_;   // Slot b0: view, proj, camera
     RHIBufferRef per_object_buffer_;  // Slot b1: model matrix
+    RHIBufferRef material_buffer_;    // Slot b2: material data
+
+    // Sampler
+    RHISamplerRef default_sampler_;   // Slot s0
 
     GBufferPerFrameData per_frame_data_;
     bool per_frame_dirty_ = true;
