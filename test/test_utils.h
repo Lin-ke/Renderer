@@ -13,8 +13,27 @@
 // Forward declarations
 class Scene;
 class CameraComponent;
+struct RenderPacket;
+class RDGBuilder;
+struct CpuProfileFrame;
 
 namespace test_utils {
+
+/**
+ * @brief Export CpuProfiler frames to Chrome Tracing JSON format.
+ * Open the output file in chrome://tracing or https://ui.perfetto.dev
+ * @param filename Output file path
+ * @param frames The frames to export
+ * @return true on success
+ */
+bool export_chrome_tracing(const std::string& filename,
+                           const std::vector<const CpuProfileFrame*>& frames);
+
+/**
+ * @brief Export all profiler history frames to Chrome Tracing JSON.
+ * Convenience wrapper that pulls frames from CpuProfiler::instance().
+ */
+bool export_profiler_trace(const std::string& filename);
 
 /**
  * @brief Check if a filename is a UUID format
@@ -200,6 +219,7 @@ class RenderTestApp {
 public:
     using SceneCreateFunc = std::function<bool(const std::string&)>;
     using SceneLoadedFunc = std::function<void(SceneLoadResult&)>;
+    using BuildRDGFunc = std::function<void(class RDGBuilder&, const RenderPacket&)>;
 
     struct Config {
         std::string scene_path;
@@ -209,6 +229,7 @@ public:
         int capture_frame = 30; // 0 to disable
         SceneCreateFunc create_scene_func = nullptr;
         SceneLoadedFunc on_scene_loaded_func = nullptr;
+        BuildRDGFunc build_rdg_func = nullptr;  // Custom RDG building function
     };
 
     static bool run(const Config& config, std::vector<uint8_t>& out_screenshot_data, int* out_frames = nullptr);

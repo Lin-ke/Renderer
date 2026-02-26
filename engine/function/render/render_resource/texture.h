@@ -23,8 +23,8 @@ enum class TextureType {
 
 class Texture : public Asset {
 public:
-    Texture(const std::string& path);
-    Texture(const std::vector<std::string>& paths, TextureType type);
+    Texture(const std::string& path, RHIFormat format = FORMAT_R8G8B8A8_SRGB);
+    Texture(const std::vector<std::string>& paths, TextureType type, RHIFormat format = FORMAT_R8G8B8A8_SRGB);
     Texture(TextureType type, RHIFormat format, Extent3D extent, uint32_t array_layer = 1, uint32_t mip_levels = 0);
     ~Texture();
 
@@ -56,11 +56,13 @@ public:
         ar(cereal::make_nvp("extent", extent_));
         ar(cereal::make_nvp("mip_levels", mip_levels_));
         ar(cereal::make_nvp("array_layer", array_layer_));
+        ar(cereal::make_nvp("image_data", image_data_));
     }
 
 protected:
     std::string name_ = "";
     std::vector<std::string> paths_;
+    std::vector<std::vector<uint8_t>> image_data_;  // Embedded compressed image data (per face/layer)
     TextureType texture_type_;
     RHIFormat format_;
     Extent3D extent_;
@@ -69,7 +71,9 @@ protected:
 
     void init_rhi();
     void load_from_file();
-    void ensure_virtual_paths();  // Convert physical paths to virtual paths before saving
+    void load_from_image_data();   // Upload from embedded image_data_ to GPU
+    void capture_image_data();     // Read image files into image_data_
+    void ensure_virtual_paths();   // Convert physical paths to virtual paths before saving
 
 private:
     Texture() = default;

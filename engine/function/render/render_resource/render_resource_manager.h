@@ -150,14 +150,14 @@ private:
     // Per-frame resources (double buffered)
     struct PerFrameResource {
         std::unique_ptr<Buffer<CameraInfo>> camera_buffer;
-        std::shared_ptr<Buffer<ObjectInfo>> object_buffer;
         std::unique_ptr<Buffer<LightInfo>> light_buffer;
+        RHIBufferRef object_buffer_rhi;  // Raw buffer for bindless object data (array)
     };
     std::array<std::unique_ptr<PerFrameResource>, FRAMES_IN_FLIGHT> per_frame_resources_;
 
     // Multi-frame resources (persistent)
     std::unique_ptr<Buffer<RenderGlobalSetting>> global_setting_buffer_;
-    std::shared_ptr<Buffer<MaterialInfo>> material_buffer_;
+    RHIBufferRef material_buffer_rhi_;  // Raw buffer for bindless material data (array)
 
     // Global textures
     TextureRef depth_texture_;

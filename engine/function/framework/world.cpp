@@ -46,16 +46,34 @@ void World::tick(float delta_time) {
     active_scene_->tick(delta_time);
 }
 
+static void collect_mesh_renderers_recursive(Entity* entity,
+                                              std::vector<MeshRendererComponent*>& out) {
+    if (!entity) return;
+    auto* mesh = entity->get_component<MeshRendererComponent>();
+    if (mesh) {
+        out.push_back(mesh);
+    }
+    for (auto& child : entity->get_children()) {
+        collect_mesh_renderers_recursive(child.get(), out);
+    }
+}
+
+static Entity* find_camera_recursive(Entity* entity) {
+    if (!entity) return nullptr;
+    if (entity->get_component<CameraComponent>()) return entity;
+    for (auto& child : entity->get_children()) {
+        auto* found = find_camera_recursive(child.get());
+        if (found) return found;
+    }
+    return nullptr;
+}
+
 std::vector<MeshRendererComponent*> World::get_mesh_renderers() const {
     std::vector<MeshRendererComponent*> renderers;
     if (!active_scene_) return renderers;
 
     for (auto& entity : active_scene_->entities_) {
-        if (!entity) continue;
-        auto* mesh = entity->get_component<MeshRendererComponent>();
-        if (mesh) {
-            renderers.push_back(mesh);
-        }
+        collect_mesh_renderers_recursive(entity.get(), renderers);
     }
     return renderers;
 }
@@ -65,9 +83,9 @@ CameraComponent* World::get_active_camera() const {
 
     for (auto& entity : active_scene_->entities_) {
         if (!entity) continue;
-        auto* camera = entity->get_component<CameraComponent>();
-        if (camera) {
-            return camera;
+        auto* found = find_camera_recursive(entity.get());
+        if (found) {
+            return found->get_component<CameraComponent>();
         }
     }
     return nullptr;

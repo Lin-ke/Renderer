@@ -1,10 +1,12 @@
 #pragma once
 
 #include "engine/function/render/render_pass/render_pass.h"
+#include "engine/function/render/render_pass/g_buffer_pass.h"
 #include "engine/function/render/render_resource/shader.h"
 #include "engine/function/render/render_resource/texture.h"
 #include "engine/core/math/math.h"
 #include <memory>
+#include <vector>
 
 namespace render {
 
@@ -21,16 +23,16 @@ enum class LightType : uint32_t {
 };
 
 /**
- * @brief Light data for shader
+ * @brief Light data for shader (matches HLSL Light struct)
  */
 struct ShaderLightData {
-    Vec3 position;      // For point/spot: world position, For directional: direction
+    Vec3 position;      // For point/spot: world position
     float _padding0;
     
     Vec3 color;
     float intensity;
     
-    Vec3 direction;     // For spot light
+    Vec3 direction;     // For directional/spot: light travel direction
     float range;        // For point/spot
     
     uint32_t type;      // LightType
@@ -38,6 +40,8 @@ struct ShaderLightData {
     float outer_angle;  // For spot light (cosine)
     float _padding1;
 };
+
+static constexpr uint32_t MAX_LIGHTS = 32;
 
 /**
  * @brief Per-frame data for deferred lighting
@@ -71,6 +75,9 @@ public:
 
     void init() override;
     void build(RDGBuilder& builder) override;
+    void build(RDGBuilder& builder, RDGTextureHandle color_target);
+    void build(RDGBuilder& builder, const GBufferOutputHandles& gbuffer);
+    void build(RDGBuilder& builder, RDGTextureHandle color_target, const GBufferOutputHandles& gbuffer);
 
     std::string_view get_name() const override { return "DeferredLightingPass"; }
     PassType get_type() const override { return PassType::DeferredLighting; }
@@ -84,6 +91,11 @@ public:
      * @brief Set main directional light
      */
     void set_main_light(const Vec3& dir, const Vec3& color, float intensity);
+    
+    /**
+     * @brief Set additional lights (point, spot, extra directional)
+     */
+    void set_lights(const std::vector<ShaderLightData>& lights);
     
     /**
      * @brief Check if pass is ready
@@ -114,8 +126,14 @@ private:
     RHIBufferRef per_frame_buffer_;
     RHIBufferRef light_buffer_;  // SSBO for multiple lights
     
+    // Sampler for GBuffer textures
+    RHISamplerRef gbuffer_sampler_;
+    
     DeferredLightingPerFrameData per_frame_data_;
     bool per_frame_dirty_ = true;
+    
+    std::vector<ShaderLightData> lights_data_;
+    bool lights_dirty_ = true;
     
     bool initialized_ = false;
 };

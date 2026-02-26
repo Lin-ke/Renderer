@@ -13,8 +13,6 @@
 #include "engine/function/render/render_resource/material.h"
 #include "engine/function/render/render_system/render_system.h"
 #include "engine/function/render/render_system/render_mesh_manager.h"
-#include "engine/function/render/render_pass/g_buffer_pass.h"
-#include "engine/function/render/render_pass/deferred_lighting_pass.h"
 #include "engine/function/asset/asset_manager.h"
 #include "engine/core/log/Log.h"
 
@@ -26,7 +24,7 @@
 DEFINE_LOG_TAG(LogPBRTest, "PBR");
 
 static const std::string PBR_SCENE_PATH = "/Game/pbr_scene.asset";
-static const std::string MODEL_PATH = "/Engine/models/material_ball/material_ball.fbx";
+static const std::string MODEL_PATH = "/Engine/models/earth/Planet.fbx";
 
 static bool create_pbr_scene(const std::string& scene_path) {
     auto scene = std::make_shared<Scene>();
@@ -75,6 +73,13 @@ static bool create_pbr_scene(const std::string& scene_path) {
     return true;
 }
 
+static void on_scene_loaded(test_utils::SceneLoadResult& result) {
+    // PBR automatically uses deferred rendering
+    if (auto mesh_manager = EngineContext::render_system()->get_mesh_manager()) {
+        mesh_manager->set_active_camera(result.camera);
+    }
+}
+
 TEST_CASE("PBR deferred rendering", "[pbr]") {
     test_utils::TestContext::reset();
     
@@ -82,22 +87,14 @@ TEST_CASE("PBR deferred rendering", "[pbr]") {
     REQUIRE(EngineContext::rhi() != nullptr);
     REQUIRE(EngineContext::render_system() != nullptr);
     
-    // Init deferred passes
-    auto gbuffer = std::make_shared<render::GBufferPass>();
-    auto lighting = std::make_shared<render::DeferredLightingPass>();
-    gbuffer->init();
-    lighting->init();
-    
-    REQUIRE(gbuffer->is_ready());
-    REQUIRE(lighting->is_ready());
-    
     test_utils::RenderTestApp::Config config;
     config.scene_path = PBR_SCENE_PATH;
     config.width = 1280;
     config.height = 720;
-    config.max_frames = 60;
+    config.max_frames = 6000;
     config.capture_frame = 30;
     config.create_scene_func = create_pbr_scene;
+    config.on_scene_loaded_func = on_scene_loaded;
     
     std::vector<uint8_t> screenshot;
     int frames = 0;

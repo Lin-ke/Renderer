@@ -159,8 +159,12 @@ private:
         return dynamic_cast<Type>(node)->get_handle();
     }
 
+public:
     RHITextureRef resolve(RDGTextureNodeRef texture_node);
+    RHITextureRef resolve(RDGTextureHandle handle);
     RHIBufferRef resolve(RDGBufferNodeRef buffer_node);
+    RHIBufferRef resolve(RDGBufferHandle handle);
+private:
     void release(RDGTextureNodeRef texture_node, RHIResourceState state);
     void release(RDGBufferNodeRef buffer_node, RHIResourceState state);
 

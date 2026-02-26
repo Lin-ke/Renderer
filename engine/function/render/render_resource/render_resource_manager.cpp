@@ -7,6 +7,20 @@
 #include <cstdint>
 #include <fstream>
 
+// Helper function to create raw buffer for arrays
+// Uses DYNAMIC memory for CPU write + SRV for GPU read (DX11 DYNAMIC cannot use UAV)
+template<typename T>
+static RHIBufferRef create_array_buffer(uint32_t count) {
+    RHIBufferInfo info = {};
+    info.size = sizeof(T) * count;
+    info.memory_usage = MEMORY_USAGE_CPU_TO_GPU;  // Dynamic, mappable
+    // Use VERTEX_BUFFER flag to get a valid BindFlags (DYNAMIC requires at least one bind flag)
+    // The buffer can still be used as raw buffer via byte address or structured buffer views
+    info.type = RESOURCE_TYPE_VERTEX_BUFFER;  
+    info.creation_flag = 0;
+    return global_rhi_backend()->create_buffer(info);
+}
+
 #ifndef MAX_PER_FRAME_RESOURCE_SIZE
 #define MAX_PER_FRAME_RESOURCE_SIZE 4096
 #endif
@@ -70,7 +84,7 @@ void RenderResourceManager::destroy() {
         resource.reset();
     }
 
-    material_buffer_.reset();
+    material_buffer_rhi_.reset();
 
     initialized_ = false;
     INFO(LogRenderResourceManager, "RenderResourceManager destroyed");
@@ -84,6 +98,8 @@ void RenderResourceManager::init_per_frame_resources() {
         
         per_frame_resources_[i]->camera_buffer = std::make_unique<Buffer<CameraInfo>>(RESOURCE_TYPE_UNIFORM_BUFFER);
         per_frame_resources_[i]->light_buffer = std::make_unique<Buffer<LightInfo>>(RESOURCE_TYPE_UNIFORM_BUFFER);
+        // Create object buffer as raw buffer (array of ObjectInfo)
+        per_frame_resources_[i]->object_buffer_rhi = create_array_buffer<ObjectInfo>(MAX_PER_FRAME_OBJECT_SIZE);
     }
 
     INFO(LogRenderResourceManager, "Per-frame resources initialized");
@@ -93,6 +109,9 @@ void RenderResourceManager::init_global_resources() {
     INFO(LogRenderResourceManager, "Initializing global resources...");
 
     global_setting_buffer_ = std::make_unique<Buffer<RenderGlobalSetting>>(RESOURCE_TYPE_UNIFORM_BUFFER);
+    
+    // Create material buffer for bindless material access (array of MaterialInfo)
+    material_buffer_rhi_ = create_array_buffer<MaterialInfo>(MAX_PER_FRAME_RESOURCE_SIZE);
 
     default_black_texture_ = std::make_shared<Texture>(TextureType::Texture2D, FORMAT_R8G8B8A8_UNORM, Extent3D{1, 1, 1});
     if (default_black_texture_) {
@@ -147,24 +166,49 @@ void RenderResourceManager::set_camera_info(const CameraInfo& camera_info) {
 
 void RenderResourceManager::set_object_info(const ObjectInfo& object_info, uint32_t object_id) {
     assert(object_id < MAX_PER_FRAME_OBJECT_SIZE && "Object ID out of range");
-    (void)object_info;
+    
+    uint32_t frame_index = EngineContext::current_frame_index() % FRAMES_IN_FLIGHT;
+    if (per_frame_resources_[frame_index]->object_buffer_rhi) {
+        void* mapped = per_frame_resources_[frame_index]->object_buffer_rhi->map();
+        if (mapped) {
+            memcpy((uint8_t*)mapped + object_id * sizeof(ObjectInfo), &object_info, sizeof(ObjectInfo));
+            per_frame_resources_[frame_index]->object_buffer_rhi->unmap();
+        }
+    }
 }
 
 void RenderResourceManager::set_material_info(const MaterialInfo& material_info, uint32_t material_id) {
     assert(material_id < MAX_PER_FRAME_RESOURCE_SIZE && "Material ID out of range");
-    (void)material_info;
+    
+    if (material_buffer_rhi_) {
+        void* mapped = material_buffer_rhi_->map();
+        if (mapped) {
+            memcpy((uint8_t*)mapped + material_id * sizeof(MaterialInfo), &material_info, sizeof(MaterialInfo));
+            material_buffer_rhi_->unmap();
+        }
+    }
 }
 
 void RenderResourceManager::set_directional_light_info(const DirectionalLightInfo& light_info, 
                                                         uint32_t cascade) {
     assert(cascade < DIRECTIONAL_SHADOW_CASCADE_LEVEL && "Cascade index out of range");
-    (void)light_info;
+    
+    uint32_t frame_index = EngineContext::current_frame_index() % FRAMES_IN_FLIGHT;
+    if (per_frame_resources_[frame_index]->light_buffer) {
+        uint32_t offset = cascade * sizeof(DirectionalLightInfo);
+        per_frame_resources_[frame_index]->light_buffer->set_data(&light_info, sizeof(DirectionalLightInfo), offset);
+    }
 }
 
 void RenderResourceManager::set_point_light_info(const PointLightInfo& light_info, 
                                                   uint32_t light_id) {
     assert(light_id < MAX_POINT_LIGHT_COUNT && "Point light ID out of range");
-    (void)light_info;
+    
+    uint32_t frame_index = EngineContext::current_frame_index() % FRAMES_IN_FLIGHT;
+    if (per_frame_resources_[frame_index]->light_buffer) {
+        uint32_t offset = POINT_LIGHT_OFFSET + light_id * sizeof(PointLightInfo);
+        per_frame_resources_[frame_index]->light_buffer->set_data(&light_info, sizeof(PointLightInfo), offset);
+    }
 }
 
 void RenderResourceManager::set_global_setting(const RenderGlobalSetting& setting) {
@@ -223,5 +267,5 @@ RHIBufferRef RenderResourceManager::get_per_frame_camera_buffer() {
 
 RHIBufferRef RenderResourceManager::get_per_frame_object_buffer() {
     uint32_t frame_index = EngineContext::current_frame_index() % FRAMES_IN_FLIGHT;
-    return per_frame_resources_[frame_index]->object_buffer->buffer_;
+    return per_frame_resources_[frame_index]->object_buffer_rhi;
 }

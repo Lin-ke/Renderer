@@ -38,6 +38,9 @@ static std::string get_entity_icon(Entity *entity) {
 	if (!entity) {
 		return "?";
 	}
+	if (entity->get_component<SkyboxComponent>()) {
+		return "[S]"; // Skybox
+	}
 	if (entity->get_component<DirectionalLightComponent>()) {
 		return "[D]"; // Directional light
 	}
@@ -58,6 +61,16 @@ static std::string get_entity_name(Entity *entity) {
 		return "Unknown";
 	}
 
+	// Use entity name if set
+	const std::string& entity_name = entity->get_name();
+	if (!entity_name.empty()) {
+		return entity_name;
+	}
+
+	// Fallback to component type name
+	if (entity->get_component<SkyboxComponent>()) {
+		return "Skybox";
+	}
 	if (entity->get_component<DirectionalLightComponent>()) {
 		return "Directional Light";
 	}
@@ -372,8 +385,8 @@ void RenderSystem::build_and_execute_rdg(uint32_t frame_index, const RenderPacke
 		}
 	}
 
-	// Execute depth prepass first
-	if (enable_depth_prepass_) {
+	// Execute depth prepass first (before any forward/render passes)
+	if (enable_depth_prepass_ && depth_prepass_) {
 		PROFILE_SCOPE("RenderSystem_DepthPrepass");
 
 		depth_prepass_->set_per_frame_data(
@@ -383,10 +396,17 @@ void RenderSystem::build_and_execute_rdg(uint32_t frame_index, const RenderPacke
 		depth_prepass_->build(rdg_builder, depth_target, batches);
 	}
 
-	// Build forward passes using the mesh manager
-	if (enable_forward_pass_) {
-		PROFILE_SCOPE("RenderSystem_ForwardPasses");
-		mesh_manager_->build_rdg(rdg_builder, color_target, depth_target);
+	// Call custom RDG build function if set (for testing)
+	// Custom RDG (e.g., deferred pass) should execute before forward pass
+	if (custom_rdg_build_func_) {
+		PROFILE_SCOPE("RenderSystem_CustomRDG");
+		custom_rdg_build_func_(rdg_builder, packet);
+	}
+
+	// Build mesh passes using the mesh manager
+	if (enable_pbr_pass_ || enable_npr_pass_) {
+		PROFILE_SCOPE("RenderSystem_MeshPasses");
+		mesh_manager_->build_rdg(rdg_builder, color_target, depth_target, enable_pbr_pass_, enable_npr_pass_);
 	}
 
 	// Build skybox pass (renders after opaque objects)
@@ -432,7 +452,8 @@ void RenderSystem::build_and_execute_rdg(uint32_t frame_index, const RenderPacke
 			ImGui::Separator();
 			ImGui::Text("Render Passes:");
 			ImGui::Checkbox("Depth Prepass", &enable_depth_prepass_);
-			ImGui::Checkbox("Forward Pass", &enable_forward_pass_);
+			ImGui::Checkbox("PBR Pass", &enable_pbr_pass_);
+			ImGui::Checkbox("NPR Pass", &enable_npr_pass_);
 			ImGui::Checkbox("Skybox Pass", &enable_skybox_pass_);
 			ImGui::Checkbox("Depth Visualize", &enable_depth_visualize_);
 			
@@ -455,6 +476,14 @@ void RenderSystem::build_and_execute_rdg(uint32_t frame_index, const RenderPacke
 			}
 			
 			ImGui::End();
+
+			// Custom game UI callbacks
+			{
+				std::lock_guard<std::mutex> lock(custom_ui_callbacks_mutex_);
+				for (const auto& [name, callback] : custom_ui_callbacks_) {
+					callback();
+				}
+			}
 			
 			if (ProfilerWidget::is_visible()) {
 				ProfilerWidget::draw_window();
@@ -745,8 +774,27 @@ bool RenderSystem::tick(const RenderPacket &packet) {
 	return true;
 }
 
+bool RenderSystem::add_custom_ui_callback(const std::string& name, std::function<void()> func) {
+	std::lock_guard<std::mutex> lock(custom_ui_callbacks_mutex_);
+	auto [it, inserted] = custom_ui_callbacks_.emplace(name, std::move(func));
+	return inserted;
+}
+
+bool RenderSystem::remove_custom_ui_callback(const std::string& name) {
+	std::lock_guard<std::mutex> lock(custom_ui_callbacks_mutex_);
+	return custom_ui_callbacks_.erase(name) > 0;
+}
+
+void RenderSystem::clear_custom_ui_callbacks() {
+	std::lock_guard<std::mutex> lock(custom_ui_callbacks_mutex_);
+	custom_ui_callbacks_.clear();
+}
+
 void RenderSystem::cleanup_for_test() {
 	// WARN(LogRenderSystem, "cleanup_for_test() called, backend_={}", (void*)backend_.get());
+	
+	// Clear custom UI callbacks
+	clear_custom_ui_callbacks();
 	
 	// Check if backend is valid (device not destroyed)
 	if (!backend_ || !backend_->is_valid()) {
@@ -901,16 +949,19 @@ void RenderSystem::draw_entity_node(Entity *entity) {
 	// Check if this entity is selected
 	bool is_selected = (selected_entity_ == entity);
 
+	// Check if entity has submeshes (for MeshRenderer) or children
+	auto* mesh_renderer = entity->get_component<MeshRendererComponent>();
+	bool has_submeshes = (mesh_renderer != nullptr);
+	bool has_children = entity->has_children();
+	bool has_sub_content = has_submeshes || has_children;
+
 	// Tree node flags
 	// Note: Don't use OpenOnDoubleClick here - we handle double-click manually for camera move
 	ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow;
 	if (is_selected) {
 		flags |= ImGuiTreeNodeFlags_Selected;
 	}
-
-	// Check if entity has children (for now, assume no children hierarchy)
-	bool has_children = false; // Simplified for now
-	if (!has_children) {
+	if (!has_sub_content) {
 		flags |= ImGuiTreeNodeFlags_Leaf;
 	}
 
@@ -931,8 +982,46 @@ void RenderSystem::draw_entity_node(Entity *entity) {
 	}
 
 	if (node_open) {
-		// Recursively draw children (when hierarchy is implemented)
-		// for (auto& child : entity->get_children()) { draw_entity_node(child); }
+		// Draw child entities recursively
+		for (auto& child : entity->get_children()) {
+			draw_entity_node(child.get());
+		}
+		// Draw submeshes if this is a mesh entity
+		if (has_submeshes) {
+			draw_mesh_submeshes(mesh_renderer);
+		}
+		ImGui::TreePop();
+	}
+}
+
+void RenderSystem::draw_mesh_submeshes(MeshRendererComponent* mesh_renderer) {
+	if (!mesh_renderer) {
+		return;
+	}
+
+	auto model = mesh_renderer->get_model();
+	if (!model) {
+		ImGui::TreeNodeEx("  (No model)", ImGuiTreeNodeFlags_Leaf);
+		return;
+	}
+
+	uint32_t submesh_count = model->get_submesh_count();
+	for (uint32_t i = 0; i < submesh_count; ++i) {
+		std::string submesh_label = "  [Submesh " + std::to_string(i) + "]";
+		
+		// Get material info if available
+		auto material = mesh_renderer->get_material(i);
+		if (material) {
+			submesh_label += " - ";
+			switch (material->get_material_type()) {
+				case MaterialType::PBR: submesh_label += "PBR"; break;
+				case MaterialType::NPR: submesh_label += "NPR"; break;
+				case MaterialType::Skybox: submesh_label += "Skybox"; break;
+				default: submesh_label += "Base"; break;
+			}
+		}
+		
+		ImGui::TreeNodeEx(submesh_label.c_str(), ImGuiTreeNodeFlags_Leaf);
 		ImGui::TreePop();
 	}
 }
@@ -979,8 +1068,9 @@ void RenderSystem::move_camera_to_view_entity(Entity* target_entity) {
 		return;
 	}
 	
-	// ★ 计算目标中心点：使用包围盒中心，而不是模型原点（通常在脚下）
-	Vec3 target_center = target_transform->transform.get_position();
+	// ★ 计算目标中心点：使用包围盒中心
+	Vec3 target_center = target_transform->get_world_position();
+	Vec3 camera_pos = target_center;
 	
 	// 尝试从 MeshRendererComponent 获取包围盒
 	auto* mesh_renderer = target_entity->get_component<MeshRendererComponent>();
@@ -988,24 +1078,33 @@ void RenderSystem::move_camera_to_view_entity(Entity* target_entity) {
 		BoundingBox bbox = mesh_renderer->get_model()->get_bounding_box();
 		// 包围盒中心（本地空间）
 		Vec3 local_center = (bbox.min + bbox.max) * 0.5f;
-		// 手动转换到世界空间: world_pos = position + right * local_x + up * local_y + front * local_z
 		const auto& t = target_transform->transform;
+		
+		// 计算目标中心（世界空间）
 		target_center = t.get_position() 
 			+ t.right() * local_center.x 
 			+ t.up() * local_center.y 
 			+ t.front() * local_center.z;
-		INFO(LogRenderSystem, "Using bounding box center: ({:.2f}, {:.2f}, {:.2f})", 
-			 target_center.x, target_center.y, target_center.z);
+		
+		// 计算正面（z+方向）面中心：xy为包围盒中心，z为max.z
+		Vec3 local_front_face_center = Vec3(local_center.x, local_center.y, bbox.max.z);
+		
+		// 相机位置：正面面中心 + z+方向2m
+		// world_pos = position + right * local_x + up * local_y + front * (local_z + 2.0f)
+		camera_pos = t.get_position()
+			+ t.right() * local_front_face_center.x
+			+ t.up() * local_front_face_center.y
+			+ t.front() * (local_front_face_center.z + 2.0f);
+		
+		INFO(LogRenderSystem, "Using bounding box front face center: target=({:.2f}, {:.2f}, {:.2f}), camera=({:.2f}, {:.2f}, {:.2f})", 
+			 target_center.x, target_center.y, target_center.z,
+			 camera_pos.x, camera_pos.y, camera_pos.z);
 	} else {
 		// 没有 MeshRenderer，使用 transform position 并假设中心在 Y 轴上方 1 米处
 		target_center.y += 1.0f;
+		// 相机放在z+方向2m处
+		camera_pos = target_center + target_transform->transform.front() * 2.0f;
 	}
-	
-	// Get target front direction
-	Vec3 target_front = target_transform->transform.front();
-	
-	// Calculate camera position: 0.5 meters behind the target center (opposite to target's front)
-	Vec3 camera_pos = target_center - target_front * 0.5f;
 	
 	// Calculate rotation to look at target center
 	// Direction from camera to target
@@ -1371,7 +1470,7 @@ void RenderSystem::draw_light_gizmo(CameraComponent *camera, Entity *entity, con
 		return;
 	}
 
-	Vec3 position = transform->transform.get_position();
+	Vec3 position = transform->get_world_position();
 
 	// Project 3D position to screen space
 	Mat4 view = camera->get_view_matrix();

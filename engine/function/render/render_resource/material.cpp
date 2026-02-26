@@ -22,7 +22,7 @@ Material::~Material() {
 }
 
 PBRMaterial::PBRMaterial() : Material() {
-    render_pass_mask_ = PASS_MASK_PBR_FORWARD;
+    render_pass_mask_ = PASS_MASK_DEFERRED_PASS;
     update();
 }
 

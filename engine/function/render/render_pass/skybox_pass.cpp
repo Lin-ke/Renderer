@@ -341,7 +341,7 @@ void SkyboxPass::build(RDGBuilder& builder, RDGTextureHandle color_target,
         return;
     }
     
-    INFO(LogSkyboxPass, "Building skybox pass for {} skyboxes", skyboxes.size());
+    // Per-frame log removed to avoid stutter from log buffer flush
     
     // Prepare per-frame data (remove translation from view)
     per_frame_data_.view = view;
@@ -374,7 +374,7 @@ void SkyboxPass::build(RDGBuilder& builder, RDGTextureHandle color_target,
             continue;
         }
         
-        INFO(LogSkyboxPass, "Processing skybox {} with material", skybox_index);
+
         
         // Ensure cube texture is ready
         if (!material->ensure_cube_texture_ready()) {
@@ -382,7 +382,7 @@ void SkyboxPass::build(RDGBuilder& builder, RDGTextureHandle color_target,
             continue;
         }
         
-        INFO(LogSkyboxPass, "Skybox {} cube texture ready", skybox_index);
+
         
         auto cube_texture = material->get_cube_texture();
         if (!cube_texture) {
@@ -393,8 +393,7 @@ void SkyboxPass::build(RDGBuilder& builder, RDGTextureHandle color_target,
             WARN(LogSkyboxPass, "Skybox {} cube_texture->texture_ (RHI) is null", skybox_index);
             continue;
         }
-        INFO(LogSkyboxPass, "Skybox {} cube_texture valid: RHI texture ptr = {}", 
-             skybox_index, (void*)cube_texture->texture_.get());
+
         
         // Get intensity from material
         float intensity = material->get_intensity();
@@ -423,9 +422,6 @@ void SkyboxPass::build(RDGBuilder& builder, RDGTextureHandle color_target,
                     WARN(LogSkyboxPass, "Execute lambda: command is null");
                     return;
                 }
-                
-                INFO(LogSkyboxPass, "Execute lambda: rendering skybox with cube texture ptr = {}", 
-                     (void*)captured_cube_tex.get());
                 
                 cmd->set_graphics_pipeline(pipeline_);
                 
@@ -481,9 +477,7 @@ void SkyboxPass::build(RDGBuilder& builder, RDGTextureHandle color_target,
                 cmd->bind_index_buffer(index_buffer, 0);
                 
                 // Draw the cube
-                INFO(LogSkyboxPass, "Execute lambda: drawing cube with {} indices", index_count);
                 cmd->draw_indexed(index_count, 1, 0, 0, 0);
-                INFO(LogSkyboxPass, "Execute lambda: skybox draw call submitted");
             })
             .finish();
     }

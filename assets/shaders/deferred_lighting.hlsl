@@ -9,18 +9,19 @@ struct VSOutput {
     float2 uv : TEXCOORD0;
 };
 
-static const float2 positions[4] = {
-    float2(-1.0, -1.0),
-    float2( 1.0, -1.0),
-    float2( 1.0,  1.0),
-    float2(-1.0,  1.0)
+// Full-screen triangle covering entire viewport
+// Using a large triangle (3 vertices) instead of quad (4 vertices) for efficiency
+// The triangle extends beyond NDC range (-1 to 1) to ensure full screen coverage
+static const float2 positions[3] = {
+    float2(-1.0, -1.0),  // Bottom-left
+    float2( 3.0, -1.0),  // Bottom-right (extended beyond screen)
+    float2(-1.0,  3.0)   // Top-left (extended beyond screen)
 };
 
-static const float2 uvs[4] = {
-    float2(0.0, 1.0),
-    float2(1.0, 1.0),
-    float2(1.0, 0.0),
-    float2(0.0, 0.0)
+static const float2 uvs[3] = {
+    float2(0.0, 1.0),    // Bottom-left
+    float2(2.0, 1.0),    // Bottom-right (UV extends beyond 1.0)
+    float2(0.0, -1.0)    // Top-left (UV extends beyond 1.0)
 };
 
 VSOutput VSMain(uint vertex_id : SV_VertexID) {
@@ -52,7 +53,7 @@ cbuffer PerFrame : register(b0) {
     float _padding0;
     
     uint light_count;
-    float _padding1[3];
+    float3 _padding1;
     
     float3 main_light_dir;
     float _padding2;
@@ -62,7 +63,13 @@ cbuffer PerFrame : register(b0) {
     float4x4 inv_view_proj;
 };
 
-// Light structure
+// Light types
+#define LIGHT_TYPE_DIRECTIONAL 0
+#define LIGHT_TYPE_POINT       1
+#define LIGHT_TYPE_SPOT        2
+#define MAX_LIGHTS             32
+
+// Light structure (matches ShaderLightData in C++)
 struct Light {
     float3 position;
     float _padding0;
@@ -77,6 +84,11 @@ struct Light {
     float inner_angle;
     float outer_angle;
     float _padding1;
+};
+
+// Light buffer (cbuffer b1, array of lights)
+cbuffer LightBuffer : register(b1) {
+    Light lights[MAX_LIGHTS];
 };
 
 // PBR Constants
@@ -121,7 +133,7 @@ float3 Diffuse_Lambert(float3 albedo) {
 }
 
 // PBR BRDF calculation
-float3 PBR_BRDF(float3 albedo, float roughness, float metallic, float3 N, float3 V, float3 L, out float3 F) {
+float3 PBR_BRDF(float3 albedo, float roughness, float metallic, float specular, float3 N, float3 V, float3 L, out float3 F) {
     float3 H = normalize(V + L);
     
     float NoV = saturate(dot(N, V));
@@ -130,7 +142,8 @@ float3 PBR_BRDF(float3 albedo, float roughness, float metallic, float3 N, float3
     float VoH = saturate(dot(V, H));
     
     // Fresnel reflectance at normal incidence
-    float3 F0 = lerp(0.04, albedo, metallic);
+    // specular controls the F0 for non-metallic surfaces (default 1.0 = 0.04)
+    float3 F0 = lerp(0.04 * specular, albedo, metallic);
     
     // Fresnel
     F = F_Schlick(VoH, F0);
@@ -144,29 +157,29 @@ float3 PBR_BRDF(float3 albedo, float roughness, float metallic, float3 N, float3
     // Specular
     float3 numerator = D * G * F;
     float denominator = 4.0 * NoV * NoL + 0.0001;
-    float3 specular = numerator / denominator;
+    float3 specular_contrib = numerator / denominator;
     
     // Diffuse (energy conservation)
     float3 kD = (1.0 - F) * (1.0 - metallic);
     float3 diffuse = kD * Diffuse_Lambert(albedo);
     
-    return diffuse + specular;
+    return diffuse + specular_contrib;
 }
 
 // Directional light calculation
-float3 CalcDirectionalLight(float3 albedo, float roughness, float metallic, float3 N, float3 V, float3 lightDir, float3 lightColor, float lightIntensity) {
+float3 CalcDirectionalLight(float3 albedo, float roughness, float metallic, float specular, float3 N, float3 V, float3 lightDir, float3 lightColor, float lightIntensity) {
     float3 L = normalize(-lightDir);
     float NoL = saturate(dot(N, L));
     
     float3 F;
-    float3 brdf = PBR_BRDF(albedo, roughness, metallic, N, V, L, F);
+    float3 brdf = PBR_BRDF(albedo, roughness, metallic, specular, N, V, L, F);
     
     float3 radiance = lightColor * lightIntensity;
     return brdf * radiance * NoL;
 }
 
 // Point light calculation
-float3 CalcPointLight(float3 albedo, float roughness, float metallic, float3 worldPos, float3 N, float3 V, Light light) {
+float3 CalcPointLight(float3 albedo, float roughness, float metallic, float specular, float3 worldPos, float3 N, float3 V, Light light) {
     float3 L = light.position - worldPos;
     float dist = length(L);
     L = normalize(L);
@@ -181,9 +194,35 @@ float3 CalcPointLight(float3 albedo, float roughness, float metallic, float3 wor
     float NoL = saturate(dot(N, L));
     
     float3 F;
-    float3 brdf = PBR_BRDF(albedo, roughness, metallic, N, V, L, F);
+    float3 brdf = PBR_BRDF(albedo, roughness, metallic, specular, N, V, L, F);
     
     float3 radiance = light.color * light.intensity * attenuation;
+    return brdf * radiance * NoL;
+}
+
+// Spot light calculation
+float3 CalcSpotLight(float3 albedo, float roughness, float metallic, float specular, float3 worldPos, float3 N, float3 V, Light light) {
+    float3 L = light.position - worldPos;
+    float dist = length(L);
+    L = normalize(L);
+    
+    // Spot cone attenuation (inner_angle/outer_angle store cosines)
+    float cos_angle = dot(normalize(light.direction), -L);
+    float spot_atten = saturate((cos_angle - light.outer_angle) / (light.inner_angle - light.outer_angle));
+    
+    // Distance attenuation
+    float dist_atten = 1.0;
+    if (light.range > 0.0) {
+        dist_atten = saturate(1.0 - (dist / light.range));
+        dist_atten *= dist_atten;
+    }
+    
+    float NoL = saturate(dot(N, L));
+    
+    float3 F;
+    float3 brdf = PBR_BRDF(albedo, roughness, metallic, specular, N, V, L, F);
+    
+    float3 radiance = light.color * light.intensity * dist_atten * spot_atten;
     return brdf * radiance * NoL;
 }
 
@@ -195,22 +234,20 @@ float4 PSMain(PSInput input) : SV_TARGET {
     float4 position_depth = g_position_depth.Sample(g_sampler, input.uv);
     
     // Unpack G-Buffer data
+    // RT0: Albedo (RGB) + AO (A)
     float3 albedo = albedo_ao.rgb;
     float ao = albedo_ao.a;
     
+    // RT1: Normal (RGB) + Roughness (A)
     float3 N = normalize(normal_roughness.rgb * 2.0 - 1.0);
     float roughness = clamp(normal_roughness.a, MIN_ROUGHNESS, MAX_ROUGHNESS);
     
+    // RT2: Metallic (R) + Emission (G) + Specular (B) + _padding (A)
     float metallic = material.r;
     float emission = material.g;
     float specular = material.b;
     
     float3 worldPos = position_depth.rgb;
-    
-    // Early out if no geometry
-    if (position_depth.a == 0.0) {
-        return float4(0.0, 0.0, 0.0, 1.0);
-    }
     
     // View direction
     float3 V = normalize(camera_pos - worldPos);
@@ -221,10 +258,25 @@ float4 PSMain(PSInput input) : SV_TARGET {
     // PBR Lighting
     float3 Lo = float3(0.0, 0.0, 0.0);
     
-    // Main directional light
+    // Main directional light (from cbuffer PerFrame)
     if (main_light_intensity > 0.0) {
-        Lo += CalcDirectionalLight(albedo, roughness, metallic, N, V, 
+        Lo += CalcDirectionalLight(albedo, roughness, metallic, specular, N, V, 
                                     main_light_dir, main_light_color, main_light_intensity);
+    }
+    
+    // Additional lights from light buffer
+    for (uint i = 0; i < min(light_count, MAX_LIGHTS); i++) {
+        Light light = lights[i];
+        if (light.intensity <= 0.0) continue;
+        
+        if (light.type == LIGHT_TYPE_DIRECTIONAL) {
+            Lo += CalcDirectionalLight(albedo, roughness, metallic, specular, N, V,
+                                        light.direction, light.color, light.intensity);
+        } else if (light.type == LIGHT_TYPE_POINT) {
+            Lo += CalcPointLight(albedo, roughness, metallic, specular, worldPos, N, V, light);
+        } else if (light.type == LIGHT_TYPE_SPOT) {
+            Lo += CalcSpotLight(albedo, roughness, metallic, specular, worldPos, N, V, light);
+        }
     }
     
     // Ambient lighting (simplified IBL)

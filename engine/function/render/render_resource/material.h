@@ -59,6 +59,10 @@ public:
     virtual AssetType get_asset_type() const override { return AssetType::Material; }
     virtual MaterialType get_material_type() const { return MaterialType::Base; }
 
+    // Material name (from MTL file or set manually)
+    void set_name(const std::string& name) { name_ = name; }
+    const std::string& get_name() const { return name_; }
+
     // Base class doesn't override on_load_asset/on_save_asset
     // Subclasses use ASSET_DEPS macro which generates load_asset_deps()/save_asset_deps()
     // Asset::on_load_asset() will call the generated load_asset_deps() automatically
@@ -92,6 +96,7 @@ public:
     template <class Archive>
     void serialize(Archive& ar) {
         ar(cereal::base_class<Asset>(this));
+        ar(cereal::make_nvp("name", name_));
         ar(cereal::make_nvp("render_queue", render_queue_));
         ar(cereal::make_nvp("render_pass_mask", render_pass_mask_));
         ar(cereal::make_nvp("cull_mode", cull_mode_));
@@ -105,6 +110,9 @@ public:
 
 protected:
     virtual void update() {}
+
+    // Material name
+    std::string name_;
 
     // Pipeline state only - no textures, no colors
     uint32_t render_queue_ = 1000;
@@ -141,6 +149,7 @@ public:
     void set_alpha_clip(float alpha_clip) { alpha_clip_ = alpha_clip; update(); }
     void set_roughness(float roughness) { roughness_ = roughness; update(); }
     void set_metallic(float metallic) { metallic_ = metallic; update(); }
+    void set_specular(float specular) { specular_ = specular; update(); }
     
     // Generic parameters
     void set_int(int32_t data, uint32_t index) { 
@@ -163,6 +172,11 @@ public:
     void set_diffuse_texture(TextureRef texture) { texture_diffuse_ = texture; update(); }
     void set_normal_texture(TextureRef texture) { texture_normal_ = texture; update(); }
     void set_arm_texture(TextureRef texture) { texture_arm_ = texture; update(); }
+    // Individual PBR textures (used when ARM is not available)
+    void set_roughness_texture(TextureRef texture) { texture_roughness_ = texture; update(); }
+    void set_metallic_texture(TextureRef texture) { texture_metallic_ = texture; update(); }
+    void set_ao_texture(TextureRef texture) { texture_ao_ = texture; update(); }
+    void set_emission_texture(TextureRef texture) { texture_emission_ = texture; update(); }
     
     // Getters
     inline Vec4 get_diffuse() const { return diffuse_; }
@@ -170,18 +184,27 @@ public:
     inline float get_alpha_clip() const { return alpha_clip_; }
     inline float get_roughness() const { return roughness_; }
     inline float get_metallic() const { return metallic_; }
+    inline float get_specular() const { return specular_; }
     inline int32_t get_int(uint32_t index) const { return ints_[index]; }
     inline float get_float(uint32_t index) const { return floats_[index]; }
     inline Vec4 get_color(uint32_t index) const { return colors_[index]; }
     inline TextureRef get_diffuse_texture() const { return texture_diffuse_; }
     inline TextureRef get_normal_texture() const { return texture_normal_; }
     inline TextureRef get_arm_texture() const { return texture_arm_; }
+    inline TextureRef get_roughness_texture() const { return texture_roughness_; }
+    inline TextureRef get_metallic_texture() const { return texture_metallic_; }
+    inline TextureRef get_ao_texture() const { return texture_ao_; }
+    inline TextureRef get_emission_texture() const { return texture_emission_; }
 
     // PBR manages its own texture dependencies
     ASSET_DEPS(
         (TextureRef, texture_diffuse_),
         (TextureRef, texture_normal_),
-        (TextureRef, texture_arm_)
+        (TextureRef, texture_arm_),
+        (TextureRef, texture_roughness_),
+        (TextureRef, texture_metallic_),
+        (TextureRef, texture_ao_),
+        (TextureRef, texture_emission_)
     )
 
     friend class cereal::access;
@@ -194,6 +217,7 @@ public:
         ar(cereal::make_nvp("alpha_clip", alpha_clip_));
         ar(cereal::make_nvp("roughness", roughness_));
         ar(cereal::make_nvp("metallic", metallic_));
+        ar(cereal::make_nvp("specular", specular_));
         ar(cereal::make_nvp("ints", ints_));
         ar(cereal::make_nvp("floats", floats_));
         ar(cereal::make_nvp("colors", colors_));
@@ -208,10 +232,15 @@ protected:
     float alpha_clip_ = 0.0f;
     float roughness_ = 0.5f;
     float metallic_ = 0.0f;
+    float specular_ = 1.0f;  // Specular multiplier for F0 (default 1.0 = standard 0.04)
 
     std::array<int32_t, 8> ints_ = { 0 };
     std::array<float, 8> floats_ = { 0.0f };
     std::array<Vec4, 8> colors_ = { Vec4::Zero() };
+    
+    // PBR textures are declared via ASSET_DEPS macro:
+    // texture_diffuse_, texture_normal_, texture_arm_
+    // texture_roughness_, texture_metallic_, texture_ao_, texture_emission_
 };
 
 using PBRMaterialRef = std::shared_ptr<PBRMaterial>;

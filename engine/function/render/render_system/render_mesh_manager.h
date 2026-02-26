@@ -3,6 +3,7 @@
 #include "engine/function/render/rhi/rhi_structs.h"
 #include "engine/function/render/graph/rdg_handle.h"
 #include "engine/function/render/render_pass/forward_pass.h"
+#include "engine/function/render/render_pass/npr_forward_pass.h"
 #include "engine/function/render/render_pass/mesh_pass.h"
 #include <memory>
 #include <vector>
@@ -15,8 +16,9 @@ class RDGBuilder;
 
 namespace render {
     class ForwardPass;
-    class PBRForwardPass;
     class NPRForwardPass;
+    class GBufferPass;
+    class DeferredLightingPass;
     struct DrawBatch;
 }
 
@@ -55,7 +57,7 @@ public:
     /**
      * @brief Get the PBR forward pass for configuration
      */
-    std::shared_ptr<render::PBRForwardPass> get_pbr_forward_pass() { return pbr_forward_pass_; }
+
 
     /**
      * @brief Get the NPR forward pass for configuration
@@ -67,20 +69,6 @@ public:
      * @param enable true for wireframe, false for solid
      */
     void set_wireframe(bool enable);
-
-    /**
-     * @brief Enable or disable PBR rendering
-     * @param enable true to use PBRForwardPass, false to use ForwardPass
-     */
-    void set_pbr_enabled(bool enable) { pbr_enabled_ = enable; }
-    bool is_pbr_enabled() const { return pbr_enabled_; }
-
-    /**
-     * @brief Enable or disable NPR rendering
-     * @param enable true to use NPRForwardPass
-     */
-    void set_npr_enabled(bool enable) { npr_enabled_ = enable; }
-    bool is_npr_enabled() const { return npr_enabled_; }
 
     /**
      * @brief Set the active camera for rendering
@@ -104,9 +92,12 @@ public:
      * @param builder RDG builder
      * @param color_target Color attachment target handle
      * @param depth_target Depth attachment target handle (optional)
+     * @param enable_pbr Enable PBR deferred rendering path
+     * @param enable_npr Enable NPR forward rendering path
      */
     void build_rdg(RDGBuilder& builder, RDGTextureHandle color_target,
-                   std::optional<RDGTextureHandle> depth_target);
+                   std::optional<RDGTextureHandle> depth_target,
+                   bool enable_pbr = true, bool enable_npr = true);
     
     /**
      * @brief Cleanup runtime state for testing (keeps passes initialized)
@@ -121,10 +112,9 @@ private:
     std::vector<render::DrawBatch> current_batches_;
 
     std::shared_ptr<render::ForwardPass> forward_pass_;
-    std::shared_ptr<render::PBRForwardPass> pbr_forward_pass_;
     std::shared_ptr<render::NPRForwardPass> npr_forward_pass_;
-    bool pbr_enabled_ = false;
-    bool npr_enabled_ = false;
+    std::shared_ptr<render::GBufferPass> g_buffer_pass_;
+    std::shared_ptr<render::DeferredLightingPass> deferred_lighting_pass_;
 
     std::vector<MeshRendererComponent*> mesh_renderers_;
     CameraComponent* active_camera_ = nullptr;

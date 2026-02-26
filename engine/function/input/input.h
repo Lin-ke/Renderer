@@ -23,6 +23,7 @@ public:
     
     void get_mouse_position(int& x, int& y) const;
     void get_mouse_delta(float& dx, float& dy) const;
+    float get_scroll_delta() const;
     void tick();
 
     // Internal update methods called by Window
@@ -31,6 +32,7 @@ public:
     void on_mouse_move(int x, int y);
     void on_mouse_button_down(MouseButton button);
     void on_mouse_button_up(MouseButton button);
+    void on_mouse_scroll(float delta);
 
 private:
     Input() = default;
@@ -50,4 +52,6 @@ private:
     int last_mouse_y_ = 0;
     float mouse_delta_x_ = 0.0f;
     float mouse_delta_y_ = 0.0f;
+    float scroll_delta_ = 0.0f;
+    float scroll_accumulator_ = 0.0f;
 };

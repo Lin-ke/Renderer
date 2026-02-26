@@ -532,6 +532,18 @@ RHITextureRef RDGBuilder::resolve(RDGTextureNodeRef texture_node) {
     return texture_node->texture_;
 }
 
+RHITextureRef RDGBuilder::resolve(RDGTextureHandle handle) {
+    auto* node = static_cast<RDGTextureNode*>(graph_->GetNode(handle.id()));
+    if (!node) return nullptr;
+    return resolve(node);
+}
+
+RHIBufferRef RDGBuilder::resolve(RDGBufferHandle handle) {
+    auto* node = static_cast<RDGBufferNode*>(graph_->GetNode(handle.id()));
+    if (!node) return nullptr;
+    return resolve(node);
+}
+
 RHIBufferRef RDGBuilder::resolve(RDGBufferNodeRef buffer_node) {
     if (buffer_node->buffer_ == nullptr) {
         auto pooled_buffer = RDGBufferPool::get()->allocate(buffer_node->info_);

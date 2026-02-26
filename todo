@@ -1,0 +1,9 @@
+现在的模型加载-资源保存时，如果有现成的资源就总是不保存，即使我修改了.mtl文件。你认为应该怎样修改？
+
+
+前置：修改register class使其能够支持
+非component的（更准确的说应该弄个object类）
+
+考察下我能否用imgui调整material的参数。
+（涉及:MeshRenderComponent 反射material； material暴露参数）
+实现最简方案吧。PBR/NPR参数的遍历可以用register class。注意texture在显示时需要特殊考虑，留出未来可视化的空间

@@ -623,26 +623,48 @@ void NPRForwardPass::execute_batches(RHICommandListRef cmd, const std::vector<Dr
             }
         }
 
-        // Bind textures (all from NPRMatefrial)
+        // Bind textures (all from NPRMaterial) with fallbacks
+        auto* render_system = EngineContext::render_system();
+        RHITextureRef fallback_white = render_system ? render_system->get_fallback_white_texture() : nullptr;
+        RHITextureRef fallback_normal = render_system ? render_system->get_fallback_normal_texture() : nullptr;
+        
         if (npr_mat) {
             auto albedo_tex = npr_mat->get_diffuse_texture();
             if (albedo_tex && albedo_tex->texture_) {
                 cmd->bind_texture(albedo_tex->texture_, 0, SHADER_FREQUENCY_FRAGMENT);
+            } else if (fallback_white) {
+                cmd->bind_texture(fallback_white, 0, SHADER_FREQUENCY_FRAGMENT);
             }
             
             auto normal_tex = npr_mat->get_normal_texture();
             if (normal_tex && normal_tex->texture_) {
                 cmd->bind_texture(normal_tex->texture_, 1, SHADER_FREQUENCY_FRAGMENT);
+            } else if (fallback_normal) {
+                cmd->bind_texture(fallback_normal, 1, SHADER_FREQUENCY_FRAGMENT);
             }
             
             auto light_map_tex = npr_mat->get_light_map_texture();
             if (light_map_tex && light_map_tex->texture_) {
                 cmd->bind_texture(light_map_tex->texture_, 2, SHADER_FREQUENCY_FRAGMENT);
+            } else if (fallback_white) {
+                cmd->bind_texture(fallback_white, 2, SHADER_FREQUENCY_FRAGMENT);
             }
             
             auto ramp_tex = npr_mat->get_ramp_texture();
             if (ramp_tex && ramp_tex->texture_) {
                 cmd->bind_texture(ramp_tex->texture_, 3, SHADER_FREQUENCY_FRAGMENT);
+            } else if (fallback_white) {
+                cmd->bind_texture(fallback_white, 3, SHADER_FREQUENCY_FRAGMENT);
+            }
+        } else {
+            // No material, bind all fallbacks
+            if (fallback_white) {
+                cmd->bind_texture(fallback_white, 0, SHADER_FREQUENCY_FRAGMENT);
+                cmd->bind_texture(fallback_white, 2, SHADER_FREQUENCY_FRAGMENT);
+                cmd->bind_texture(fallback_white, 3, SHADER_FREQUENCY_FRAGMENT);
+            }
+            if (fallback_normal) {
+                cmd->bind_texture(fallback_normal, 1, SHADER_FREQUENCY_FRAGMENT);
             }
         }
 
@@ -691,7 +713,7 @@ void NPRForwardPass::build(RDGBuilder& builder, RDGTextureHandle color_target,
     
     // Create render pass
     auto rp_builder = builder.create_render_pass("NPRForwardPass")
-        .color(0, color_target, ATTACHMENT_LOAD_OP_CLEAR, ATTACHMENT_STORE_OP_STORE, 
+        .color(0, color_target, ATTACHMENT_LOAD_OP_LOAD, ATTACHMENT_STORE_OP_STORE, 
                Color4{0.1f, 0.1f, 0.2f, 1.0f});
     
     rp_builder.depth_stencil(depth_target, ATTACHMENT_LOAD_OP_LOAD, 

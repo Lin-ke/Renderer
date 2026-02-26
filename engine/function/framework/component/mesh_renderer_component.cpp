@@ -75,7 +75,7 @@ void MeshRendererComponent::update_object_info() {
     if (!get_owner()) return;
     auto transform = get_owner()->get_component<TransformComponent>();
     if (!transform) return;
-    Mat4 model_mat = transform->transform.get_matrix();
+    Mat4 model_mat = transform->get_world_matrix();
     for (uint32_t i = 0; i < object_infos_.size() && i < object_ids_.size(); i++) {
         object_infos_[i].model = model_mat;
         object_infos_[i].prev_model = prev_model_;
@@ -137,7 +137,7 @@ void MeshRendererComponent::collect_draw_batch(std::vector<render::DrawBatch>& b
     if (!model_ || !get_owner()) return;
     auto transform = get_owner()->get_component<TransformComponent>();
     if (!transform) return;
-    Mat4 model_mat = transform->transform.get_matrix();
+    Mat4 model_mat = transform->get_world_matrix();
     for (uint32_t i = 0; i < model_->get_submesh_count(); i++) {
         auto mesh = model_->get_mesh(i);
         if (!mesh) continue;

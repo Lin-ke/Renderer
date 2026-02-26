@@ -94,6 +94,11 @@ public:
     RDGTextureHandle get_handle() { return RDGTextureHandle(ID()); }
 
     const RHITextureInfo& get_info() { return info_; }
+    
+    /**
+     * @brief Get the resolved RHI texture (only valid during pass execution)
+     */
+    RHITextureRef get_texture() const { return texture_; }
 
 private:
     RHITextureInfo info_;

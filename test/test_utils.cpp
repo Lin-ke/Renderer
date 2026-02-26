@@ -10,9 +10,12 @@
 #include "engine/function/render/render_system/render_mesh_manager.h"
 #include "engine/function/input/input.h"
 #include "engine/core/window/window.h"
+#include "engine/core/utils/profiler.h"
+#include "engine/core/utils/cpu_profiler.h"
 #include <fstream>
 #include <thread>
 #include <chrono>
+#include <iomanip>
 
 namespace test_utils {
 
@@ -144,6 +147,57 @@ bool SceneLoader::scene_exists(const std::string& virtual_path) {
     return file.is_open();
 }
 
+bool export_chrome_tracing(const std::string& filename,
+                           const std::vector<const CpuProfileFrame*>& frames) {
+    std::ofstream ofs(filename);
+    if (!ofs.is_open()) return false;
+    
+    ofs << "{\"traceEvents\":[";
+    bool first = true;
+    
+    for (const auto* frame : frames) {
+        if (!frame) continue;
+        uint64_t freq = frame->cpu_frequency;
+        if (freq == 0) continue;
+        
+        for (const auto& td : frame->threads) {
+            for (const auto& scope : td.scopes) {
+                // Chrome tracing uses microseconds
+                double start_us = static_cast<double>(scope.start_ticks) * 1000000.0 / static_cast<double>(freq);
+                double dur_us = static_cast<double>(scope.end_ticks - scope.start_ticks) * 1000000.0 / static_cast<double>(freq);
+                
+                if (!first) ofs << ",";
+                first = false;
+                
+                ofs << "\n{\"name\":\"" << scope.name << "\""
+                    << ",\"cat\":\"function\""
+                    << ",\"ph\":\"X\""
+                    << ",\"ts\":" << std::fixed << std::setprecision(1) << start_us
+                    << ",\"dur\":" << dur_us
+                    << ",\"pid\":0"
+                    << ",\"tid\":" << td.thread_id
+                    << "}";
+            }
+        }
+    }
+    
+    ofs << "\n],\"displayTimeUnit\":\"ms\"}";
+    return true;
+}
+
+bool export_profiler_trace(const std::string& filename) {
+    auto& profiler = CpuProfiler::instance();
+    size_t count = profiler.get_history_size();
+    std::vector<const CpuProfileFrame*> frames;
+    frames.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        if (auto* f = profiler.get_history_frame(i)) {
+            frames.push_back(f);
+        }
+    }
+    return export_chrome_tracing(filename, frames);
+}
+
 bool RenderTestApp::capture_screenshot(std::vector<uint8_t>& screenshot_data) {
     auto swapchain = EngineContext::render_system()->get_swapchain();
     if (!swapchain) return false;
@@ -166,16 +220,28 @@ bool RenderTestApp::capture_screenshot(std::vector<uint8_t>& screenshot_data) {
 }
 
 bool RenderTestApp::run(const Config& config, std::vector<uint8_t>& out_screenshot_data, int* out_frames) {
+    // Enable profiler and start a frame for asset loading phase
+    auto& profiler = CpuProfiler::instance();
+    profiler.set_enabled(true);
+    profiler.begin_frame();
+
     // 1. Create Scene
     if (config.create_scene_func) {
+        PROFILE_SCOPE("CreateScene");
         if (!config.create_scene_func(config.scene_path)) {
+            profiler.end_frame();
             return false;
         }
     }
 
     // 2. Load Scene
-    auto result = SceneLoader::load(config.scene_path, true);
+    SceneLoadResult result;
+    {
+        PROFILE_SCOPE("LoadScene");
+        result = SceneLoader::load(config.scene_path, true);
+    }
     if (!result.success) {
+        profiler.end_frame();
         return false;
     }
 
@@ -183,7 +249,19 @@ bool RenderTestApp::run(const Config& config, std::vector<uint8_t>& out_screensh
         config.on_scene_loaded_func(result);
     }
 
-    // 3. Render
+    // End asset loading frame — all asset timing is captured here
+    profiler.end_frame();
+
+    // Export profiler trace for analysis
+    std::string trace_path = std::string(ENGINE_PATH) + "/test/test_internal/profile_trace.json";
+    export_profiler_trace(trace_path);
+
+    // 3. Set up custom RDG build function if provided
+    if (config.build_rdg_func) {
+        EngineContext::render_system()->set_custom_rdg_build_func(config.build_rdg_func);
+    }
+
+    // 4. Render
     int frames = 0;
     bool screenshot_taken = false;
     
@@ -218,6 +296,11 @@ bool RenderTestApp::run(const Config& config, std::vector<uint8_t>& out_screensh
         std::this_thread::sleep_for(std::chrono::milliseconds(16));
     }
     
+    // Clean up custom RDG build function
+    if (config.build_rdg_func) {
+        EngineContext::render_system()->clear_custom_rdg_build_func();
+    }
+
     if (out_frames) {
         *out_frames = frames;
     }

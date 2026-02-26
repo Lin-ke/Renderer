@@ -3,6 +3,7 @@
 #include "engine/main/engine_context.h"
 #include "engine/core/log/Log.h"
 #include "engine/function/asset/asset_manager.h"
+#include "engine/core/utils/profiler.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -90,6 +91,7 @@ void Model::on_save() {
 std::shared_ptr<Model> Model::Load(const std::string& virtual_path, 
                                     const ModelProcessSetting& process_setting,
                                     const UID& explicit_uid) {
+    PROFILE_SCOPE("Model::Load");
     if (!EngineContext::asset()) {
         ERR(LogModel, "AssetManager not initialized");
         return nullptr;
@@ -137,6 +139,22 @@ std::shared_ptr<Model> Model::Load(const std::string& virtual_path,
                 INFO(LogModel, "Model cache hit: {}", abs_path);
                 return model;
             }
+        }
+    }
+
+    // Check if already imported asset exists on disk
+    std::string model_asset_path = virtual_path.empty() ? abs_path : virtual_path;
+    if (!model_asset_path.ends_with(".asset") && !model_asset_path.ends_with(".binasset")) {
+        model_asset_path += ".asset";
+    }
+    
+    auto asset_physical_opt = EngineContext::asset()->get_physical_path(model_asset_path);
+    if (asset_physical_opt && std::filesystem::exists(asset_physical_opt.value())) {
+        // Already imported, load from asset file
+        UID asset_uid = EngineContext::asset()->get_uid_by_path(model_asset_path);
+        if (!asset_uid.is_empty()) {
+            INFO(LogModel, "Loading existing asset: {}", model_asset_path);
+            return EngineContext::asset()->load_asset<Model>(asset_uid);
         }
     }
 

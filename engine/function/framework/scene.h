@@ -22,9 +22,10 @@ public:
     std::string_view get_asset_type_name() const override { return "Scene"; }
     AssetType get_asset_type() const override { return AssetType::Scene; }
 
-    Entity* create_entity() {
+    Entity* create_entity(const std::string& name = "") {
         auto entity = std::make_unique<Entity>();
         Entity* ptr = entity.get();
+        ptr->set_name(name);
         entities_.push_back(std::move(entity));
         return ptr;
     }
@@ -62,21 +63,15 @@ public:
     virtual void on_load() override {
         for (auto& entity : entities_) {
             if (!entity) continue;
-            for (auto& comp : entity->get_components()) {
-                if (comp) {
-                    comp->on_init();
-                }
-            }
+            // Restore parent_ pointers lost during deserialization
+            entity->restore_hierarchy();
+            init_entity_recursive(entity.get());
         }
     }
 
     virtual void load_asset_deps() override {
         for (auto& entity : entities_) {
-            for (auto& comp : entity->get_components()) {
-                if (comp) {
-                    comp->set_owner(entity.get());
-                }
-            }
+            setup_owner_recursive(entity.get());
             entity->load_asset_deps();
         }
     }
@@ -96,9 +91,7 @@ public:
     std::vector<TComponent*> get_components() const {
         std::vector<TComponent*> components;
         for (const auto& entity : entities_) {
-            if (auto* comp = entity->get_component<TComponent>()) {
-                components.push_back(comp);
-            }
+            collect_components_recursive<TComponent>(entity.get(), components);
         }
         return components;
     }
@@ -142,7 +135,46 @@ public:
             }
         }
     }
-    
+
+private:
+    // Recursively call on_init for all components in entity and its children
+    static void init_entity_recursive(Entity* entity) {
+        if (!entity) return;
+        for (auto& comp : entity->get_components()) {
+            if (comp) {
+                comp->on_init();
+            }
+        }
+        for (auto& child : entity->get_children()) {
+            init_entity_recursive(child.get());
+        }
+    }
+
+    // Recursively set owner for all components in entity and its children
+    static void setup_owner_recursive(Entity* entity) {
+        if (!entity) return;
+        for (auto& comp : entity->get_components()) {
+            if (comp) {
+                comp->set_owner(entity);
+            }
+        }
+        for (auto& child : entity->get_children()) {
+            setup_owner_recursive(child.get());
+        }
+    }
+
+    // Recursively collect components of a given type
+    template<typename TComponent>
+    static void collect_components_recursive(const Entity* entity,
+                                             std::vector<TComponent*>& out) {
+        if (!entity) return;
+        if (auto* comp = entity->get_component<TComponent>()) {
+            out.push_back(comp);
+        }
+        for (auto& child : entity->get_children()) {
+            collect_components_recursive<TComponent>(child.get(), out);
+        }
+    }
 };
 
 CEREAL_REGISTER_TYPE(Scene);

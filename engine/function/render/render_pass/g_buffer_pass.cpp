@@ -5,6 +5,8 @@
 #include "engine/function/render/rhi/rhi_command_list.h"
 #include "engine/function/framework/component/camera_component.h"
 #include "engine/function/render/render_resource/shader_utils.h"
+#include "engine/function/render/render_resource/material.h"
+#include "engine/function/render/render_resource/texture.h"
 #include "engine/core/log/Log.h"
 
 #include <cstring>
@@ -20,6 +22,8 @@ GBufferPass::~GBufferPass() {
     if (root_signature_) root_signature_->destroy();
     if (per_frame_buffer_) per_frame_buffer_->destroy();
     if (per_object_buffer_) per_object_buffer_->destroy();
+    if (material_buffer_) material_buffer_->destroy();
+    if (default_sampler_) default_sampler_->destroy();
 }
 
 void GBufferPass::init() {
@@ -32,8 +36,14 @@ void GBufferPass::init() {
     }
     
     create_uniform_buffers();
-    if (!per_frame_buffer_ || !per_object_buffer_) {
+    if (!per_frame_buffer_ || !per_object_buffer_ || !material_buffer_) {
         ERR(LogGBufferPass, "Failed to create uniform buffers");
+        return;
+    }
+    
+    create_samplers();
+    if (!default_sampler_) {
+        ERR(LogGBufferPass, "Failed to create samplers");
         return;
     }
     
@@ -124,7 +134,40 @@ void GBufferPass::create_uniform_buffers() {
         return;
     }
     
+    // Create material buffer (b2)
+    RHIBufferInfo material_info = {};
+    material_info.size = sizeof(GBufferMaterialData);
+    material_info.stride = 0;
+    material_info.memory_usage = MEMORY_USAGE_CPU_TO_GPU;
+    material_info.type = RESOURCE_TYPE_UNIFORM_BUFFER;
+    material_info.creation_flag = BUFFER_CREATION_PERSISTENT_MAP;
+    
+    material_buffer_ = backend->create_buffer(material_info);
+    if (!material_buffer_) {
+        ERR(LogGBufferPass, "Failed to create material buffer");
+        return;
+    }
+    
     INFO(LogGBufferPass, "Uniform buffers created successfully");
+}
+
+void GBufferPass::create_samplers() {
+    auto backend = EngineContext::rhi();
+    if (!backend) return;
+    
+    RHISamplerInfo sampler_info = {};
+    sampler_info.min_filter = FILTER_TYPE_LINEAR;
+    sampler_info.mag_filter = FILTER_TYPE_LINEAR;
+    sampler_info.mipmap_mode = MIPMAP_MODE_LINEAR;
+    sampler_info.address_mode_u = ADDRESS_MODE_REPEAT;
+    sampler_info.address_mode_v = ADDRESS_MODE_REPEAT;
+    sampler_info.address_mode_w = ADDRESS_MODE_REPEAT;
+    sampler_info.max_anisotropy = 16.0f;
+    
+    default_sampler_ = backend->create_sampler(sampler_info);
+    if (!default_sampler_) {
+        ERR(LogGBufferPass, "Failed to create default sampler");
+    }
 }
 
 void GBufferPass::create_pipeline() {
@@ -186,29 +229,29 @@ void GBufferPass::set_per_frame_data(const Mat4& view, const Mat4& proj, const V
 }
 
 void GBufferPass::build(RDGBuilder& builder) {
+    // Default build does nothing - use the explicit batches version
+}
+
+std::optional<GBufferOutputHandles> GBufferPass::build(RDGBuilder& builder, RDGTextureHandle depth_target, 
+                        const std::vector<DrawBatch>& batches) {
     if (!initialized_ || !pipeline_) {
-        return;
+        return std::nullopt;
     }
+    
+    if (batches.empty()) {
+        return std::nullopt;
+    }
+    
+    // Store batches for lambda access (avoids copy in capture)
+    current_batches_ = batches;
     
     auto render_system = EngineContext::render_system();
-    if (!render_system) return;
+    if (!render_system) return std::nullopt;
     
     auto swapchain = render_system->get_swapchain();
-    if (!swapchain) return;
+    if (!swapchain) return std::nullopt;
     
     Extent2D extent = swapchain->get_extent();
-    
-    auto mesh_manager = render_system->get_mesh_manager();
-    if (mesh_manager) {
-        auto* camera = mesh_manager->get_active_camera();
-        if (camera) {
-            set_per_frame_data(
-                camera->get_view_matrix(),
-                camera->get_projection_matrix(),
-                camera->get_position()
-            );
-        }
-    }
     
     Extent3D tex_extent = {extent.width, extent.height, 1};
     
@@ -236,12 +279,7 @@ void GBufferPass::build(RDGBuilder& builder) {
         .allow_render_target()
         .finish();
     
-    RDGTextureHandle depth_target = builder.create_texture("GBuffer_Depth")
-        .extent(tex_extent)
-        .format(get_depth_format())
-        .allow_depth_stencil()
-        .finish();
-    
+    // Use depth from DepthPrePass - LOAD to preserve early-z benefits
     builder.create_render_pass("GBuffer_Pass")
         .color(GBufferData::ALBEDO_AO_INDEX, gbuffer_albedo_ao, 
                ATTACHMENT_LOAD_OP_CLEAR, ATTACHMENT_STORE_OP_STORE, 
@@ -255,7 +293,7 @@ void GBufferPass::build(RDGBuilder& builder) {
         .color(GBufferData::POSITION_DEPTH_INDEX, gbuffer_position,
                ATTACHMENT_LOAD_OP_CLEAR, ATTACHMENT_STORE_OP_STORE,
                Color4{0.0f, 0.0f, 0.0f, 0.0f})
-        .depth_stencil(depth_target, ATTACHMENT_LOAD_OP_CLEAR, ATTACHMENT_STORE_OP_STORE, 
+        .depth_stencil(depth_target, ATTACHMENT_LOAD_OP_LOAD, ATTACHMENT_STORE_OP_STORE, 
                        1.0f, 0)
         .execute([this, render_system, extent](RDGPassContext context) {
             RHICommandListRef cmd = context.command;
@@ -278,13 +316,18 @@ void GBufferPass::build(RDGBuilder& builder) {
                     static_cast<ShaderFrequency>(SHADER_FREQUENCY_VERTEX | SHADER_FREQUENCY_FRAGMENT));
             }
             
-            std::vector<DrawBatch> batches;
-            auto mesh_manager = render_system->get_mesh_manager();
-            if (mesh_manager) {
-                mesh_manager->collect_draw_batches(batches);
-            }
+            // Bind material buffer and sampler (used by all batches)
+            cmd->bind_constant_buffer(material_buffer_, 2, SHADER_FREQUENCY_FRAGMENT);
+            cmd->bind_sampler(default_sampler_, 0, SHADER_FREQUENCY_FRAGMENT);
             
-            for (const auto& batch : batches) {
+            // Get fallback textures from render system
+            auto* rsys = EngineContext::render_system();
+            RHITextureRef fallback_white = rsys ? rsys->get_fallback_white_texture() : nullptr;
+            RHITextureRef fallback_black = rsys ? rsys->get_fallback_black_texture() : nullptr;
+            RHITextureRef fallback_normal = rsys ? rsys->get_fallback_normal_texture() : nullptr;
+            
+            // Use stored batches
+            for (const auto& batch : current_batches_) {
                 if (per_object_buffer_) {
                     GBufferPerObjectData object_data;
                     object_data.model = batch.model_matrix;
@@ -297,11 +340,107 @@ void GBufferPass::build(RDGBuilder& builder) {
                     cmd->bind_constant_buffer(per_object_buffer_, 1, SHADER_FREQUENCY_VERTEX);
                 }
                 
+                // Update material data and bind textures
+                auto pbr_mat = std::dynamic_pointer_cast<PBRMaterial>(batch.material);
+                if (material_buffer_ && pbr_mat) {
+                    GBufferMaterialData mat_data;
+                    mat_data.albedo = pbr_mat->get_diffuse();
+                    mat_data.roughness = pbr_mat->get_roughness();
+                    mat_data.metallic = pbr_mat->get_metallic();
+                    mat_data.emission = pbr_mat->get_emission().x; // Use emission x channel as scalar
+                    mat_data.alpha_clip = pbr_mat->get_alpha_clip();
+                    mat_data.specular = pbr_mat->get_specular();
+                    mat_data.use_albedo_map = pbr_mat->get_diffuse_texture() ? 1.0f : 0.0f;
+                    mat_data.use_normal_map = pbr_mat->get_normal_texture() ? 1.0f : 0.0f;
+                    mat_data.use_arm_map = pbr_mat->get_arm_texture() ? 1.0f : 0.0f;
+                    mat_data.use_roughness_map = pbr_mat->get_roughness_texture() ? 1.0f : 0.0f;
+                    mat_data.use_metallic_map = pbr_mat->get_metallic_texture() ? 1.0f : 0.0f;
+                    mat_data.use_ao_map = pbr_mat->get_ao_texture() ? 1.0f : 0.0f;
+                    mat_data.use_emission_map = pbr_mat->get_emission_texture() ? 1.0f : 0.0f;
+                    
+                    void* mapped = material_buffer_->map();
+                    if (mapped) {
+                        memcpy(mapped, &mat_data, sizeof(mat_data));
+                        material_buffer_->unmap();
+                    }
+                    
+                    // Bind albedo texture (t0)
+                    auto albedo_tex = pbr_mat->get_diffuse_texture();
+                    if (albedo_tex && albedo_tex->texture_) {
+                        cmd->bind_texture(albedo_tex->texture_, 0, SHADER_FREQUENCY_FRAGMENT);
+                    } else if (fallback_white) {
+                        cmd->bind_texture(fallback_white, 0, SHADER_FREQUENCY_FRAGMENT);
+                    }
+                    
+                    // Bind normal texture (t1)
+                    auto normal_tex = pbr_mat->get_normal_texture();
+                    if (normal_tex && normal_tex->texture_) {
+                        cmd->bind_texture(normal_tex->texture_, 1, SHADER_FREQUENCY_FRAGMENT);
+                    } else if (fallback_normal) {
+                        cmd->bind_texture(fallback_normal, 1, SHADER_FREQUENCY_FRAGMENT);
+                    }
+                    
+                    // Bind ARM texture (t2) - preferred over individual maps
+                    auto arm_tex = pbr_mat->get_arm_texture();
+                    if (arm_tex && arm_tex->texture_) {
+                        cmd->bind_texture(arm_tex->texture_, 2, SHADER_FREQUENCY_FRAGMENT);
+                    } else if (fallback_black) {
+                        cmd->bind_texture(fallback_black, 2, SHADER_FREQUENCY_FRAGMENT);
+                    }
+                    
+                    // Bind individual maps (t3-t6) when ARM is not available
+                    auto roughness_tex = pbr_mat->get_roughness_texture();
+                    if (roughness_tex && roughness_tex->texture_) {
+                        cmd->bind_texture(roughness_tex->texture_, 3, SHADER_FREQUENCY_FRAGMENT);
+                    } else if (fallback_black) {
+                        cmd->bind_texture(fallback_black, 3, SHADER_FREQUENCY_FRAGMENT);
+                    }
+                    
+                    auto metallic_tex = pbr_mat->get_metallic_texture();
+                    if (metallic_tex && metallic_tex->texture_) {
+                        cmd->bind_texture(metallic_tex->texture_, 4, SHADER_FREQUENCY_FRAGMENT);
+                    } else if (fallback_black) {
+                        cmd->bind_texture(fallback_black, 4, SHADER_FREQUENCY_FRAGMENT);
+                    }
+                    
+                    auto ao_tex = pbr_mat->get_ao_texture();
+                    if (ao_tex && ao_tex->texture_) {
+                        cmd->bind_texture(ao_tex->texture_, 5, SHADER_FREQUENCY_FRAGMENT);
+                    } else if (fallback_white) { // White = AO=1.0 (no occlusion)
+                        cmd->bind_texture(fallback_white, 5, SHADER_FREQUENCY_FRAGMENT);
+                    }
+                    
+                    auto emission_tex = pbr_mat->get_emission_texture();
+                    if (emission_tex && emission_tex->texture_) {
+                        cmd->bind_texture(emission_tex->texture_, 6, SHADER_FREQUENCY_FRAGMENT);
+                    } else if (fallback_black) {
+                        cmd->bind_texture(fallback_black, 6, SHADER_FREQUENCY_FRAGMENT);
+                    }
+                } else {
+                    // No material or not PBR - bind all fallbacks
+                    if (fallback_white) {
+                        cmd->bind_texture(fallback_white, 0, SHADER_FREQUENCY_FRAGMENT); // albedo
+                        cmd->bind_texture(fallback_white, 5, SHADER_FREQUENCY_FRAGMENT); // ao
+                    }
+                    if (fallback_normal) {
+                        cmd->bind_texture(fallback_normal, 1, SHADER_FREQUENCY_FRAGMENT); // normal
+                    }
+                    if (fallback_black) {
+                        cmd->bind_texture(fallback_black, 2, SHADER_FREQUENCY_FRAGMENT); // arm
+                        cmd->bind_texture(fallback_black, 3, SHADER_FREQUENCY_FRAGMENT); // roughness
+                        cmd->bind_texture(fallback_black, 4, SHADER_FREQUENCY_FRAGMENT); // metallic
+                        cmd->bind_texture(fallback_black, 6, SHADER_FREQUENCY_FRAGMENT); // emission
+                    }
+                }
+                
                 if (batch.vertex_buffer) {
                     cmd->bind_vertex_buffer(batch.vertex_buffer, 0, 0);
                 }
                 if (batch.normal_buffer) {
                     cmd->bind_vertex_buffer(batch.normal_buffer, 1, 0);
+                }
+                if (batch.texcoord_buffer) {
+                    cmd->bind_vertex_buffer(batch.texcoord_buffer, 2, 0);
                 }
                 
                 if (batch.index_buffer) {
@@ -311,6 +450,13 @@ void GBufferPass::build(RDGBuilder& builder) {
             }
         })
         .finish();
+    
+    return GBufferOutputHandles{
+        gbuffer_albedo_ao,
+        gbuffer_normal_roughness,
+        gbuffer_material,
+        gbuffer_position
+    };
 }
 
 } // namespace render

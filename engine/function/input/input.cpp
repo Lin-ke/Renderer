@@ -43,6 +43,10 @@ void Input::get_mouse_delta(float& dx, float& dy) const {
     dy = mouse_delta_y_;
 }
 
+float Input::get_scroll_delta() const {
+    return scroll_delta_;
+}
+
 void Input::tick() {
     // Calculate delta since last frame's position
     mouse_delta_x_ = static_cast<float>(mouse_x_ - last_mouse_x_);
@@ -51,6 +55,10 @@ void Input::tick() {
     // Update last position for next frame
     last_mouse_x_ = mouse_x_;
     last_mouse_y_ = mouse_y_;
+
+    // Update scroll delta and reset accumulator
+    scroll_delta_ = scroll_accumulator_;
+    scroll_accumulator_ = 0.0f;
 
     // Handle key state transitions
     for (int i = 0; i < 256; ++i) {
@@ -111,4 +119,8 @@ void Input::on_mouse_button_up(MouseButton button) {
         mouse_buttons_[button_code] = InputState::None;
         mouse_button_should_update_[button_code] = false;
     }
+}
+
+void Input::on_mouse_scroll(float delta) {
+    scroll_accumulator_ += delta;
 }

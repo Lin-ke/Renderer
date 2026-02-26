@@ -20,6 +20,8 @@ public:
     void set_fov(float fovy) { this->fovy_ = fovy; }
     void set_near(float near_plane) { this->near_ = near_plane; }
     void set_far(float far_plane) { this->far_ = far_plane; }
+    void set_external_control(bool v) { external_control_ = v; }
+    bool is_external_control() const { return external_control_; }
 
     inline Vec3 get_position() const { return position_; }
     inline Vec3 get_front() const { return front_; }
@@ -69,6 +71,7 @@ private:
     Frustum frustum_;
     CameraInfo camera_info_;
     bool move_ = false;
+    bool external_control_ = false;
 
     void input_move(float delta_time);
     void update_matrix();

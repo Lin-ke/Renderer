@@ -87,14 +87,24 @@ void GizmoManager::draw_gizmo(CameraComponent* camera, Entity* selected_entity,
     bool mouse_in_viewport = mouse_pos.x >= viewport_pos.x && mouse_pos.x <= viewport_pos.x + viewport_size.x &&
                              mouse_pos.y >= viewport_pos.y && mouse_pos.y <= viewport_pos.y + viewport_size.y;
     static int debug_counter = 0;
-    if (++debug_counter % 60 == 0) {
-        INFO(LogGizmo, "Viewport: pos=({:.1f},{:.1f}), size=({:.1f},{:.1f}), mouse=({:.1f},{:.1f}), in_viewport={}",
-             viewport_pos.x, viewport_pos.y, viewport_size.x, viewport_size.y,
-             mouse_pos.x, mouse_pos.y, mouse_in_viewport);
-    }
+    // if (++debug_counter % 60 == 0) {
+    //     INFO(LogGizmo, "Viewport: pos=({:.1f},{:.1f}), size=({:.1f},{:.1f}), mouse=({:.1f},{:.1f}), in_viewport={}",
+    //          viewport_pos.x, viewport_pos.y, viewport_size.x, viewport_size.y,
+    //          mouse_pos.x, mouse_pos.y, mouse_in_viewport);
+    // }
     
-    // Get current transform matrix
-    Mat4 model = transform->transform.get_matrix();
+    // Use world-space matrix for gizmo display (supports entity hierarchy)
+    Mat4 world_model = transform->get_world_matrix();
+    
+    // Compute parent world matrix for later local-space conversion
+    Mat4 parent_world = Mat4::Identity();
+    Entity* parent = selected_entity->get_parent();
+    if (parent) {
+        auto* parent_trans = parent->get_component<TransformComponent>();
+        if (parent_trans) {
+            parent_world = parent_trans->get_world_matrix();
+        }
+    }
     
     Vec3 local_offset = Vec3::Zero();
     if (current_anchor_ != Anchor::Pivot) {
@@ -111,13 +121,13 @@ void GizmoManager::draw_gizmo(CameraComponent* camera, Entity* selected_entity,
         }
     }
 
-    Mat4 gizmo_matrix = model;
+    Mat4 gizmo_matrix = world_model;
     if (local_offset.norm() > 0.0001f) {
         Mat4 offset_mat = Mat4::Identity();
         offset_mat.m[3][0] = local_offset.x;
         offset_mat.m[3][1] = local_offset.y;
         offset_mat.m[3][2] = local_offset.z;
-        gizmo_matrix = offset_mat * model;
+        gizmo_matrix = offset_mat * world_model;
     }
     to_row_major_array(gizmo_matrix, transform_matrix);
 
@@ -154,15 +164,18 @@ void GizmoManager::draw_gizmo(CameraComponent* camera, Entity* selected_entity,
     if (is_using && matrix_changed) {
         Mat4 new_gizmo_matrix = from_row_major_array(transform_matrix);
 
-        // Revert offset to get the new pivot matrix
-        Mat4 new_model = new_gizmo_matrix;
+        // Revert anchor offset to get world-space model matrix
+        Mat4 new_world = new_gizmo_matrix;
         if (local_offset.norm() > 0.0001f) {
             Mat4 inv_offset_mat = Mat4::Identity();
             inv_offset_mat.m[3][0] = -local_offset.x;
             inv_offset_mat.m[3][1] = -local_offset.y;
             inv_offset_mat.m[3][2] = -local_offset.z;
-            new_model = inv_offset_mat * new_gizmo_matrix;
+            new_world = inv_offset_mat * new_gizmo_matrix;
         }
+        
+        // Convert world-space matrix back to local-space for hierarchy support
+        Mat4 new_model = parent_world.inverse() * new_world;
         
         Vec3 position = Vec3(new_model.m[3][0], new_model.m[3][1], new_model.m[3][2]);
         

@@ -124,9 +124,8 @@ static bool create_npr_scene(const std::string& scene_path) {
 }
 
 static void on_scene_loaded(test_utils::SceneLoadResult& result) {
-    // Enable NPR for this scene
+    // Set active camera for rendering
     if (auto mesh_manager = EngineContext::render_system()->get_mesh_manager()) {
-        mesh_manager->set_npr_enabled(true);
         mesh_manager->set_active_camera(result.camera);
     }
 }

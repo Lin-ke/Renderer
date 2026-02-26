@@ -1,0 +1,19 @@
+# PBR Material file for Ship model
+# Intergalactic Spaceship
+
+MaterialType PBR
+
+newmtl Material
+map_Kd Intergalactic Spaceship_color_4.jpg
+Kd 0.640 0.640 0.640
+d 1.0
+
+map_Bump Intergalactic Spaceship_nmap_2_Tris.jpg
+map_Pr Intergalactic Spaceship_rough.jpg
+map_Pm Intergalactic Spaceship_metalness.jpg
+map_Ao Intergalactic Spaceship Ao_Blender.jpg
+map_Ke Intergalactic Spaceship_emi.jpg
+
+# PBR scalar values (used when texture is not available or as multiplier)
+R 0.690
+M 0.0

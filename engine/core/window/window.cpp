@@ -151,8 +151,11 @@ LRESULT CALLBACK Window::window_proc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM 
             return 0;
         
         case WM_MOUSEWHEEL:
-            
+        {
+            float delta = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wParam)) / WHEEL_DELTA;
+            input.on_mouse_scroll(delta);
             return 0;
+        }
     }
     return DefWindowProc(hWnd, msg, wParam, lParam);
 }

@@ -17,12 +17,14 @@ void DepthVisualizePass::destroy() {
     if (pipeline_) pipeline_->destroy();
     if (root_signature_) root_signature_->destroy();
     if (constant_buffer_) constant_buffer_->destroy();
+    if (sampler_) sampler_->destroy();
     initialized_ = false;
 }
 
 void DepthVisualizePass::init() {
     create_shaders();
     create_constant_buffer();
+    create_sampler();
     create_pipeline();
     initialized_ = true;
 }
@@ -69,6 +71,12 @@ void DepthVisualizePass::create_constant_buffer() {
     constant_buffer_ = backend->create_buffer(info);
 }
 
+void DepthVisualizePass::create_sampler() {
+    auto backend = EngineContext::rhi();
+    RHISamplerInfo sampler_info = {};
+    sampler_ = backend->create_sampler(sampler_info);
+}
+
 void DepthVisualizePass::create_pipeline() {
     auto backend = EngineContext::rhi();
     if (!backend || !vertex_shader_ || !fragment_shader_) return;
@@ -107,7 +115,7 @@ void DepthVisualizePass::draw(RHICommandContextRef command, RHITextureRef depth_
     rp_info.color_attachments[0].texture_view = output_rtv;
     rp_info.color_attachments[0].load_op = ATTACHMENT_LOAD_OP_CLEAR;
     rp_info.color_attachments[0].store_op = ATTACHMENT_STORE_OP_STORE;
-    rp_info.color_attachments[0].clear_color = {0.0f, 0.0f, 0.0f, 1.0f}; // Clear to black
+    rp_info.color_attachments[0].clear_color = {0.0f, 0.0f, 0.0f, 1.0f};
     
     RHIRenderPassRef render_pass = backend->create_render_pass(rp_info);
     
@@ -133,6 +141,7 @@ void DepthVisualizePass::draw(RHICommandContextRef command, RHITextureRef depth_
     command->bind_constant_buffer(constant_buffer_, 0, SHADER_FREQUENCY_FRAGMENT);
     
     command->bind_texture(depth_texture, 0, SHADER_FREQUENCY_FRAGMENT);
+    command->bind_sampler(sampler_, 0, SHADER_FREQUENCY_FRAGMENT);
     
     command->draw(3, 1, 0, 0);
     

@@ -4,6 +4,7 @@
 #include "engine/main/engine_context.h"
 #include "engine/core/log/Log.h"
 #include "engine/function/asset/asset_manager.h"
+#include "engine/core/utils/profiler.h"
 #include <cassert>
 #include <fstream>
 #include <filesystem>
@@ -30,16 +31,16 @@ void Texture::set_name(const std::string& name) {
     }
 }
 
-Texture::Texture(const std::string& virtual_path)
-    : texture_type_(TextureType::Texture2D), format_(FORMAT_R8G8B8A8_SRGB), array_layer_(1) {
+Texture::Texture(const std::string& virtual_path, RHIFormat format)
+    : texture_type_(TextureType::Texture2D), format_(format), array_layer_(1) {
     paths_.push_back(virtual_path);
     name_ = std::filesystem::path(virtual_path).filename().string();
     set_uid(UID::from_hash(virtual_path));
     load_from_file();
 }
 
-Texture::Texture(const std::vector<std::string>& paths, TextureType type)
-    : texture_type_(type), format_(FORMAT_R8G8B8A8_SRGB), array_layer_((uint32_t)paths.size()) {
+Texture::Texture(const std::vector<std::string>& paths, TextureType type, RHIFormat format)
+    : texture_type_(type), format_(format), array_layer_((uint32_t)paths.size()) {
     paths_ = paths;
     if (!paths.empty()) {
         name_ = std::filesystem::path(paths[0]).filename().string();
@@ -63,7 +64,10 @@ Texture::~Texture() {
 }
 
 void Texture::on_load() {
-    if (paths_.size() > 0) {
+    PROFILE_SCOPE("Texture::on_load");
+    if (!image_data_.empty()) {
+        load_from_image_data();
+    } else if (paths_.size() > 0) {
         load_from_file();
     } else {
         init_rhi();
@@ -71,8 +75,11 @@ void Texture::on_load() {
 }
 
 void Texture::on_save() {
-    // Ensure paths_ contains virtual paths for portability
+    PROFILE_SCOPE("Texture::on_save");
     ensure_virtual_paths();
+    if (image_data_.empty() && !paths_.empty()) {
+        capture_image_data();
+    }
 }
 
 void Texture::ensure_virtual_paths() {
@@ -155,6 +162,7 @@ void Texture::init_rhi() {
 }
 
 void Texture::load_from_file() {
+    PROFILE_SCOPE("Texture::load_from_file");
     if (texture_type_ == TextureType::TextureCube && paths_.size() != 6) {
         ERR(LogRenderResource, "Wrong file num with texture type cube!");
         return;
@@ -164,11 +172,8 @@ void Texture::load_from_file() {
         return;
     }
 
-    bool rhi_initialized = false;
-    std::vector<RHIBufferRef> staging_buffers;
-    
-    auto immediate_command = EngineContext::rhi()->get_immediate_command();
-    
+    // Read all image files into image_data_ for later embedding
+    image_data_.clear();
     for (uint32_t i = 0; i < (uint32_t)paths_.size(); ++i) {
         std::string physical_path = paths_[i];
         if (EngineContext::asset()) {
@@ -181,21 +186,44 @@ void Texture::load_from_file() {
         std::ifstream file(physical_path, std::ios::binary | std::ios::ate);
         if (!file.is_open()) {
             ERR(LogRenderResource, "Failed to open texture file: {}", physical_path);
+            image_data_.push_back({});
             continue;
         }
 
         std::streamsize size = file.tellg();
         file.seekg(0, std::ios::beg);
-        std::vector<char> buffer(size);
-        if (!file.read(buffer.data(), size)) {
+        std::vector<uint8_t> buffer(size);
+        if (!file.read(reinterpret_cast<char*>(buffer.data()), size)) {
             ERR(LogRenderResource, "Failed to read texture file: {}", physical_path);
+            image_data_.push_back({});
             continue;
         }
 
+        image_data_.push_back(std::move(buffer));
+    }
+
+    // Upload from image_data_ to GPU
+    load_from_image_data();
+}
+
+void Texture::load_from_image_data() {
+    PROFILE_SCOPE("Texture::load_from_image_data");
+    if (image_data_.empty()) return;
+
+    bool rhi_initialized = false;
+    std::vector<RHIBufferRef> staging_buffers;
+    
+    auto immediate_command = EngineContext::rhi()->get_immediate_command();
+    
+    for (uint32_t i = 0; i < (uint32_t)image_data_.size(); ++i) {
+        if (image_data_[i].empty()) continue;
+
         int width, height, channels;
-        stbi_uc* pixels = stbi_load_from_memory((const stbi_uc*)buffer.data(), (int)size, &width, &height, &channels, 4);
+        stbi_uc* pixels = stbi_load_from_memory(
+            image_data_[i].data(), (int)image_data_[i].size(),
+            &width, &height, &channels, 4);
         if (!pixels) {
-            ERR(LogRenderResource, "Failed to load image from memory: {}", physical_path);
+            ERR(LogRenderResource, "Failed to decode embedded image data[{}]", i);
             continue;
         }
 
@@ -272,6 +300,36 @@ void Texture::load_from_file() {
 
         immediate_command->flush();
         staging_buffers.clear();
+    }
+}
+
+void Texture::capture_image_data() {
+    PROFILE_SCOPE("Texture::capture_image_data");
+    image_data_.clear();
+    for (const auto& path : paths_) {
+        std::string physical_path = path;
+        if (EngineContext::asset()) {
+            auto path_opt = EngineContext::asset()->get_physical_path(path);
+            if (path_opt) {
+                physical_path = path_opt->string();
+            }
+        }
+        
+        std::ifstream file(physical_path, std::ios::binary | std::ios::ate);
+        if (!file.is_open()) {
+            ERR(LogRenderResource, "Failed to open texture for capture: {}", physical_path);
+            image_data_.push_back({});
+            continue;
+        }
+        std::streamsize size = file.tellg();
+        file.seekg(0, std::ios::beg);
+        std::vector<uint8_t> buffer(size);
+        if (!file.read(reinterpret_cast<char*>(buffer.data()), size)) {
+            ERR(LogRenderResource, "Failed to read texture for capture: {}", physical_path);
+            image_data_.push_back({});
+            continue;
+        }
+        image_data_.push_back(std::move(buffer));
     }
 }
 

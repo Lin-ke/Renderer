@@ -1,0 +1,9 @@
+# NPR Material for low-poly stylized Earth
+
+MaterialType NPR
+
+newmtl Planet
+map_Kd textures/Texture_Planet.png
+FaceMode 0
+RimStrength 0.0
+RimWidth 0.0

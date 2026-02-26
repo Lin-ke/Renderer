@@ -33,7 +33,8 @@ void VolumeLightComponent::update_light_info() {
     Vec3 extent = { (probe_counts_.x - 1) * grid_step_.x,
                     (probe_counts_.y - 1) * grid_step_.y,
                     (probe_counts_.z - 1) * grid_step_.z };
-    box_ = BoundingBox(transform->transform.get_position() - extent / 2.0f, transform->transform.get_position() + extent / 2.0f);
+    Vec3 world_pos = transform->get_world_position();
+    box_ = BoundingBox(world_pos - extent / 2.0f, world_pos + extent / 2.0f);
 
     info_.setting.grid_start_position = box_.min;
     info_.setting.grid_step = grid_step_;

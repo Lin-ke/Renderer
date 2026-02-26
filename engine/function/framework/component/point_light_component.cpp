@@ -28,7 +28,7 @@ void PointLightComponent::update_light_info() {
     Vec3 pos = Vec3::Zero();
     auto transform = get_owner()->get_component<TransformComponent>();
     if (transform) {
-        pos = transform->transform.get_position();
+        pos = transform->get_world_position();
         sphere_ = BoundingSphere(pos, far_);
     }
 

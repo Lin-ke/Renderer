@@ -5,6 +5,7 @@
 
 std::unique_ptr<Entity> Entity::clone() {
     auto new_entity = std::make_unique<Entity>();
+    new_entity->set_name(name_);
 
     for (const auto& comp : components_) {
         std::string type_name(comp->get_component_type_name());
@@ -22,6 +23,14 @@ std::unique_ptr<Entity> Entity::clone() {
 
         new_comp->set_owner(new_entity.get());
         new_entity->components_.push_back(std::move(new_comp));
+    }
+
+    // Recursively clone children
+    for (const auto& child : children_) {
+        if (child) {
+            auto cloned_child = child->clone();
+            new_entity->add_child(std::move(cloned_child));
+        }
     }
 
     return new_entity;

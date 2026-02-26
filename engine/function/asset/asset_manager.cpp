@@ -3,6 +3,7 @@
 #include "engine/core/os/thread_pool.h"
 #include "engine/function/asset/asset_manager.h"
 #include "engine/main/engine_context.h"
+#include "engine/core/utils/profiler.h"
 
 #include <algorithm>
 #include <cereal/archives/binary.hpp>
@@ -22,7 +23,7 @@ namespace fs = std::filesystem;
 
 DEFINE_LOG_TAG(LogAsset, "Asset"); // Define the tag here
 
-constexpr bool use_thread_pool = false;
+constexpr bool use_thread_pool = true;
 struct AssetUID {
 	UID uid;
 
@@ -154,12 +155,14 @@ UID AssetManager::peek_uid_from_file(const fs::path &path) {
 }
 
 AssetRef AssetManager::perform_load_from_disk(UID uid, const fs::path &path) {
+	PROFILE_SCOPE("AssetManager::load_from_disk");
 	return with_asset_read<AssetFile>(path, [&](AssetFile &&file) -> AssetRef {
 		return file.asset;
 	});
 }
 
 void AssetManager::perform_save_to_disk(AssetRef asset, const fs::path &phys_path) {
+	PROFILE_SCOPE("AssetManager::save_to_disk");
 	if (!asset) {
 		return;
 	}
@@ -284,6 +287,7 @@ std::vector<std::shared_future<AssetRef>> AssetManager::enqueue_load_task(UID ui
 }
 
 AssetRef AssetManager::load_asset_blocking(UID uid) {
+	PROFILE_SCOPE("AssetManager::load_asset_blocking");
 	if (uid.is_empty()) {
 		return nullptr;
 	}
@@ -442,14 +446,17 @@ void AssetManager::collect_save_dependencies_recursive(AssetRef asset, std::vect
 
 static std::string type_to_ext(AssetType type) {
     switch (type) {
-        case AssetType::Texture:
         case AssetType::Model:
-        default:
+        case AssetType::Scene:
+        case AssetType::Prefab:
             return ".asset";
+        default:
+            return ".binasset";
     }
 }
 
 void AssetManager::save_asset(AssetRef asset, const std::string &virtual_path) {
+	PROFILE_SCOPE("AssetManager::save_asset");
 	if (!asset) {
 		return;
 	}

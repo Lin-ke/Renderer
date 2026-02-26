@@ -11,7 +11,7 @@ void CameraComponent::on_init() {
 }
 
 void CameraComponent::on_update(float delta_time) {
-    if (is_active_camera()) {
+    if (is_active_camera() && !external_control_) {
         input_move(delta_time);
     }
     update_matrix();
@@ -57,10 +57,14 @@ bool CameraComponent::is_active_camera() {
 void CameraComponent::update_matrix() {
     auto transform_component = get_owner()->get_component<TransformComponent>();
     if (transform_component) {
-        this->position_ = transform_component->transform.get_position();
-        this->front_ = transform_component->transform.front();
-        this->up_ = transform_component->transform.up();
-        this->right_ = transform_component->transform.right();
+        // Use world-space transforms to support hierarchy
+        this->position_ = transform_component->get_world_position();
+        
+        // Extract world-space orientation vectors from world rotation
+        Quaternion world_rot = transform_component->get_world_rotation();
+        this->front_ = world_rot.rotate_vector(Vec3::UnitZ());
+        this->up_ = world_rot.rotate_vector(Vec3::UnitY());
+        this->right_ = world_rot.rotate_vector(Vec3::UnitX());
     }
 
     prev_view_ = view_;

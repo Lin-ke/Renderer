@@ -19,6 +19,7 @@ struct aiMaterial;
 enum aiTextureType;
 
 struct MtlMaterial;
+struct MtlGlobalSettings;
 
 /**
  * @brief Handles importing of 3D model files (FBX, OBJ, etc.)
@@ -62,15 +63,20 @@ private:
         int index,
         const std::vector<MtlMaterial>& mtl_materials,
         const std::unordered_map<std::string, size_t>& mtl_name_to_index,
+        const MtlGlobalSettings& mtl_settings,
         std::shared_ptr<Material>& out_material);
         
     std::shared_ptr<Material> get_or_create_material(
         const std::string& mat_name,
         aiMaterial* ai_mat,
         const MtlMaterial* mtl_mat,
-        int mesh_index);
+        int mesh_index,
+        ModelMaterialType mat_type);
         
-    std::shared_ptr<Texture> load_material_texture(aiMaterial* mat, aiTextureType type);
+    std::shared_ptr<Texture> load_material_texture(aiMaterial* mat, aiTextureType type, RHIFormat format = FORMAT_R8G8B8A8_SRGB);
+    
+    // Helper to load texture from MTL path with error handling
+    std::shared_ptr<Texture> load_texture_safe(const std::string& path_str, const std::string& type_name, RHIFormat format = FORMAT_R8G8B8A8_SRGB);
     
     void extract_bone_weights(std::shared_ptr<Mesh> target_mesh, aiMesh* mesh, const aiScene* scene);
     

@@ -69,6 +69,34 @@ public:
 
     bool tick(const RenderPacket& packet);
 
+    /**
+     * @brief Set a custom RDG build function for testing
+     * This allows tests to inject custom render passes into the RDG.
+     */
+    using CustomRDGBuildFunc = std::function<void(RDGBuilder&, const RenderPacket&)>;
+    void set_custom_rdg_build_func(CustomRDGBuildFunc func) { custom_rdg_build_func_ = func; }
+    void clear_custom_rdg_build_func() { custom_rdg_build_func_ = nullptr; }
+
+    /**
+     * @brief Register a custom UI callback for ImGui rendering
+     * @param name Unique identifier for this callback (for removal)
+     * @param func Callback function that contains ImGui calls
+     * @return true if registered successfully, false if name already exists
+     */
+    bool add_custom_ui_callback(const std::string& name, std::function<void()> func);
+    
+    /**
+     * @brief Remove a custom UI callback by name
+     * @param name The unique identifier used when registering
+     * @return true if removed, false if not found
+     */
+    bool remove_custom_ui_callback(const std::string& name);
+    
+    /**
+     * @brief Clear all custom UI callbacks
+     */
+    void clear_custom_ui_callbacks();
+
     //####TODO####: RenderPass accessors
     // const std::array<std::shared_ptr<RenderPass>, PASS_TYPE_MAX_CNT>& get_passes() { return passes_; }
     
@@ -133,7 +161,8 @@ public:
     
     // Pass toggles
     bool enable_depth_prepass_ = true;
-    bool enable_forward_pass_ = true;
+    bool enable_pbr_pass_ = true;
+    bool enable_npr_pass_ = true;
     bool enable_skybox_pass_ = true;
     bool enable_depth_visualize_ = true;
 
@@ -179,9 +208,17 @@ public:
     void init_base_resource();
     void update_global_setting();
     
+    // Custom RDG build function for testing
+    CustomRDGBuildFunc custom_rdg_build_func_ = nullptr;
+
+    // Custom UI callbacks for game-side ImGui drawing (name -> callback)
+    std::unordered_map<std::string, std::function<void()>> custom_ui_callbacks_;
+    std::mutex custom_ui_callbacks_mutex_;
+    
     // UI Helpers
     void draw_scene_hierarchy(class Scene* scene);
     void draw_entity_node(class Entity* entity);
+    void draw_mesh_submeshes(class MeshRendererComponent* mesh_renderer);
     void draw_inspector_panel();
     void draw_buffer_debug();
     void draw_light_gizmo(class CameraComponent* camera, class Entity* entity, const Extent2D& extent);
@@ -190,10 +227,11 @@ public:
     std::shared_ptr<RenderMeshManager> mesh_manager_;
     std::shared_ptr<RenderLightManager> light_manager_;
     std::shared_ptr<GizmoManager> gizmo_manager_;
-    std::shared_ptr<render::ForwardPass> forward_pass_;
-    std::shared_ptr<render::DepthPrePass> depth_prepass_;
+
     std::shared_ptr<render::DepthVisualizePass> depth_visualize_pass_;
     std::shared_ptr<render::SkyboxPass> skybox_pass_;
+    std::shared_ptr<render::ForwardPass> forward_pass_;
+    std::shared_ptr<render::DepthPrePass> depth_prepass_;
     std::shared_ptr<render::EditorUIPass> editor_ui_pass_;
     
     // Depth buffer visualization

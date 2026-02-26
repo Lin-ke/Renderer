@@ -200,7 +200,9 @@ float4 PSMain(PSInput input) : SV_TARGET {
     
     // Face mode: output albedo directly without any lighting (reference: npr_klee_face.frag)
     if (face_mode > 0.5) {
-        return float4(base_color, 1.0);
+        // Gamma correction for display (render target is UNORM, not sRGB)
+        float3 face_color = pow(base_color, 1.0 / 2.2);
+        return float4(face_color, 1.0);
     }
     
     float2 ndc = input.clip_pos.xy / input.clip_pos.w;
@@ -280,7 +282,7 @@ float4 PSMain(PSInput input) : SV_TARGET {
     final_color += emission.rgb;
     
     // Gamma correction
-    // final_color = pow(final_color, 1.0 / 2.2);
+    final_color = pow(final_color, 1.0 / 2.2);
     
     return float4(final_color, 1.0);
 }

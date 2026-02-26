@@ -30,12 +30,14 @@ private:
     void create_shaders();
     void create_pipeline();
     void create_constant_buffer();
+    void create_sampler();
 
     RHIGraphicsPipelineRef pipeline_;
     RHIRootSignatureRef root_signature_;
     ShaderRef vertex_shader_;
     ShaderRef fragment_shader_;
     RHIBufferRef constant_buffer_;
+    RHISamplerRef sampler_;
     
     bool initialized_ = false;
 };

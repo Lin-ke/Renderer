@@ -5,10 +5,10 @@
         "a5a18129-8c4d-0492-d107-79a50ea10ff9",
         "763c8a3c-a2f5-b4b6-e1de-b8091bb88cbd",
         "18ac8863-366b-94c8-1994-1f26ab5f9268",
-        "1b2d0ccb-ecfd-0d4a-59ee-154817b07ebb",
-        "6fa766de-e78d-eba0-9a97-5fee8e19da1c",
-        "be0624e8-0b57-79bd-9289-21a14cacebce",
-        "541c12f0-6a35-3d77-38ab-ccb2014f9abd"
+        "063245e6-48bc-5ae3-0871-71781bcc6233",
+        "b295276f-0a05-5e21-b8be-092bf4b866e3",
+        "0c987f1b-620f-1734-dcbe-343ec72527b0",
+        "8c1a2353-a3ad-9666-45fc-1557f8a10380"
     ],
     "asset": {
         "polymorphic_id": 2147483649,
@@ -26,10 +26,10 @@
                     "18ac8863-366b-94c8-1994-1f26ab5f9268"
                 ],
                 "material_deps_": [
-                    "1b2d0ccb-ecfd-0d4a-59ee-154817b07ebb",
-                    "6fa766de-e78d-eba0-9a97-5fee8e19da1c",
-                    "be0624e8-0b57-79bd-9289-21a14cacebce",
-                    "541c12f0-6a35-3d77-38ab-ccb2014f9abd"
+                    "063245e6-48bc-5ae3-0871-71781bcc6233",
+                    "b295276f-0a05-5e21-b8be-092bf4b866e3",
+                    "0c987f1b-620f-1734-dcbe-343ec72527b0",
+                    "8c1a2353-a3ad-9666-45fc-1557f8a10380"
                 ],
                 "material_slots": [
                     {
