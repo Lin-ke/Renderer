@@ -52,6 +52,8 @@ inline bool create_earth_moon_scene(const std::string& scene_path) {
     auto panorama_texture = std::make_shared<Texture>("/Engine/textures/cosmic.jpg");
     if (panorama_texture && panorama_texture->texture_) {
         auto skybox_mat = std::make_shared<SkyboxMaterial>();
+        // 使用确定性UID避免每次运行都生成新的binasset文件
+        skybox_mat->set_uid(UID::from_hash("/Game/skybox_material_cosmic"));
         skybox_mat->set_intensity(1.0f);
         skybox_mat->set_panorama_texture(panorama_texture);
         skybox_comp->set_material(skybox_mat);
@@ -119,7 +121,7 @@ inline bool create_earth_moon_scene(const std::string& scene_path) {
     // to align the forward axis).
     auto* ship_visual = ship_ent->create_child("ShipVisual");
     auto* visual_trans = ship_visual->add_component<TransformComponent>();
-    visual_trans->transform.set_rotation({0.0f, 90.0f, 0.0f});
+    visual_trans->transform.set_rotation({-90.0f, 90.0f, 0.0f});
     visual_trans->transform.set_scale({.4f, .4f, .4f});
 
     ModelProcessSetting ship_setting;

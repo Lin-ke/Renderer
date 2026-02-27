@@ -28,10 +28,16 @@ void CameraComponent::input_move(float delta_time) {
     Vec3 delta_position = Vec3::Zero();
     const auto& input = Input::get_instance();
 
-    if (input.is_key_down(Key::W)) delta_position += transform_component->transform.front() * delta;
-    if (input.is_key_down(Key::S)) delta_position -= transform_component->transform.front() * delta;
-    if (input.is_key_down(Key::A)) delta_position -= transform_component->transform.right() * delta;
-    if (input.is_key_down(Key::D)) delta_position += transform_component->transform.right() * delta;
+    // 使用相机本地坐标系：front（前）、right（右）、up（上）
+    // 注意：cross使用右手定则，左手坐标系中 up × front = right
+    Vec3 front = transform_component->transform.front();
+    Vec3 up = Vec3::UnitY();
+    Vec3 right = up.cross(front).normalized();
+
+    if (input.is_key_down(Key::W)) delta_position += front * delta;
+    if (input.is_key_down(Key::S)) delta_position -= front * delta;
+    if (input.is_key_down(Key::A)) delta_position -= right * delta;
+    if (input.is_key_down(Key::D)) delta_position += right * delta;
     if (input.is_key_down(Key::Space)) delta_position += transform_component->transform.up() * delta;
     if (input.is_key_down(Key::LeftControl)) delta_position -= transform_component->transform.up() * delta;
     

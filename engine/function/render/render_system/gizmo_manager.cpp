@@ -175,7 +175,7 @@ void GizmoManager::draw_gizmo(CameraComponent* camera, Entity* selected_entity,
         }
         
         // Convert world-space matrix back to local-space for hierarchy support
-        Mat4 new_model = parent_world.inverse() * new_world;
+        Mat4 new_model = new_world * parent_world.inverse();
         
         Vec3 position = Vec3(new_model.m[3][0], new_model.m[3][1], new_model.m[3][2]);
         

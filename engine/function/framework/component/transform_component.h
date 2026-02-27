@@ -16,7 +16,7 @@ public:
 
     /**
      * @brief Get the world-space matrix by walking up the parent chain.
-     *        world = parent_world * local
+     *        world = local * parent_world (row-major)
      */
     Mat4 get_world_matrix() const {
         Mat4 local = transform.get_matrix();
@@ -29,7 +29,8 @@ public:
         auto* parent_trans = parent->get_component<TransformComponent>();
         if (!parent_trans) return local;
 
-        return parent_trans->get_world_matrix() * local;
+        // For row-major matrices: world = local * parent_world
+        return local * parent_trans->get_world_matrix();
     }
 
     /**
@@ -46,10 +47,11 @@ public:
      */
     Vec3 get_world_scale() const {
         Mat4 world = get_world_matrix();
-        Vec3 cx = Vec3(world.m[0][0], world.m[1][0], world.m[2][0]);
-        Vec3 cy = Vec3(world.m[0][1], world.m[1][1], world.m[2][1]);
-        Vec3 cz = Vec3(world.m[0][2], world.m[1][2], world.m[2][2]);
-        return Vec3(cx.length(), cy.length(), cz.length());
+        // In row-major, basis vectors are rows
+        Vec3 rx = world.row(0).xyz();
+        Vec3 ry = world.row(1).xyz();
+        Vec3 rz = world.row(2).xyz();
+        return Vec3(rx.length(), ry.length(), rz.length());
     }
 
     /**
@@ -58,16 +60,17 @@ public:
      */
     Quaternion get_world_rotation() const {
         Mat4 world = get_world_matrix();
-        // Extract rotation matrix columns and normalize (remove scale)
-        Vec3 cx = Vec3(world.m[0][0], world.m[1][0], world.m[2][0]).normalized();
-        Vec3 cy = Vec3(world.m[0][1], world.m[1][1], world.m[2][1]).normalized();
-        Vec3 cz = Vec3(world.m[0][2], world.m[1][2], world.m[2][2]).normalized();
+        Vec3 scale = get_world_scale();
         
-        // Convert rotation matrix to quaternion using DirectXMath
+        // Extract and normalize rows
+        Vec3 rx = world.row(0).xyz() / scale.x;
+        Vec3 ry = world.row(1).xyz() / scale.y;
+        Vec3 rz = world.row(2).xyz() / scale.z;
+        
         DirectX::XMMATRIX rotMatrix(
-            DirectX::XMVectorSet(cx.x, cy.x, cz.x, 0.0f),
-            DirectX::XMVectorSet(cx.y, cy.y, cz.y, 0.0f),
-            DirectX::XMVectorSet(cx.z, cy.z, cz.z, 0.0f),
+            DirectX::XMVectorSet(rx.x, rx.y, rx.z, 0.0f),
+            DirectX::XMVectorSet(ry.x, ry.y, ry.z, 0.0f),
+            DirectX::XMVectorSet(rz.x, rz.y, rz.z, 0.0f),
             DirectX::XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f)
         );
         return Quaternion(DirectX::XMQuaternionRotationMatrix(rotMatrix));

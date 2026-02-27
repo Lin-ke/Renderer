@@ -33,7 +33,7 @@ static constexpr float DEFAULT_MOON_ORBIT_DISTANCE     = 100.0f;
 static constexpr float DEFAULT_MOON_ORBIT_SPEED        = 0.05f;
 static constexpr float DEFAULT_SHIP_EARTH_ORBIT_RADIUS = 35.0f;
 static constexpr float DEFAULT_SHIP_EARTH_ORBIT_SPEED  = 0.5f;
-static constexpr float DEFAULT_SHIP_MOON_ORBIT_RADIUS  = 5.0f;
+static constexpr float DEFAULT_SHIP_MOON_ORBIT_RADIUS  = 10.0f;
 static constexpr float DEFAULT_SHIP_MOON_ORBIT_SPEED   = 1.0f;
 static constexpr float DEFAULT_TRANSFER_DURATION       = 8.0f;
 static constexpr float DEFAULT_EARTH_SURFACE_OFFSET    = 6.0f;
@@ -153,6 +153,14 @@ public:
     void set_camera_entity(Entity* e) { camera_ = e; }
 
     void on_init() override {
+        // Debug: verify owner is correct
+        if (get_owner()) {
+            std::string name = get_owner()->get_name();
+            if (name != "Ship") {
+                ERR(LogEarthMoonShip, "ShipController attached to wrong entity: '{}', expected 'Ship'!", name);
+            }
+        }
+        
         state_       = ShipState::EarthOrbit;
         camera_mode_ = CameraMode::ThirdPerson;
 
@@ -549,6 +557,12 @@ private:
     void update_ship(float delta_time) {
         auto* ship_trans = get_owner()->get_component<TransformComponent>();
         if (!ship_trans) return;
+        
+        // Debug: verify we're updating the correct entity
+        if (get_owner()->get_name() != "Ship") {
+            ERR(LogEarthMoonShip, "update_ship called on wrong entity: '{}'", get_owner()->get_name());
+            return;
+        }
 
         Vec3 earth_pos = get_earth_position();
 
@@ -665,8 +679,8 @@ private:
         Vec3 move = Vec3::Zero();
         if (input.is_key_down(Key::W)) move = move + forward;
         if (input.is_key_down(Key::S)) move = move - forward;
-        if (input.is_key_down(Key::A)) move = move + right;
-        if (input.is_key_down(Key::D)) move = move - right;
+        if (input.is_key_down(Key::A)) move = move - right;
+        if (input.is_key_down(Key::D)) move = move + right;
         if (input.is_key_down(Key::E)) move = move + up;
         if (input.is_key_down(Key::Q)) move = move - up;
 
