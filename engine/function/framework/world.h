@@ -32,8 +32,15 @@ public:
     /**
      * @brief Set the currently active scene
      * @param scene The scene to activate
+     * @param virtual_path Optional virtual path where the scene was loaded from
      */
-    void set_active_scene(std::shared_ptr<Scene> scene);
+    void set_active_scene(std::shared_ptr<Scene> scene, const std::string& virtual_path = "");
+    
+    /**
+     * @brief Save the active scene to disk
+     * @return true if saved successfully, false otherwise
+     */
+    bool save_active_scene();
 
     /**
      * @brief Get the currently active scene
@@ -66,6 +73,7 @@ public:
 
 private:
     std::shared_ptr<Scene> active_scene_;
+    std::string active_scene_virtual_path_; ///< Virtual path of the active scene
     static std::unique_ptr<World> instance_;
 
     bool initialized_ = false;

@@ -2,6 +2,7 @@
 #include "engine/main/engine_context.h"
 #include "engine/function/render/rhi/rhi.h"
 #include "engine/core/log/Log.h"
+#include "engine/core/utils/path_utils.h"
 
 #include <fstream>
 #include <filesystem>
@@ -28,7 +29,7 @@ std::optional<std::vector<uint8_t>> ShaderUtils::load_compiled_shader(const std:
 }
 
 std::string ShaderUtils::get_shader_output_dir() {
-    std::string engine_path = ENGINE_PATH;
+    std::string engine_path = utils::get_engine_path().string();
     // Try different locations for the shader directory
     std::vector<std::string> possible_paths = {
         engine_path + "/shaders",
@@ -48,7 +49,7 @@ std::string ShaderUtils::get_shader_output_dir() {
 }
 
 std::string ShaderUtils::get_shader_source_dir() {
-    std::string engine_path = ENGINE_PATH;
+    std::string engine_path = utils::get_engine_path().string();
     // Try different locations for the shader source directory
     std::vector<std::string> possible_paths = {
         engine_path + "/assets/shaders",

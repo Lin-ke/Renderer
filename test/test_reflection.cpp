@@ -13,6 +13,7 @@
 #include "engine/core/math/math.h"
 #include "engine/core/log/Log.h"
 #include "engine/core/utils/file_cleaner.h"
+#include "engine/core/utils/path_utils.h"
 #include <string>
 #include <any>
 #include <fstream>
@@ -165,7 +166,7 @@ TEST_CASE("Simplified Serialization", "[reflection]") {
 
 TEST_CASE("Prefab Modifications", "[prefab]") {
     test_utils::TestContext::reset();
-    utils::clean_old_files(std::filesystem::path(std::string(ENGINE_PATH) + "/test/test_internal/assets"), 5);
+    utils::clean_old_files(utils::get_engine_path() / "test/test_internal/assets", 5);
     
     UID prefab_uid = UID::generate();
 
@@ -228,7 +229,7 @@ TEST_CASE("Prefab Modifications", "[prefab]") {
 
 TEST_CASE("Complex Prefab System", "[prefab]") {
     test_utils::TestContext::reset();
-    utils::clean_old_files(std::filesystem::path(std::string(ENGINE_PATH) + "/test/test_internal/assets"), 5);
+    utils::clean_old_files(utils::get_engine_path() / "test/test_internal/assets", 5);
     UID ball_uid, cube_uid;
 
     // Phase 1: Create and Save Two Prefabs

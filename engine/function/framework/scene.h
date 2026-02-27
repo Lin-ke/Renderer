@@ -18,6 +18,18 @@ class VolumeLightComponent;
 class Scene : public Asset {
 public:
     std::vector<std::unique_ptr<Entity>> entities_;
+    
+    /**
+     * @brief Get the virtual path where this scene was loaded from
+     * @return Virtual path string, empty if not loaded from disk
+     */
+    const std::string& get_virtual_path() const { return virtual_path_; }
+    
+    /**
+     * @brief Set the virtual path for this scene (called when loading)
+     * @param path The virtual path
+     */
+    void set_virtual_path(const std::string& path) { virtual_path_ = path; }
 
     std::string_view get_asset_type_name() const override { return "Scene"; }
     AssetType get_asset_type() const override { return AssetType::Scene; }
@@ -137,6 +149,8 @@ public:
     }
 
 private:
+    std::string virtual_path_; ///< Runtime virtual path (not serialized)
+    
     // Recursively call on_init for all components in entity and its children
     static void init_entity_recursive(Entity* entity) {
         if (!entity) return;

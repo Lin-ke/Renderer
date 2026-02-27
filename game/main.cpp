@@ -1,5 +1,6 @@
 #include "game/scene_builder.h"
 
+#include "engine/core/utils/path_utils.h"
 #include "engine/main/engine_context.h"
 #include "engine/core/window/window.h"
 #include "engine/function/input/input.h"
@@ -54,7 +55,7 @@ static bool load_and_activate_scene(const std::string& virtual_path) {
         return false;
     }
 
-    EngineContext::world()->set_active_scene(scene);
+    EngineContext::world()->set_active_scene(scene, virtual_path);
     if (auto mesh_mgr = EngineContext::render_system()->get_mesh_manager()) {
         mesh_mgr->set_active_camera(camera);
     }
@@ -81,15 +82,15 @@ int main() {
 
     // 2. Init asset manager — "game" makes /Game/ resolve to game/assets/
     if (EngineContext::asset()) {
-        EngineContext::asset()->init(std::string(ENGINE_PATH) + "\\game");
+        EngineContext::asset()->init((utils::get_engine_path() / "game").string());
     }
 
     // 3. Create scene (saves to /Game/earth_moon_ship_scene.asset)
-    if (!create_earth_moon_scene(SCENE_SAVE_PATH)) {
-        ERR(LogGame, "Failed to create scene, exiting");
-        EngineContext::exit();
-        return 1;
-    }
+    // if (!create_earth_moon_scene(SCENE_SAVE_PATH)) {
+    //     ERR(LogGame, "Failed to create scene, exiting");
+    //     EngineContext::exit();
+    //     return 1;
+    // }
 
     // 4. Load scene into the world
     if (!load_and_activate_scene(SCENE_SAVE_PATH)) {
@@ -114,12 +115,35 @@ int main() {
                     ctrl->draw_imgui();
                 });
                 
-                // Callback 2: Missed window hint (shown when transfer fails)
+                // Callback 2: Transfer info (shown during active transfer)
+                rs->add_custom_ui_callback("transfer_info", [ctrl]() {
+                    const char* source_state = nullptr;
+                    const char* target_state = nullptr;
+                    if (!ctrl->get_transfer_info(&source_state, &target_state)) return;
+                    
+                    ImGui::SetNextWindowPos(
+                        ImVec2(ImGui::GetIO().DisplaySize.x / 2 - 150, 100), 
+                        ImGuiCond_Always);
+                    ImGui::SetNextWindowBgAlpha(0.85f);
+                    ImGui::Begin("##TransferInfo", nullptr,
+                        ImGuiWindowFlags_AlwaysAutoResize |
+                        ImGuiWindowFlags_NoDecoration |
+                        ImGuiWindowFlags_NoFocusOnAppearing);
+                    
+                    ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "TRANSFER INFO");
+                    ImGui::Separator();
+                    ImGui::Text("Transferring:");
+                    ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "%s -> %s", source_state, target_state);
+                    
+                    ImGui::End();
+                });
+                
+                // Callback 3: Missed window hint (shown when transfer fails)
                 rs->add_custom_ui_callback("missed_window_hint", [ctrl]() {
                     if (!ctrl->should_show_missed_window_hint()) return;
                     
                     ImGui::SetNextWindowPos(
-                        ImVec2(ImGui::GetIO().DisplaySize.x / 2 - 150, 100), 
+                        ImVec2(ImGui::GetIO().DisplaySize.x / 2 - 150, 180), 
                         ImGuiCond_Always);
                     ImGui::SetNextWindowBgAlpha(0.85f);
                     ImGui::Begin("##MissedWindow", nullptr,
@@ -127,7 +151,7 @@ int main() {
                         ImGuiWindowFlags_NoDecoration |
                         ImGuiWindowFlags_NoFocusOnAppearing);
                     
-                    ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "TRANSFER FAILED");
+                    ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "TRANSFER WINDOW CLOSED");
                     ImGui::Separator();
                     ImGui::TextWrapped("%s", ctrl->get_missed_window_message());
                     
@@ -160,6 +184,14 @@ int main() {
 
         // Tick input
         Input::get_instance().tick();
+        
+        // Handle Ctrl+S to save scene
+        if (Input::get_instance().is_key_down(Key::LeftControl) && 
+            Input::get_instance().is_key_pressed(Key::S)) {
+            if (EngineContext::world()) {
+                EngineContext::world()->save_active_scene();
+            }
+        }
 
         // Tick world (components: MoonOrbitComponent, ShipController, CameraComponent)
         if (EngineContext::world()) {

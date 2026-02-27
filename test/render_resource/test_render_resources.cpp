@@ -6,6 +6,7 @@
 
 #include "test/test_utils.h"
 #include "engine/main/engine_context.h"
+#include "engine/core/utils/path_utils.h"
 #include "engine/function/render/render_resource/texture.h"
 #include "engine/function/render/render_resource/material.h"
 #include "engine/function/render/render_resource/shader.h"
@@ -47,7 +48,7 @@ static std::vector<uint8_t> compile_shader_test(const std::string& source, const
 TEST_CASE("Texture RHI Initialization", "[render_resource]") {
     test_utils::TestContext::reset();
     
-    std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
+    std::string test_asset_dir = (utils::get_engine_path() / "test/test_internal").string();
     REQUIRE(EngineContext::rhi() != nullptr);
 
     Extent3D extent = { 128, 128, 1 };
@@ -67,7 +68,7 @@ TEST_CASE("Texture RHI Initialization", "[render_resource]") {
 TEST_CASE("Shader Loading and Serialization", "[render_resource]") {
     test_utils::TestContext::reset();
     
-    std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
+    std::string test_asset_dir = (utils::get_engine_path() / "test/test_internal").string();
     const std::string vs_source = R"(
         float4 main(float3 position : POSITION) : SV_POSITION {
             return float4(position, 1.0);
@@ -106,7 +107,7 @@ TEST_CASE("Shader Loading and Serialization", "[render_resource]") {
 TEST_CASE("Material System", "[render_resource]") {
     test_utils::TestContext::reset();
     
-    std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
+    std::string test_asset_dir = (utils::get_engine_path() / "test/test_internal").string();
     SECTION("Material Parameters and Serialization") {
         // Use PBRMaterial for specific properties
         auto material = std::make_shared<PBRMaterial>();
@@ -202,7 +203,7 @@ TEST_CASE("Material System", "[render_resource]") {
 TEST_CASE("Model System", "[render_resource]") {
     test_utils::TestContext::reset();
     
-    std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
+    std::string test_asset_dir = (utils::get_engine_path() / "test/test_internal").string();
     SECTION("Model Loading with bunny.obj") {
         REQUIRE(EngineContext::rhi() != nullptr);
         
@@ -258,7 +259,7 @@ TEST_CASE("Model System", "[render_resource]") {
 TEST_CASE("FBX Material System", "[render_resource][fbx]") {
     test_utils::TestContext::reset();
     
-    std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
+    std::string test_asset_dir = (utils::get_engine_path() / "test/test_internal").string();
     SECTION("FBX Model Loading with Materials") {
         // Load FBX model with materials using Model::Load
         std::string model_path = "/Engine/models/material_ball/material_ball.fbx";

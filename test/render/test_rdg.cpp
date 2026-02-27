@@ -11,6 +11,7 @@
 #include "engine/function/render/render_resource/model.h"
 #include "engine/function/render/render_system/render_system.h"
 #include "engine/function/asset/asset_manager.h"
+#include "engine/core/utils/path_utils.h"
 #include "engine/core/log/Log.h"
 
 /**
@@ -72,7 +73,7 @@ static bool create_rdg_scene(const std::string& scene_path) {
 TEST_CASE("RDG forward rendering", "[rdg]") {
     test_utils::TestContext::reset();
     
-    std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
+    std::string test_asset_dir = (utils::get_engine_path() / "test/test_internal").string();
     REQUIRE(EngineContext::rhi() != nullptr);
     REQUIRE(EngineContext::render_system() != nullptr);
     REQUIRE(EngineContext::world() != nullptr);

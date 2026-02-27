@@ -80,19 +80,20 @@ namespace Math
     void mat3x4(Mat4 mat, float* new_mat)
     {
         // Extract 3x4 matrix (3 rows, 4 columns) from 4x4
-        // Store in row-major order for each row
-        new_mat[0]  = mat.m[0][0];
-        new_mat[1]  = mat.m[0][1];
-        new_mat[2]  = mat.m[0][2];
-        new_mat[3]  = mat.m[0][3];
-        new_mat[4]  = mat.m[1][0];
-        new_mat[5]  = mat.m[1][1];
-        new_mat[6]  = mat.m[1][2];
-        new_mat[7]  = mat.m[1][3];
-        new_mat[8]  = mat.m[2][0];
-        new_mat[9]  = mat.m[2][1];
-        new_mat[10] = mat.m[2][2];
-        new_mat[11] = mat.m[2][3];
+        // In Row-Major (v * M), the 4th row (m[3]) is translation.
+        // However, DXR/Shader 3x4 structures usually expect [Basis | Translation].
+        // To be compatible with RHIAccelerationStructureInstanceInfo which uses float[3][4],
+        // we extract the 3 basis vectors and the translation.
+        
+        // Row 0: X-basis (m00, m01, m02) and Translation.x (m30) ? 
+        // No, typically float[3][4] in DXR is the top 3x4 of a COLUMN-MAJOR matrix.
+        // For a ROW-MAJOR mat (v*M), the top-left 3x3 is rotation/scale, and m[3][0,1,2] is translation.
+        // The DXR instance transform is actually the transpose of a row-major world matrix.
+        
+        // Correct mapping for row-major M to DXR 3x4 (which is essentially M transposed, then take top 3 rows):
+        new_mat[0]  = mat.m[0][0]; new_mat[1]  = mat.m[1][0]; new_mat[2]  = mat.m[2][0]; new_mat[3]  = mat.m[3][0];
+        new_mat[4]  = mat.m[0][1]; new_mat[5]  = mat.m[1][1]; new_mat[6]  = mat.m[2][1]; new_mat[7]  = mat.m[3][1];
+        new_mat[8]  = mat.m[0][2]; new_mat[9]  = mat.m[1][2]; new_mat[10] = mat.m[2][2]; new_mat[11] = mat.m[3][2];
     }
 
     Vec3 extract_euler_angles(const Mat3& m)

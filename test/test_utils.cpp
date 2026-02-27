@@ -12,6 +12,7 @@
 #include "engine/core/window/window.h"
 #include "engine/core/utils/profiler.h"
 #include "engine/core/utils/cpu_profiler.h"
+#include "engine/core/utils/path_utils.h"
 #include <fstream>
 #include <thread>
 #include <chrono>
@@ -26,7 +27,7 @@ std::string TestContext::test_asset_dir_;
 void TestContext::init_engine() {
     if (engine_initialized_) return;
     
-    test_asset_dir_ = std::string(ENGINE_PATH) + "/test/test_internal";
+    test_asset_dir_ = (utils::get_engine_path() / "test/test_internal").string();
     
     std::bitset<8> mode;
     mode.set(EngineContext::StartMode::Asset);
@@ -124,7 +125,7 @@ SceneLoadResult SceneLoader::load(const std::string& virtual_path,
     
     // Set as active scene if requested
     if (set_active) {
-        EngineContext::world()->set_active_scene(scene);
+        EngineContext::world()->set_active_scene(scene, virtual_path);
         if (auto mesh_manager = EngineContext::render_system()->get_mesh_manager()) {
             mesh_manager->set_active_camera(camera);
         }
@@ -253,7 +254,7 @@ bool RenderTestApp::run(const Config& config, std::vector<uint8_t>& out_screensh
     profiler.end_frame();
 
     // Export profiler trace for analysis
-    std::string trace_path = std::string(ENGINE_PATH) + "/test/test_internal/profile_trace.json";
+    std::string trace_path = (utils::get_engine_path() / "test/test_internal/profile_trace.json").string();
     export_profiler_trace(trace_path);
 
     // 3. Set up custom RDG build function if provided

@@ -1,6 +1,7 @@
 #include "asset_manager.h"
 #include "engine/core/log/Log.h"
 #include "engine/core/os/thread_pool.h"
+#include "engine/core/utils/path_utils.h"
 #include "engine/function/asset/asset_manager.h"
 #include "engine/main/engine_context.h"
 #include "engine/core/utils/profiler.h"
@@ -23,7 +24,7 @@ namespace fs = std::filesystem;
 
 DEFINE_LOG_TAG(LogAsset, "Asset"); // Define the tag here
 
-constexpr bool use_thread_pool = true;
+constexpr bool use_thread_pool = false;
 struct AssetUID {
 	UID uid;
 
@@ -127,7 +128,7 @@ static std::shared_future<T> make_ready_future(const T &value) {
 AssetManager::~AssetManager() = default;
 
 void AssetManager::init(const fs::path &game_path) {
-	engine_path_ = fs::absolute(ENGINE_PATH) / "assets";
+	engine_path_ = utils::get_engine_path() / "assets";
 	game_path_ = game_path.empty() ? engine_path_ : fs::absolute(game_path) / "assets";
 
 	for (const auto &p : game_path == fs::path{} ? std::vector<fs::path>{ engine_path_ } : std::vector<fs::path>{ engine_path_, game_path_ }) {

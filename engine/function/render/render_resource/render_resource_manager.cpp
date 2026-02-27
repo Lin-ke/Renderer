@@ -3,6 +3,7 @@
 #include "engine/core/log/Log.h"
 #include "engine/function/asset/asset_manager.h"
 #include "engine/function/render/data/render_structs.h"
+#include "engine/core/utils/path_utils.h"
 
 #include <cstdint>
 #include <fstream>
@@ -231,7 +232,7 @@ RHIShaderRef RenderResourceManager::get_or_create_shader(const std::string& path
     
     // Try to load from asset system
     try {
-        std::string full_path = std::string(ENGINE_PATH) + "/" + path;
+        std::string full_path = (utils::get_engine_path() / path).string();
         std::ifstream file(full_path, std::ios::binary);
         if (file) {
             std::vector<uint8_t> code((std::istreambuf_iterator<char>(file)),

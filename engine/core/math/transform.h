@@ -73,7 +73,7 @@ class Transform {
   Vec3 inverse_position() const { return -position_; }
   
   Transform inverse() const {
-    return Transform(inverse_position(), inverse_scale(), inverse_rotation());
+    return Transform(get_inverse_matrix());
   }
 
   Transform operator*(const Transform& other) const {

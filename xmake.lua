@@ -9,11 +9,6 @@ add_requires("imguizmo", {configs = {cxflags = "-DIMGUI_DEFINE_MATH_OPERATORS"}}
 
 set_encodings("utf-8")
 add_defines("UNICODE", "_UNICODE")
-on_load(function (target)
-        local engine_path = os.projectdir()
-        engine_path = engine_path:gsub("\\", "/")
-        target:add("defines", 'ENGINE_PATH="' .. engine_path .. '"')
-    end)
 -- clangd目前不支持cpp23：(看.clangd可以调整)
 if is_mode("debug") then
     add_defines("_DEBUG_")

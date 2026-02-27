@@ -17,6 +17,7 @@
 #include "engine/function/input/input.h"
 #include "engine/core/log/Log.h"
 #include "engine/function/asset/asset_manager.h"
+#include "engine/core/utils/path_utils.h"
 
 #include <thread>
 #include <chrono>
@@ -133,7 +134,7 @@ static void on_scene_loaded(test_utils::SceneLoadResult& result) {
 TEST_CASE("NPR Klee rendering", "[npr]") {
     test_utils::TestContext::reset();
     
-    std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
+    std::string test_asset_dir = (utils::get_engine_path() / "test/test_internal").string();
     REQUIRE(EngineContext::rhi() != nullptr);
     REQUIRE(EngineContext::render_system() != nullptr);
     REQUIRE(EngineContext::world() != nullptr);

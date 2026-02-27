@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 #include "test/test_utils.h"
+#include "engine/core/utils/path_utils.h"
 #include "engine/main/engine_context.h"
 #include "engine/function/framework/world.h"
 #include "engine/function/framework/scene.h"
@@ -37,7 +38,7 @@ TEST_CASE("Scene Dependency System", "[scene]") {
     test_utils::TestContext::reset();
     
     try {
-        std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
+        std::string test_asset_dir = (utils::get_engine_path() / "test/test_internal").string();
         std::filesystem::create_directories(test_asset_dir);
         REQUIRE(EngineContext::rhi() != nullptr);
         REQUIRE(EngineContext::asset() != nullptr);

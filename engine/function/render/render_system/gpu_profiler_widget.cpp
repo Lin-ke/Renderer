@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <cstdio>
 
-bool GPUProfilerWidget::show_window_ = false;
+bool GPUProfilerWidget::show_window_ = true;
 
 // Predefined pass colors (visually distinct, muted palette)
 static const ImVec4 kPassColors[] = {
@@ -27,8 +27,11 @@ static constexpr int kColorCount = sizeof(kPassColors) / sizeof(kPassColors[0]);
 void GPUProfilerWidget::draw_window(GPUProfiler& profiler, bool* open) {
     if (!show_window_) return;
 
-    ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize;
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse;
 
+    // Set window size to half screen height
+    float window_height = ImGui::GetIO().DisplaySize.y * 0.5f;
+    ImGui::SetNextWindowSize(ImVec2(400, window_height), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowBgAlpha(0.85f);
     if (!ImGui::Begin("GPU Profiler", open ? open : &show_window_, flags)) {
         ImGui::End();

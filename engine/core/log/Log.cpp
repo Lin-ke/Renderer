@@ -10,6 +10,7 @@
 #include <sstream>
 #include <iomanip>
 #include "engine/core/utils/file_cleaner.h"
+#include "engine/core/utils/path_utils.h"
 
 
 static std::string g_session_log_filename;        // 用于在测试时记住文件名，避免产生碎片文件
@@ -84,7 +85,7 @@ void Log::init() {
     }
 
     
-    std::filesystem::path log_dir = std::filesystem::absolute(ENGINE_PATH) / ("logs");
+    std::filesystem::path log_dir = utils::get_engine_path() / "logs";
     if (!std::filesystem::exists(log_dir)) {
         std::filesystem::create_directories(log_dir);
     }

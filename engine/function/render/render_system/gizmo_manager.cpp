@@ -140,71 +140,81 @@ void GizmoManager::draw_gizmo(CameraComponent* camera, Entity* selected_entity,
     }
     ImGuizmo::SetDrawlist(draw_list);
 
-    // Save original transform matrix to detect changes
-    float original_transform[16];
-    for (int i = 0; i < 16; ++i) original_transform[i] = transform_matrix[i];
-    
-    ImGuizmo::Manipulate(view_matrix, proj_matrix,
-                         static_cast<ImGuizmo::OPERATION>(current_operation_),
-                         static_cast<ImGuizmo::MODE>(current_mode_),
-                         transform_matrix, nullptr, nullptr);
-    
     // Apply transform if changed
     bool is_using = ImGuizmo::IsUsing();
     
-    // Check if matrix actually changed
-    bool matrix_changed = false;
-    for (int i = 0; i < 16; ++i) {
-        if (std::abs(transform_matrix[i] - original_transform[i]) > 0.0001f) {
-            matrix_changed = true;
-            break;
-        }
-    }
-    
-    if (is_using && matrix_changed) {
-        Mat4 new_gizmo_matrix = from_row_major_array(transform_matrix);
-
-        // Revert anchor offset to get world-space model matrix
-        Mat4 new_world = new_gizmo_matrix;
-        if (local_offset.norm() > 0.0001f) {
-            Mat4 inv_offset_mat = Mat4::Identity();
-            inv_offset_mat.m[3][0] = -local_offset.x;
-            inv_offset_mat.m[3][1] = -local_offset.y;
-            inv_offset_mat.m[3][2] = -local_offset.z;
-            new_world = inv_offset_mat * new_gizmo_matrix;
+    // Only apply gizmo manipulation when user is interacting with it
+    // When not using, gizmo follows the entity's current transform (for animated objects)
+    if (is_using) {
+        // Save original transform matrix to detect changes
+        float original_transform[16];
+        for (int i = 0; i < 16; ++i) original_transform[i] = transform_matrix[i];
+        
+        ImGuizmo::Manipulate(view_matrix, proj_matrix,
+                             static_cast<ImGuizmo::OPERATION>(current_operation_),
+                             static_cast<ImGuizmo::MODE>(current_mode_),
+                             transform_matrix, nullptr, nullptr);
+        
+        // Check if matrix actually changed
+        bool matrix_changed = false;
+        for (int i = 0; i < 16; ++i) {
+            if (std::abs(transform_matrix[i] - original_transform[i]) > 0.0001f) {
+                matrix_changed = true;
+                break;
+            }
         }
         
-        // Convert world-space matrix back to local-space for hierarchy support
-        Mat4 new_model = new_world * parent_world.inverse();
-        
-        Vec3 position = Vec3(new_model.m[3][0], new_model.m[3][1], new_model.m[3][2]);
-        
-        Vec3 scale;
-        scale.x = std::sqrt(new_model.m[0][0] * new_model.m[0][0] + new_model.m[0][1] * new_model.m[0][1] + new_model.m[0][2] * new_model.m[0][2]);
-        scale.y = std::sqrt(new_model.m[1][0] * new_model.m[1][0] + new_model.m[1][1] * new_model.m[1][1] + new_model.m[1][2] * new_model.m[1][2]);
-        scale.z = std::sqrt(new_model.m[2][0] * new_model.m[2][0] + new_model.m[2][1] * new_model.m[2][1] + new_model.m[2][2] * new_model.m[2][2]);
+        if (matrix_changed) {
+            Mat4 new_gizmo_matrix = from_row_major_array(transform_matrix);
 
-        Mat3 rotation_matrix;
-        rotation_matrix.set_row(0, Vec3(new_model.m[0][0], new_model.m[0][1], new_model.m[0][2]) / scale.x);
-        rotation_matrix.set_row(1, Vec3(new_model.m[1][0], new_model.m[1][1], new_model.m[1][2]) / scale.y);
-        rotation_matrix.set_row(2, Vec3(new_model.m[2][0], new_model.m[2][1], new_model.m[2][2]) / scale.z);
+            // Revert anchor offset to get world-space model matrix
+            Mat4 new_world = new_gizmo_matrix;
+            if (local_offset.norm() > 0.0001f) {
+                Mat4 inv_offset_mat = Mat4::Identity();
+                inv_offset_mat.m[3][0] = -local_offset.x;
+                inv_offset_mat.m[3][1] = -local_offset.y;
+                inv_offset_mat.m[3][2] = -local_offset.z;
+                new_world = inv_offset_mat * new_gizmo_matrix;
+            }
+            
+            // Convert world-space matrix back to local-space for hierarchy support
+            Mat4 new_model = new_world * parent_world.inverse();
+            
+            Vec3 position = Vec3(new_model.m[3][0], new_model.m[3][1], new_model.m[3][2]);
+            
+            Vec3 scale;
+            scale.x = std::sqrt(new_model.m[0][0] * new_model.m[0][0] + new_model.m[0][1] * new_model.m[0][1] + new_model.m[0][2] * new_model.m[0][2]);
+            scale.y = std::sqrt(new_model.m[1][0] * new_model.m[1][0] + new_model.m[1][1] * new_model.m[1][1] + new_model.m[1][2] * new_model.m[1][2]);
+            scale.z = std::sqrt(new_model.m[2][0] * new_model.m[2][0] + new_model.m[2][1] * new_model.m[2][1] + new_model.m[2][2] * new_model.m[2][2]);
 
-        switch (current_operation_) {
-        case Operation::Translate:
-            transform->transform.set_position(position);
-            break;
-        case Operation::Rotate:
-            transform->transform.set_position(position);
-            transform->transform.set_rotation(Math::extract_euler_angles(rotation_matrix));
-            break;
-        case Operation::Scale:
-            transform->transform.set_position(position);
-            transform->transform.set_scale(scale);
-            break;
+            Mat3 rotation_matrix;
+            rotation_matrix.set_row(0, Vec3(new_model.m[0][0], new_model.m[0][1], new_model.m[0][2]) / scale.x);
+            rotation_matrix.set_row(1, Vec3(new_model.m[1][0], new_model.m[1][1], new_model.m[1][2]) / scale.y);
+            rotation_matrix.set_row(2, Vec3(new_model.m[2][0], new_model.m[2][1], new_model.m[2][2]) / scale.z);
+
+            switch (current_operation_) {
+            case Operation::Translate:
+                transform->transform.set_position(position);
+                break;
+            case Operation::Rotate:
+                transform->transform.set_position(position);
+                transform->transform.set_rotation(Math::extract_euler_angles(rotation_matrix));
+                break;
+            case Operation::Scale:
+                transform->transform.set_position(position);
+                transform->transform.set_scale(scale);
+                break;
+            }
         }
+    } else {
+        // Not using gizmo - just display it at the current entity position
+        // This allows gizmo to follow animated objects (like orbiting Moon)
+        ImGuizmo::Manipulate(view_matrix, proj_matrix,
+                             static_cast<ImGuizmo::OPERATION>(current_operation_),
+                             static_cast<ImGuizmo::MODE>(current_mode_),
+                             transform_matrix, nullptr, nullptr);
     }
 }
-
 void GizmoManager::draw_controls() {
     if (!initialized_) return;
 

@@ -7,3 +7,7 @@
 考察下我能否用imgui调整material的参数。
 （涉及:MeshRenderComponent 反射material； material暴露参数）
 实现最简方案吧。PBR/NPR参数的遍历可以用register class。注意texture在显示时需要特殊考虑，留出未来可视化的空间
+
+
+
+dx11多线程 （set material info）
