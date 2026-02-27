@@ -7,6 +7,8 @@
 #include "engine/function/render/render_resource/shader_utils.h"
 #include "engine/function/render/render_resource/material.h"
 #include "engine/function/render/render_resource/texture.h"
+#include "engine/function/render/render_resource/material.h"
+#include "engine/function/render/render_resource/texture.h"
 #include "engine/core/log/Log.h"
 
 #include <cstring>
@@ -24,6 +26,8 @@ GBufferPass::~GBufferPass() {
     if (per_object_buffer_) per_object_buffer_->destroy();
     if (material_buffer_) material_buffer_->destroy();
     if (default_sampler_) default_sampler_->destroy();
+    if (material_buffer_) material_buffer_->destroy();
+    if (default_sampler_) default_sampler_->destroy();
 }
 
 void GBufferPass::init() {
@@ -38,6 +42,12 @@ void GBufferPass::init() {
     create_uniform_buffers();
     if (!per_frame_buffer_ || !per_object_buffer_ || !material_buffer_) {
         ERR(LogGBufferPass, "Failed to create uniform buffers");
+        return;
+    }
+    
+    create_samplers();
+    if (!default_sampler_) {
+        ERR(LogGBufferPass, "Failed to create samplers");
         return;
     }
     
@@ -134,7 +144,7 @@ void GBufferPass::create_uniform_buffers() {
         return;
     }
     
-    // Create material buffer (b2)
+   // Create material buffer (b2)
     RHIBufferInfo material_info = {};
     material_info.size = sizeof(GBufferMaterialData);
     material_info.stride = 0;
@@ -169,6 +179,7 @@ void GBufferPass::create_samplers() {
         ERR(LogGBufferPass, "Failed to create default sampler");
     }
 }
+
 
 void GBufferPass::create_pipeline() {
     auto backend = EngineContext::rhi();

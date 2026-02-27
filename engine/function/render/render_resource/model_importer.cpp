@@ -163,6 +163,9 @@ static bool parse_mtl_file(const std::filesystem::path& mtl_path,
         // ========================================
         // Global settings (outside newmtl blocks)
         // ========================================
+        // ========================================
+        // Global settings (outside newmtl blocks)
+        // ========================================
         if (keyword == "MaterialType") {
             std::string type_str;
             iss >> type_str;
@@ -177,9 +180,18 @@ static bool parse_mtl_file(const std::filesystem::path& mtl_path,
         // ========================================
         // Material definition
         // ========================================
+        // ========================================
+        // Material definition
+        // ========================================
         else if (keyword == "newmtl") {
             out_materials.emplace_back();
             current = &out_materials.back();
+            iss >> current->name();
+        }
+        // ========================================
+        // Common parameters (both PBR and NPR)
+        // ========================================
+        else if (keyword == "Kd" && current) {
             iss >> current->name();
         }
         // ========================================
@@ -212,11 +224,15 @@ static bool parse_mtl_file(const std::filesystem::path& mtl_path,
             float r;
             if (iss >> r) {
                 current->pbr.roughness = std::clamp(r, 0.0f, 1.0f);
+                current->pbr.roughness = std::clamp(r, 0.0f, 1.0f);
             }
+        }
+        else if ((keyword == "M" || keyword == "Metallic") && current && is_pbr()) {
         }
         else if ((keyword == "M" || keyword == "Metallic") && current && is_pbr()) {
             float m;
             if (iss >> m) {
+                current->pbr.metallic = std::clamp(m, 0.0f, 1.0f);
                 current->pbr.metallic = std::clamp(m, 0.0f, 1.0f);
             }
         }
@@ -859,10 +875,9 @@ std::shared_ptr<Mesh> ModelImporter::process_mesh(
             }
         }
         
-
-        
         // Use mesh's material index for consistent material caching
         int mat_index = (mesh->mMaterialIndex >= 0) ? static_cast<int>(mesh->mMaterialIndex) : index;
+        out_material = get_or_create_material(mat_name_str, ai_mat, mtl_mat, mat_index, mat_type);
         out_material = get_or_create_material(mat_name_str, ai_mat, mtl_mat, mat_index, mat_type);
     }
     
@@ -911,6 +926,7 @@ std::shared_ptr<Material> ModelImporter::get_or_create_material(
     }
     
     // Deterministic UID for material
+    // Deterministic UID for material
     UID mat_uid = generate_sub_asset_uid(cache_key, "material");
     
     // Check if asset already exists in engine
@@ -927,11 +943,25 @@ std::shared_ptr<Material> ModelImporter::get_or_create_material(
     // ========================================
     // Create NPR Material
     // ========================================
+    
+    // ========================================
+    // Create NPR Material
+    // ========================================
     if (mat_type == ModelMaterialType::NPR) {
         auto npr_mat = std::make_shared<NPRMaterial>();
         
+        
         // Set NPR parameters from MTL or defaults
         if (mtl_mat) {
+            npr_mat->set_lambert_clamp(mtl_mat->npr.lambert_clamp);
+            npr_mat->set_ramp_offset(mtl_mat->npr.ramp_offset);
+            npr_mat->set_rim_threshold(mtl_mat->npr.rim_threshold);
+            npr_mat->set_rim_strength(mtl_mat->npr.rim_strength);
+            npr_mat->set_rim_width(mtl_mat->npr.rim_width);
+            npr_mat->set_rim_color(mtl_mat->npr.rim_color);
+            npr_mat->set_face_mode(mtl_mat->npr.face_mode);
+            npr_mat->set_diffuse(mtl_mat->diffuse_color());
+            npr_mat->set_alpha_clip(mtl_mat->opacity() < 1.0f ? 0.5f : 0.0f);
             npr_mat->set_lambert_clamp(mtl_mat->npr.lambert_clamp);
             npr_mat->set_ramp_offset(mtl_mat->npr.ramp_offset);
             npr_mat->set_rim_threshold(mtl_mat->npr.rim_threshold);

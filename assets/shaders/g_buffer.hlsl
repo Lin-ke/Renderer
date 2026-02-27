@@ -1,5 +1,6 @@
 // G-Buffer Pass Shaders
 // Supports both ARM packed texture and individual texture maps
+// Supports both ARM packed texture and individual texture maps
 
 cbuffer PerFrame : register(b0) {
     float4x4 view;
@@ -142,6 +143,19 @@ PSOutput PSMain(PSInput input) {
     
     // Calculate normal
     float3 N = normalize(input.world_normal);
+    if (use_normal_map > 0.5) {
+        // Sample normal map and decode from [0,1] to [-1,1]
+        float3 tangent_normal = normal_map.Sample(default_sampler, input.texcoord).xyz * 2.0 - 1.0;
+        
+        // Build tangent space basis
+        float3 up = abs(N.y) < 0.999 ? float3(0, 1, 0) : float3(1, 0, 0);
+        float3 T = normalize(cross(up, N));
+        float3 B = cross(N, T);
+        
+        // Transform from tangent space to world space
+        float3x3 TBN = float3x3(T, B, N);
+        N = normalize(mul(tangent_normal, TBN));
+    }
     if (use_normal_map > 0.5) {
         // Sample normal map and decode from [0,1] to [-1,1]
         float3 tangent_normal = normal_map.Sample(default_sampler, input.texcoord).xyz * 2.0 - 1.0;
