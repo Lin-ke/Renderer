@@ -1,5 +1,6 @@
 # Blender MTL File: 'Moon рабочий.blend'
 # Material Count: 1
+MaterialType PBR
 
 newmtl Moon
 map_Kd Textures\Diffuse_2K.png

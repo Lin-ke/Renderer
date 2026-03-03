@@ -3,7 +3,7 @@ add_rules("plugin.compile_commands.autoupdate", {outputdir = ".vscode"})
 
 
 add_requires("glog", {configs = {gflags = false}})
-add_requires("stb", "assimp", "cereal", "stduuid", "catch2")
+add_requires("stb", "assimp", "cereal", "stduuid", "catch2", "zlib")
 add_requires("imgui", {configs = {win32 = true, dx11 = true}})
 add_requires("imguizmo", {configs = {cxflags = "-DIMGUI_DEFINE_MATH_OPERATORS"}})
 

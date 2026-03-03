@@ -379,53 +379,69 @@ std::optional<GBufferOutputHandles> GBufferPass::build(RDGBuilder& builder, RDGT
                     auto albedo_tex = pbr_mat->get_diffuse_texture();
                     if (albedo_tex && albedo_tex->texture_) {
                         cmd->bind_texture(albedo_tex->texture_, 0, SHADER_FREQUENCY_FRAGMENT);
-                    } else if (fallback_white) {
-                        cmd->bind_texture(fallback_white, 0, SHADER_FREQUENCY_FRAGMENT);
+                    } else {
+                        WARN(LogGBufferPass, "Material '{}' is missing albedo/diffuse texture, using fallback white", 
+                             pbr_mat->get_name());
+                        if (fallback_white) {
+                            cmd->bind_texture(fallback_white, 0, SHADER_FREQUENCY_FRAGMENT);
+                        }
                     }
                     
                     // Bind normal texture (t1)
                     auto normal_tex = pbr_mat->get_normal_texture();
                     if (normal_tex && normal_tex->texture_) {
                         cmd->bind_texture(normal_tex->texture_, 1, SHADER_FREQUENCY_FRAGMENT);
-                    } else if (fallback_normal) {
-                        cmd->bind_texture(fallback_normal, 1, SHADER_FREQUENCY_FRAGMENT);
+                    } else {
+                        if (fallback_normal) {
+                            cmd->bind_texture(fallback_normal, 1, SHADER_FREQUENCY_FRAGMENT);
+                        }
                     }
                     
                     // Bind ARM texture (t2) - preferred over individual maps
                     auto arm_tex = pbr_mat->get_arm_texture();
                     if (arm_tex && arm_tex->texture_) {
                         cmd->bind_texture(arm_tex->texture_, 2, SHADER_FREQUENCY_FRAGMENT);
-                    } else if (fallback_black) {
-                        cmd->bind_texture(fallback_black, 2, SHADER_FREQUENCY_FRAGMENT);
+                    } else {
+                        if (fallback_black) {
+                            cmd->bind_texture(fallback_black, 2, SHADER_FREQUENCY_FRAGMENT);
+                        }
                     }
                     
                     // Bind individual maps (t3-t6) when ARM is not available
                     auto roughness_tex = pbr_mat->get_roughness_texture();
                     if (roughness_tex && roughness_tex->texture_) {
                         cmd->bind_texture(roughness_tex->texture_, 3, SHADER_FREQUENCY_FRAGMENT);
-                    } else if (fallback_black) {
-                        cmd->bind_texture(fallback_black, 3, SHADER_FREQUENCY_FRAGMENT);
+                    } else {
+                        if (fallback_black) {
+                            cmd->bind_texture(fallback_black, 3, SHADER_FREQUENCY_FRAGMENT);
+                        }
                     }
                     
                     auto metallic_tex = pbr_mat->get_metallic_texture();
                     if (metallic_tex && metallic_tex->texture_) {
                         cmd->bind_texture(metallic_tex->texture_, 4, SHADER_FREQUENCY_FRAGMENT);
-                    } else if (fallback_black) {
-                        cmd->bind_texture(fallback_black, 4, SHADER_FREQUENCY_FRAGMENT);
+                    } else {
+                        if (fallback_black) {
+                            cmd->bind_texture(fallback_black, 4, SHADER_FREQUENCY_FRAGMENT);
+                        }
                     }
                     
                     auto ao_tex = pbr_mat->get_ao_texture();
                     if (ao_tex && ao_tex->texture_) {
                         cmd->bind_texture(ao_tex->texture_, 5, SHADER_FREQUENCY_FRAGMENT);
-                    } else if (fallback_white) { // White = AO=1.0 (no occlusion)
-                        cmd->bind_texture(fallback_white, 5, SHADER_FREQUENCY_FRAGMENT);
+                    } else {
+                        if (fallback_white) { // White = AO=1.0 (no occlusion)
+                            cmd->bind_texture(fallback_white, 5, SHADER_FREQUENCY_FRAGMENT);
+                        }
                     }
                     
                     auto emission_tex = pbr_mat->get_emission_texture();
                     if (emission_tex && emission_tex->texture_) {
                         cmd->bind_texture(emission_tex->texture_, 6, SHADER_FREQUENCY_FRAGMENT);
-                    } else if (fallback_black) {
-                        cmd->bind_texture(fallback_black, 6, SHADER_FREQUENCY_FRAGMENT);
+                    } else {
+                        if (fallback_black) {
+                            cmd->bind_texture(fallback_black, 6, SHADER_FREQUENCY_FRAGMENT);
+                        }
                     }
                 } else {
                     // No material or not PBR - bind all fallbacks

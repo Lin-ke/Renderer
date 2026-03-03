@@ -43,6 +43,7 @@ struct MtlMaterialBase {
     std::string name;
     Vec4 diffuse_color{0.8f, 0.8f, 0.8f, 1.0f};  // Kd (BaseColor)
     float opacity = 1.0f;
+    Vec4 emission = Vec4::Zero(); // emission color(npr) or intensity(pbr)
     // Material type (overrides global setting if specified)
     MtlMaterialTypeHint material_type_hint = MtlMaterialTypeHint::Default;
 };
@@ -94,6 +95,7 @@ struct MtlMaterial {
     const std::string& name() const { return base.name; }
     Vec4& diffuse_color() { return base.diffuse_color; }
     const Vec4& diffuse_color() const { return base.diffuse_color; }
+    const Vec4& emission() const { return base.emission; }
     float& opacity() { return base.opacity; }
     float opacity() const { return base.opacity; }
     MtlMaterialTypeHint& type_hint() { return base.material_type_hint; }
@@ -227,7 +229,11 @@ static bool parse_mtl_file(const std::filesystem::path& mtl_path,
                 current->pbr.roughness = std::clamp(r, 0.0f, 1.0f);
             }
         }
-        else if ((keyword == "M" || keyword == "Metallic") && current && is_pbr()) {
+        else if ((keyword == "E") || keyword == "Emission" && current && is_pbr()) {
+            float e1;
+            if (iss >> e1) {
+                current->base.emission = Vec4(std::max(e1, 0.0f), 0.0f, 0.0f, 1.0f);
+            }
         }
         else if ((keyword == "M" || keyword == "Metallic") && current && is_pbr()) {
             float m;
@@ -302,6 +308,10 @@ static bool parse_mtl_file(const std::filesystem::path& mtl_path,
         else if (keyword == "FaceMode" && current && is_npr()) {
             int v = 0;
             if (iss >> v) current->npr.face_mode = (v != 0);
+        }
+        else if ((keyword == "E") || keyword == "Emission" && current && is_npr()) {
+            float r, g, b;
+            if (iss >> r >> g >> b) current->base.emission = Vec4(r, g, b, 1.0f);
         }
         // ========================================
         // NPR textures
@@ -970,6 +980,7 @@ std::shared_ptr<Material> ModelImporter::get_or_create_material(
             npr_mat->set_rim_color(mtl_mat->npr.rim_color);
             npr_mat->set_face_mode(mtl_mat->npr.face_mode);
             npr_mat->set_diffuse(mtl_mat->diffuse_color());
+            npr_mat->set_emission(mtl_mat->emission());
             npr_mat->set_alpha_clip(mtl_mat->opacity() < 1.0f ? 0.5f : 0.0f);
         } else {
             // Set default NPR parameters
@@ -980,6 +991,7 @@ std::shared_ptr<Material> ModelImporter::get_or_create_material(
             npr_mat->set_rim_width(0.5f);
             npr_mat->set_rim_color(Vec3(1.0f, 1.0f, 1.0f));
             npr_mat->set_diffuse(Vec4(1.0f, 1.0f, 1.0f, 1.0f));
+            
         }
         
         // Load NPR textures from MTL
@@ -1038,6 +1050,7 @@ std::shared_ptr<Material> ModelImporter::get_or_create_material(
             pbr_mat->set_specular(mtl_mat->pbr.specular);
             pbr_mat->set_alpha_clip(mtl_mat->pbr.alpha_clip);
             pbr_mat->set_diffuse(mtl_mat->diffuse_color());
+            pbr_mat->set_emission(mtl_mat->emission());
         } else {
             // Set default PBR parameters
             pbr_mat->set_roughness(0.5f);
@@ -1045,6 +1058,7 @@ std::shared_ptr<Material> ModelImporter::get_or_create_material(
             pbr_mat->set_specular(1.0f);
             pbr_mat->set_alpha_clip(0.0f);
             pbr_mat->set_diffuse(Vec4(1.0f, 1.0f, 1.0f, 1.0f));
+            pbr_mat->set_emission(Vec4(0.0f, 0.0f, 0.0f, 1.0f));
         }
         
         // Load PBR textures from MTL

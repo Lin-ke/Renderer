@@ -4,6 +4,10 @@ MaterialType NPR
 
 newmtl Planet
 map_Kd textures/Texture_Planet.png
+# map_Ke textures/img.png
+# map_Rmap textures/rmap.png
+
 FaceMode 0
 RimStrength 0.0
-RimWidth 0.0
+# RimWidth 0
+# RimThreshold 0.1

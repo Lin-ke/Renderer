@@ -462,6 +462,7 @@ void NPRForwardPass::draw_batch(RHICommandContextRef cmd, const DrawBatch& batch
     
     // Bind depth texture fallback if not set
     if (!depth_texture_ && fallback_black) {
+        WARN(LogNPRForwardPass, "Depth texture not set for NPR pass, using fallback black");
         cmd->bind_texture(fallback_black, 4, SHADER_FREQUENCY_FRAGMENT);
     }
     
@@ -469,32 +470,49 @@ void NPRForwardPass::draw_batch(RHICommandContextRef cmd, const DrawBatch& batch
         auto albedo_tex = npr_mat->get_diffuse_texture();
         if (albedo_tex && albedo_tex->texture_) {
             cmd->bind_texture(albedo_tex->texture_, 0, SHADER_FREQUENCY_FRAGMENT);
-        } else if (fallback_white) {
-            cmd->bind_texture(fallback_white, 0, SHADER_FREQUENCY_FRAGMENT);
+        } else {
+            WARN(LogNPRForwardPass, "NPR Material '{}' is missing diffuse/albedo texture, using fallback white", 
+                 npr_mat->get_name());
+            if (fallback_white) {
+                cmd->bind_texture(fallback_white, 0, SHADER_FREQUENCY_FRAGMENT);
+            }
         }
         
         auto normal_tex = npr_mat->get_normal_texture();
         if (normal_tex && normal_tex->texture_) {
             cmd->bind_texture(normal_tex->texture_, 1, SHADER_FREQUENCY_FRAGMENT);
-        } else if (fallback_normal) {
-            cmd->bind_texture(fallback_normal, 1, SHADER_FREQUENCY_FRAGMENT);
+        } else {
+            // WARN(LogNPRForwardPass, "NPR Material '{}' is missing normal texture, using fallback", 
+                //  npr_mat->get_name());
+            if (fallback_normal) {
+                cmd->bind_texture(fallback_normal, 1, SHADER_FREQUENCY_FRAGMENT);
+            }
         }
         
         auto light_map_tex = npr_mat->get_light_map_texture();
         if (light_map_tex && light_map_tex->texture_) {
             cmd->bind_texture(light_map_tex->texture_, 2, SHADER_FREQUENCY_FRAGMENT);
-        } else if (fallback_white) {
-            cmd->bind_texture(fallback_white, 2, SHADER_FREQUENCY_FRAGMENT);
+        } else {
+            // WARN(LogNPRForwardPass, "NPR Material '{}' is missing light map texture, using fallback white", 
+                //  npr_mat->get_name());
+            if (fallback_white) {
+                cmd->bind_texture(fallback_white, 2, SHADER_FREQUENCY_FRAGMENT);
+            }
         }
         
         auto ramp_tex = npr_mat->get_ramp_texture();
         if (ramp_tex && ramp_tex->texture_) {
             cmd->bind_texture(ramp_tex->texture_, 3, SHADER_FREQUENCY_FRAGMENT);
-        } else if (fallback_white) {
-            cmd->bind_texture(fallback_white, 3, SHADER_FREQUENCY_FRAGMENT);
+        } else {
+            // WARN(LogNPRForwardPass, "NPR Material '{}' is missing ramp texture, using fallback white", 
+                //  npr_mat->get_name());
+            if (fallback_white) {
+                cmd->bind_texture(fallback_white, 3, SHADER_FREQUENCY_FRAGMENT);
+            }
         }
     } else {
         // No material, bind all fallbacks
+        WARN(LogNPRForwardPass, "Draw batch has no NPR material, using all fallback textures");
         if (fallback_white) {
             cmd->bind_texture(fallback_white, 0, SHADER_FREQUENCY_FRAGMENT);
             cmd->bind_texture(fallback_white, 2, SHADER_FREQUENCY_FRAGMENT);
@@ -569,6 +587,7 @@ void NPRForwardPass::execute_batches(RHICommandListRef cmd, const std::vector<Dr
     } else {
         auto* render_system = EngineContext::render_system();
         RHITextureRef fallback_black = render_system ? render_system->get_fallback_black_texture() : nullptr;
+        WARN(LogNPRForwardPass, "Depth texture not available for NPR pass, using fallback black");
         if (fallback_black) {
             cmd->bind_texture(fallback_black, 4, SHADER_FREQUENCY_FRAGMENT);
         }
@@ -632,32 +651,49 @@ void NPRForwardPass::execute_batches(RHICommandListRef cmd, const std::vector<Dr
             auto albedo_tex = npr_mat->get_diffuse_texture();
             if (albedo_tex && albedo_tex->texture_) {
                 cmd->bind_texture(albedo_tex->texture_, 0, SHADER_FREQUENCY_FRAGMENT);
-            } else if (fallback_white) {
-                cmd->bind_texture(fallback_white, 0, SHADER_FREQUENCY_FRAGMENT);
+            } else {
+                WARN(LogNPRForwardPass, "NPR Material '{}' is missing diffuse/albedo texture, using fallback white", 
+                     npr_mat->get_name());
+                if (fallback_white) {
+                    cmd->bind_texture(fallback_white, 0, SHADER_FREQUENCY_FRAGMENT);
+                }
             }
             
             auto normal_tex = npr_mat->get_normal_texture();
             if (normal_tex && normal_tex->texture_) {
                 cmd->bind_texture(normal_tex->texture_, 1, SHADER_FREQUENCY_FRAGMENT);
-            } else if (fallback_normal) {
-                cmd->bind_texture(fallback_normal, 1, SHADER_FREQUENCY_FRAGMENT);
+            } else {
+                // WARN(LogNPRForwardPass, "NPR Material '{}' is missing normal texture, using fallback", 
+                    //  npr_mat->get_name());
+                if (fallback_normal) {
+                    cmd->bind_texture(fallback_normal, 1, SHADER_FREQUENCY_FRAGMENT);
+                }
             }
             
             auto light_map_tex = npr_mat->get_light_map_texture();
             if (light_map_tex && light_map_tex->texture_) {
                 cmd->bind_texture(light_map_tex->texture_, 2, SHADER_FREQUENCY_FRAGMENT);
-            } else if (fallback_white) {
-                cmd->bind_texture(fallback_white, 2, SHADER_FREQUENCY_FRAGMENT);
+            } else {
+                // WARN(LogNPRForwardPass, "NPR Material '{}' is missing light map texture, using fallback white", 
+                    //  npr_mat->get_name());
+                if (fallback_white) {
+                    cmd->bind_texture(fallback_white, 2, SHADER_FREQUENCY_FRAGMENT);
+                }
             }
             
             auto ramp_tex = npr_mat->get_ramp_texture();
             if (ramp_tex && ramp_tex->texture_) {
                 cmd->bind_texture(ramp_tex->texture_, 3, SHADER_FREQUENCY_FRAGMENT);
-            } else if (fallback_white) {
-                cmd->bind_texture(fallback_white, 3, SHADER_FREQUENCY_FRAGMENT);
+            } else {
+                // WARN(LogNPRForwardPass, "NPR Material '{}' is missing ramp texture, using fallback white", 
+                    //  npr_mat->get_name());
+                if (fallback_white) {
+                    cmd->bind_texture(fallback_white, 3, SHADER_FREQUENCY_FRAGMENT);
+                }
             }
         } else {
             // No material, bind all fallbacks
+            WARN(LogNPRForwardPass, "Draw batch has no NPR material, using all fallback textures");
             if (fallback_white) {
                 cmd->bind_texture(fallback_white, 0, SHADER_FREQUENCY_FRAGMENT);
                 cmd->bind_texture(fallback_white, 2, SHADER_FREQUENCY_FRAGMENT);

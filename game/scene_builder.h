@@ -23,6 +23,7 @@
 #include "engine/function/asset/asset_manager.h"
 
 // Virtual paths — these resolve relative to /Game/ when asset->init("game")
+static const std::string SUN_MODEL_PATH   = "/Game/sun/sun.fbx";
 static const std::string EARTH_MODEL_PATH = "/Game/earth/Planet.fbx";
 static const std::string SHIP_MODEL_PATH  = "/Game/ship/ship.fbx";
 static const std::string MOON_MODEL_PATH  = "/Game/moon/Moon 2K.fbx";
@@ -31,16 +32,17 @@ static const std::string SCENE_SAVE_PATH  = "/Game/earth_moon_ship_scene.asset";
 inline bool create_earth_moon_scene(const std::string& scene_path) {
     auto scene = std::make_shared<Scene>();
 
+    auto sun_physical   = EngineContext::asset()->get_physical_path(SUN_MODEL_PATH);
     auto earth_physical = EngineContext::asset()->get_physical_path(EARTH_MODEL_PATH);
     auto ship_physical  = EngineContext::asset()->get_physical_path(SHIP_MODEL_PATH);
     auto moon_physical  = EngineContext::asset()->get_physical_path(MOON_MODEL_PATH);
 
-    if (!earth_physical) {
-        ERR(LogEarthMoonShip, "Earth model not found at {}", EARTH_MODEL_PATH);
+    if (!sun_physical) {
+        ERR(LogEarthMoonShip, "Sun model not found at {}", SUN_MODEL_PATH);
         return false;
     }
-    if (!ship_physical) {
-        ERR(LogEarthMoonShip, "Ship model not found at {}", SHIP_MODEL_PATH);
+    if (!earth_physical) {
+        ERR(LogEarthMoonShip, "Earth model not found at {}", EARTH_MODEL_PATH);
         return false;
     }
 
@@ -60,20 +62,39 @@ inline bool create_earth_moon_scene(const std::string& scene_path) {
         skybox_comp->set_skybox_scale(2000.0f);
     }
 
-    // 2. Sun
-    auto* light_ent   = scene->create_entity("Sun");
+    // 2. Sun (center of solar system)
+    auto* sun_ent   = scene->create_entity("Sun");
+    auto* sun_trans = sun_ent->add_component<TransformComponent>();
+    sun_trans->transform.set_position({50.0f, 100.0f, 40.0f});
+    sun_trans->transform.set_scale({DEFAULT_SUN_RADIUS, DEFAULT_SUN_RADIUS, DEFAULT_SUN_RADIUS});
+
+    ModelProcessSetting sun_setting;
+    sun_setting.smooth_normal  = true;
+    sun_setting.load_materials = true;
+    sun_setting.flip_uv        = true;
+
+    auto sun_model = Model::Load(SUN_MODEL_PATH, sun_setting);
+    if (sun_model) {
+        auto* renderer = sun_ent->add_component<MeshRendererComponent>();
+        renderer->set_model(sun_model);
+        renderer->save_asset_deps();
+    }
+
+    // Add directional light (from Sun)
+    auto* light_ent   = scene->create_entity("SunLight");
     auto* light_trans = light_ent->add_component<TransformComponent>();
     light_trans->transform.set_position({50.0f, 100.0f, 50.0f});
-    light_trans->transform.set_rotation({-45.0f, 45.0f, 0.0f});
+    light_trans->transform.set_rotation({1.0f, 10.0f, 0.0f});
     auto* light_comp = light_ent->add_component<DirectionalLightComponent>();
     light_comp->set_color({1.0f, 0.95f, 0.9f});
     light_comp->set_intensity(2.0f);
 
-    // 3. Earth
+    // 3. Earth (orbits Sun)
     auto* earth_ent   = scene->create_entity("Earth");
     auto* earth_trans = earth_ent->add_component<TransformComponent>();
-    earth_trans->transform.set_position({0.0f, 0.0f, 0.0f});
+    earth_trans->transform.set_position({DEFAULT_EARTH_ORBIT_DISTANCE, 0.0f, 0.0f});
     earth_trans->transform.set_scale({10.0f, 10.0f, 10.0f});
+    earth_ent->add_component<EarthOrbitComponent>();
 
     ModelProcessSetting earth_setting;
     earth_setting.smooth_normal  = false;  // Keep low-poly flat-shaded look
@@ -87,12 +108,14 @@ inline bool create_earth_moon_scene(const std::string& scene_path) {
         renderer->save_asset_deps();
     }
 
-    // 4. Moon (uses its own model if available, else Earth model)
+    // 4. Moon (orbits Earth)
     auto* moon_ent   = scene->create_entity("Moon");
     auto* moon_trans = moon_ent->add_component<TransformComponent>();
-    moon_trans->transform.set_position({DEFAULT_MOON_ORBIT_DISTANCE, 0.0f, 0.0f});
+    moon_trans->transform.set_position({DEFAULT_EARTH_ORBIT_DISTANCE + DEFAULT_MOON_ORBIT_DISTANCE, 0.0f, 0.0f});
     moon_trans->transform.set_scale({4.0f, 4.0f, 4.0f});
-    moon_ent->add_component<MoonOrbitComponent>();
+    
+    auto* moon_orbit = moon_ent->add_component<MoonOrbitComponent>();
+    moon_orbit->set_earth_entity(earth_ent);
 
     ModelProcessSetting moon_setting;
     moon_setting.smooth_normal  = true;
@@ -114,7 +137,7 @@ inline bool create_earth_moon_scene(const std::string& scene_path) {
     // 5. Ship (parent-child: ShipRoot for gameplay, ShipVisual for model offset)
     auto* ship_ent   = scene->create_entity("Ship");
     auto* ship_trans = ship_ent->add_component<TransformComponent>();
-    ship_trans->transform.set_position({DEFAULT_SHIP_EARTH_ORBIT_RADIUS, 0.0f, 0.0f});
+    ship_trans->transform.set_position({DEFAULT_EARTH_ORBIT_DISTANCE + DEFAULT_SHIP_EARTH_ORBIT_RADIUS, 0.0f, 0.0f});
 
     // Child entity holds the mesh with a static rotation offset to correct
     // the FBX model's default orientation (pitch -90 to lay flat, yaw 90
@@ -139,7 +162,7 @@ inline bool create_earth_moon_scene(const std::string& scene_path) {
     // 6. Camera
     auto* cam_ent   = scene->create_entity("MainCamera");
     auto* cam_trans = cam_ent->add_component<TransformComponent>();
-    cam_trans->transform.set_position({25.0f, 10.0f, 25.0f});
+    cam_trans->transform.set_position({DEFAULT_EARTH_ORBIT_DISTANCE + 25.0f, 10.0f, 25.0f});
     auto* cam_comp = cam_ent->add_component<CameraComponent>();
     cam_comp->set_fov(60.0f);
     cam_comp->set_near(0.1f);
@@ -147,6 +170,7 @@ inline bool create_earth_moon_scene(const std::string& scene_path) {
 
     // 7. ShipController (must be after camera)
     auto* ship_ctrl = ship_ent->add_component<ShipController>();
+    ship_ctrl->set_sun_entity(sun_ent);
     ship_ctrl->set_earth_entity(earth_ent);
     ship_ctrl->set_moon_entity(moon_ent);
     ship_ctrl->set_camera_entity(cam_ent);

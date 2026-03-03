@@ -1,0 +1,6 @@
+MaterialType PBR
+
+newmtl blinn1
+map_Kd textures/sun uv.jpeg
+E 10
+

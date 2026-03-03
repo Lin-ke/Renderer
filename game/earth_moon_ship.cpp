@@ -6,6 +6,7 @@
 
 DEFINE_LOG_TAG(LogEarthMoonShip, "EarthMoonShip");
 
+REGISTER_CLASS_IMPL(EarthOrbitComponent)
 REGISTER_CLASS_IMPL(MoonOrbitComponent)
 REGISTER_CLASS_IMPL(ShipController)
 
@@ -45,15 +46,64 @@ const char* ship_state_name(ShipState s) {
 }
 
 // ============================================================================
-// MoonOrbitComponent
+// EarthOrbitComponent - Earth orbits the Sun at origin
 // ============================================================================
-void MoonOrbitComponent::on_init() { orbit_angle_ = 0.0f; }
+void EarthOrbitComponent::on_init() { 
+    orbit_angle_ = 0.0f; 
+}
+
+void EarthOrbitComponent::on_update(float delta_time) {
+    orbit_angle_ = normalize_angle(orbit_angle_ + orbit_speed_ * delta_time);
+    if (auto* trans = get_owner()->get_component<TransformComponent>()) {
+        trans->transform.set_position({orbit_distance_ * std::cos(orbit_angle_), 0.0f, orbit_distance_ * std::sin(orbit_angle_)});
+    }
+}
+
+Vec3 EarthOrbitComponent::get_current_position() const {
+    return {orbit_distance_ * std::cos(orbit_angle_), 0.0f, orbit_distance_ * std::sin(orbit_angle_)};
+}
+
+void EarthOrbitComponent::register_class() {
+    Registry::add<EarthOrbitComponent>("EarthOrbitComponent")
+        .member("orbit_angle", &EarthOrbitComponent::orbit_angle_)
+        .member("orbit_distance", &EarthOrbitComponent::orbit_distance_)
+        .member("orbit_speed", &EarthOrbitComponent::orbit_speed_);
+}
+
+// ============================================================================
+// MoonOrbitComponent - Moon orbits Earth (relative to Earth's position)
+// ============================================================================
+void MoonOrbitComponent::on_init() { 
+    orbit_angle_ = 0.0f; 
+}
 
 void MoonOrbitComponent::on_update(float delta_time) {
     orbit_angle_ = normalize_angle(orbit_angle_ + moon_orbit_speed_ * delta_time);
+    
     if (auto* trans = get_owner()->get_component<TransformComponent>()) {
-        trans->transform.set_position({moon_orbit_distance_ * std::cos(orbit_angle_), 0.0f, moon_orbit_distance_ * std::sin(orbit_angle_)});
+        // Get Earth's current position
+        Vec3 earth_pos = Vec3::Zero();
+        if (earth_) {
+            if (auto* earth_trans = earth_->get_component<TransformComponent>()) {
+                earth_pos = earth_trans->get_world_position();
+            }
+        }
+        
+        // Moon position = Earth position + local orbit offset
+        Vec3 local_pos = {moon_orbit_distance_ * std::cos(orbit_angle_), 0.0f, moon_orbit_distance_ * std::sin(orbit_angle_)};
+        trans->transform.set_position(earth_pos + local_pos);
     }
+}
+
+Vec3 MoonOrbitComponent::get_current_position() const {
+    Vec3 earth_pos = Vec3::Zero();
+    if (earth_) {
+        if (auto* earth_trans = earth_->get_component<TransformComponent>()) {
+            earth_pos = earth_trans->get_world_position();
+        }
+    }
+    Vec3 local_pos = {moon_orbit_distance_ * std::cos(orbit_angle_), 0.0f, moon_orbit_distance_ * std::sin(orbit_angle_)};
+    return earth_pos + local_pos;
 }
 
 void MoonOrbitComponent::register_class() {
@@ -89,8 +139,16 @@ void ShipController::on_update(float delta_time) {
     
     // 延迟查找实体（从文件加载时指针会丢失）
     auto* scene = EngineContext::world() ? EngineContext::world()->get_active_scene() : nullptr;
+    if (!sun_) sun_ = find_entity_by_name(scene, "Sun");
     if (!earth_) earth_ = find_entity_by_name(scene, "Earth");
     if (!moon_) moon_ = find_entity_by_name(scene, "Moon");
+    
+    // Update Moon's reference to Earth
+    if (moon_) {
+        if (auto* moon_comp = moon_->get_component<MoonOrbitComponent>()) {
+            moon_comp->set_earth_entity(earth_);
+        }
+    }
     
     handle_input();
     update_ship(delta_time);
@@ -205,21 +263,47 @@ void ShipController::start_transition(ShipState target_state, float duration) {
         if (moon_) if (auto* mo = moon_->get_component<MoonOrbitComponent>()) moon_speed = mo->get_moon_orbit_speed();
         
         float predicted_angle = get_moon_angle() + moon_speed * duration;
-        float moon_dist = (get_moon_pos() - get_earth_pos()).length();
-        Vec3 moon_dist_vec = {moon_dist * std::cos(predicted_angle), 0, moon_dist * std::sin(predicted_angle)};
-        Vec3 predicted_moon = get_earth_pos() + moon_dist_vec;
+        float moon_dist = DEFAULT_MOON_ORBIT_DISTANCE;
+        if (moon_) if (auto* mo = moon_->get_component<MoonOrbitComponent>()) moon_dist = mo->get_moon_orbit_distance();
         
-        trans_p3_ = predicted_moon + (predicted_moon - get_earth_pos()).normalized() * ship_moon_orbit_radius_;
+        // Predict moon position relative to Earth
+        Vec3 predicted_moon_local = {moon_dist * std::cos(predicted_angle), 0, moon_dist * std::sin(predicted_angle)};
+        // Get predicted Earth position (relative to Sun)
+        Vec3 predicted_earth_pos = get_earth_pos();
+        if (earth_) {
+            if (auto* earth_comp = earth_->get_component<EarthOrbitComponent>()) {
+                float earth_speed = earth_comp->get_orbit_speed();
+                float earth_dist = earth_comp->get_orbit_distance();
+                float predicted_earth_angle = earth_comp->get_orbit_angle() + earth_speed * duration;
+                predicted_earth_pos = {earth_dist * std::cos(predicted_earth_angle), 0, earth_dist * std::sin(predicted_earth_angle)};
+            }
+        }
+        
+        Vec3 predicted_moon = predicted_earth_pos + predicted_moon_local;
+        
+        trans_p3_ = predicted_moon + (predicted_moon - predicted_earth_pos).normalized() * ship_moon_orbit_radius_;
         Vec3 start_tan = {-std::sin(earth_orbit_angle_), 0, std::cos(earth_orbit_angle_)};
-        Vec3 moon_dir = (predicted_moon - get_earth_pos()).normalized();
+        Vec3 moon_dir = (predicted_moon - predicted_earth_pos).normalized();
         Vec3 end_tan = {-moon_dir.z, 0, moon_dir.x};
         float factor = (trans_p3_ - trans_p0_).length() * 0.4f;
         trans_p1_ = trans_p0_ + start_tan * factor;
         trans_p2_ = trans_p3_ - end_tan * factor;
     } else if (target_state == ShipState::TransferToEarth) {
         is_bezier_ = true;
+        
+        // Predict Earth position at arrival
+        Vec3 predicted_earth_pos = get_earth_pos();
+        if (earth_) {
+            if (auto* earth_comp = earth_->get_component<EarthOrbitComponent>()) {
+                float earth_speed = earth_comp->get_orbit_speed();
+                float earth_dist = earth_comp->get_orbit_distance();
+                float predicted_earth_angle = earth_comp->get_orbit_angle() + earth_speed * duration * 0.3f;
+                predicted_earth_pos = {earth_dist * std::cos(predicted_earth_angle), 0, earth_dist * std::sin(predicted_earth_angle)};
+            }
+        }
+        
         trans_arrival_angle_ = normalize_angle(std::atan2(ship_pos.z - get_earth_pos().z, ship_pos.x - get_earth_pos().x) - ship_earth_orbit_speed_ * duration * 0.3f);
-        trans_p3_ = get_earth_pos() + Vec3(std::cos(trans_arrival_angle_), 0, std::sin(trans_arrival_angle_)) * ship_earth_orbit_radius_;
+        trans_p3_ = predicted_earth_pos + Vec3(std::cos(trans_arrival_angle_), 0, std::sin(trans_arrival_angle_)) * ship_earth_orbit_radius_;
         Vec3 start_tan = Vec3(-(ship_pos.z-get_moon_pos().z), 0, ship_pos.x-get_moon_pos().x).normalized();
         Vec3 end_tan = {-std::sin(trans_arrival_angle_), 0, std::cos(trans_arrival_angle_)};
         float factor = (trans_p3_ - trans_p0_).length() * 0.4f;
@@ -238,8 +322,14 @@ void ShipController::update_ship(float dt) {
             trans_progress_ = 1.0f;
             if (state_ == ShipState::LandingOnEarth) set_state(ShipState::LandedOnEarth);
             else if (state_ == ShipState::LandingOnMoon) set_state(ShipState::LandedOnMoon);
-            else if (state_ == ShipState::LaunchingFromEarth) { earth_orbit_angle_ = std::atan2(trans->transform.get_position().z - get_earth_pos().z, trans->transform.get_position().x - get_earth_pos().x); set_state(ShipState::EarthOrbit); }
-            else if (state_ == ShipState::LaunchingFromMoon) { moon_orbit_angle_ = std::atan2(trans->transform.get_position().z - get_moon_pos().z, trans->transform.get_position().x - get_moon_pos().x); set_state(ShipState::MoonOrbit); }
+            else if (state_ == ShipState::LaunchingFromEarth) { 
+                earth_orbit_angle_ = std::atan2(trans->transform.get_position().z - get_earth_pos().z, trans->transform.get_position().x - get_earth_pos().x); 
+                set_state(ShipState::EarthOrbit); 
+            }
+            else if (state_ == ShipState::LaunchingFromMoon) { 
+                moon_orbit_angle_ = std::atan2(trans->transform.get_position().z - get_moon_pos().z, trans->transform.get_position().x - get_moon_pos().x); 
+                set_state(ShipState::MoonOrbit); 
+            }
             else if (state_ == ShipState::TransferToMoon || state_ == ShipState::TransferToEarth) complete_transfer();
             return;
         }
@@ -249,19 +339,29 @@ void ShipController::update_ship(float dt) {
             pos = bezier_eval(trans_p0_, trans_p1_, trans_p2_, trans_p3_, trans_progress_);
             tan = bezier_tangent(trans_p0_, trans_p1_, trans_p2_, trans_p3_, trans_progress_);
         } else {
-            // For land/launch, update target point dynamically to follow moving moon
+            // For land/launch, update target point dynamically to follow moving target
             Vec3 start_pos = trans_p0_;
             Vec3 end_pos = trans_p3_;
-            if (state_ == ShipState::LaunchingFromMoon) {
+            if (state_ == ShipState::LaunchingFromEarth) {
+                // Target orbit point follows current Earth position
+                Vec3 earth_pos = get_earth_pos();
+                Vec3 normal = (trans_p3_ - trans_p0_).normalized();
+                end_pos = earth_pos + normal * ship_earth_orbit_radius_;
+            } else if (state_ == ShipState::LandingOnEarth) {
+                // Landing target follows current Earth surface
+                Vec3 earth_pos = get_earth_pos();
+                float radius = get_earth_radius();
+                Vec3 normal = Vec3(std::cos(landed_angle_), 0, std::sin(landed_angle_));
+                end_pos = earth_pos + normal * (radius + 2.0f);
+            } else if (state_ == ShipState::LaunchingFromMoon) {
                 // Target orbit point follows current moon position
                 Vec3 moon_pos = get_moon_pos();
-                Vec3 normal = (trans_p3_ - trans_p0_).normalized(); // Launch direction
+                Vec3 normal = (trans_p3_ - trans_p0_).normalized();
                 end_pos = moon_pos + normal * ship_moon_orbit_radius_;
             } else if (state_ == ShipState::LandingOnMoon) {
                 // Landing target follows current moon surface
                 Vec3 moon_pos = get_moon_pos();
                 float radius = get_moon_radius();
-                // Use stored landed_angle to compute current surface normal
                 Vec3 normal = Vec3(std::cos(landed_angle_), 0, std::sin(landed_angle_));
                 end_pos = moon_pos + normal * (radius + 2.0f);
             }
@@ -275,11 +375,13 @@ void ShipController::update_ship(float dt) {
         }
     } else if (state_ == ShipState::EarthOrbit) {
         earth_orbit_angle_ = normalize_angle(earth_orbit_angle_ + ship_earth_orbit_speed_ * dt);
-        trans->transform.set_position(get_earth_pos() + Vec3(std::cos(earth_orbit_angle_), 0, std::sin(earth_orbit_angle_)) * ship_earth_orbit_radius_);
+        Vec3 earth_pos = get_earth_pos();
+        trans->transform.set_position(earth_pos + Vec3(std::cos(earth_orbit_angle_), 0, std::sin(earth_orbit_angle_)) * ship_earth_orbit_radius_);
         trans->transform.set_rotation({0, Math::to_angle(-(earth_orbit_angle_ + PI/2.0f)), 0});
     } else if (state_ == ShipState::MoonOrbit) {
         moon_orbit_angle_ = normalize_angle(moon_orbit_angle_ + ship_moon_orbit_speed_ * dt);
-        trans->transform.set_position(get_moon_pos() + Vec3(std::cos(moon_orbit_angle_), 0, std::sin(moon_orbit_angle_)) * ship_moon_orbit_radius_);
+        Vec3 moon_pos = get_moon_pos();
+        trans->transform.set_position(moon_pos + Vec3(std::cos(moon_orbit_angle_), 0, std::sin(moon_orbit_angle_)) * ship_moon_orbit_radius_);
         trans->transform.set_rotation({0, Math::to_angle(-(moon_orbit_angle_ + PI/2.0f)), 0});
     } else if (state_ == ShipState::LandedOnEarth || state_ == ShipState::LandedOnMoon) {
         Vec3 center = (state_ == ShipState::LandedOnEarth) ? get_earth_pos() : get_moon_pos();
@@ -405,12 +507,43 @@ void ShipController::draw_imgui() {
 }
 
 
-Vec3 ShipController::get_earth_pos() const { return earth_ ? earth_->get_component<TransformComponent>()->get_world_position() : Vec3::Zero(); }
-Vec3 ShipController::get_moon_pos() const { return moon_ ? moon_->get_component<TransformComponent>()->get_world_position() : Vec3(DEFAULT_MOON_ORBIT_DISTANCE, 0, 0); }
-Vec3 ShipController::get_ship_pos() const { return get_owner()->get_component<TransformComponent>()->get_world_position(); }
-float ShipController::get_earth_radius() const { return earth_ ? earth_->get_component<TransformComponent>()->get_world_scale().x : 10.0f; }
-float ShipController::get_moon_radius() const { return moon_ ? moon_->get_component<TransformComponent>()->get_world_scale().x : 4.0f; }
-float ShipController::get_moon_angle() const { return (moon_ && moon_->get_component<MoonOrbitComponent>()) ? moon_->get_component<MoonOrbitComponent>()->get_orbit_angle() : 0.0f; }
+Vec3 ShipController::get_sun_pos() const { 
+    return sun_ ? sun_->get_component<TransformComponent>()->get_world_position() : Vec3::Zero(); 
+}
+
+Vec3 ShipController::get_earth_pos() const { 
+    return earth_ ? earth_->get_component<TransformComponent>()->get_world_position() : Vec3::Zero(); 
+}
+
+Vec3 ShipController::get_moon_pos() const { 
+    if (moon_) {
+        if (auto* moon_comp = moon_->get_component<MoonOrbitComponent>()) {
+            return moon_comp->get_current_position();
+        }
+        return moon_->get_component<TransformComponent>()->get_world_position();
+    }
+    return Vec3(DEFAULT_MOON_ORBIT_DISTANCE, 0, 0); 
+}
+
+Vec3 ShipController::get_ship_pos() const { 
+    return get_owner()->get_component<TransformComponent>()->get_world_position(); 
+}
+
+float ShipController::get_sun_radius() const { 
+    return sun_ ? sun_->get_component<TransformComponent>()->get_world_scale().x : DEFAULT_SUN_RADIUS; 
+}
+
+float ShipController::get_earth_radius() const { 
+    return earth_ ? earth_->get_component<TransformComponent>()->get_world_scale().x : 10.0f; 
+}
+
+float ShipController::get_moon_radius() const { 
+    return moon_ ? moon_->get_component<TransformComponent>()->get_world_scale().x : 4.0f; 
+}
+
+float ShipController::get_moon_angle() const { 
+    return (moon_ && moon_->get_component<MoonOrbitComponent>()) ? moon_->get_component<MoonOrbitComponent>()->get_orbit_angle() : 0.0f; 
+}
 
 bool ShipController::get_transfer_info(const char** source_state, const char** target_state) const {
     // Show transfer info during active transfers (transfer orbit or landing/launching)

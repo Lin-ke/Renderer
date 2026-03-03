@@ -23,15 +23,18 @@ DECLARE_LOG_TAG(LogEarthMoonShip);
 // ============================================================================
 // Constants & Enums
 // ============================================================================
-static constexpr float DEFAULT_MOON_ORBIT_DISTANCE     = 100.0f;
-static constexpr float DEFAULT_MOON_ORBIT_SPEED        = 0.05f;
-static constexpr float DEFAULT_SHIP_EARTH_ORBIT_RADIUS = 35.0f;
-static constexpr float DEFAULT_SHIP_EARTH_ORBIT_SPEED  = 0.5f;
-static constexpr float DEFAULT_SHIP_MOON_ORBIT_RADIUS  = 10.0f;
-static constexpr float DEFAULT_SHIP_MOON_ORBIT_SPEED   = 1.0f;
-static constexpr float DEFAULT_TRANSFER_DURATION       = 8.0f;
-static constexpr float DEFAULT_EARTH_SURFACE_OFFSET    = 6.0f;
-static constexpr float DEFAULT_MOON_SURFACE_OFFSET     = 2.0f;
+static constexpr float DEFAULT_SUN_RADIUS                   = 3.0f;
+static constexpr float DEFAULT_EARTH_ORBIT_DISTANCE         = 500.0f;
+static constexpr float DEFAULT_EARTH_ORBIT_SPEED            = 0.02f;
+static constexpr float DEFAULT_MOON_ORBIT_DISTANCE          = 100.0f;
+static constexpr float DEFAULT_MOON_ORBIT_SPEED             = 0.15f;
+static constexpr float DEFAULT_SHIP_EARTH_ORBIT_RADIUS      = 35.0f;
+static constexpr float DEFAULT_SHIP_EARTH_ORBIT_SPEED       = 0.5f;
+static constexpr float DEFAULT_SHIP_MOON_ORBIT_RADIUS       = 10.0f;
+static constexpr float DEFAULT_SHIP_MOON_ORBIT_SPEED        = 1.0f;
+static constexpr float DEFAULT_TRANSFER_DURATION            = 8.0f;
+static constexpr float DEFAULT_EARTH_SURFACE_OFFSET         = 6.0f;
+static constexpr float DEFAULT_MOON_SURFACE_OFFSET          = 2.0f;
 
 enum class ShipState {
     LandedOnEarth, EarthOrbit, TransferToMoon, MoonOrbit, TransferToEarth, LandedOnMoon,
@@ -43,7 +46,33 @@ enum class CameraMode { Free, FirstPerson, ThirdPerson };
 const char* ship_state_name(ShipState s);
 
 // ============================================================================
-// MoonOrbitComponent - Makes the Moon orbit Earth
+// EarthOrbitComponent - Makes Earth orbit the Sun
+// ============================================================================
+class EarthOrbitComponent : public Component {
+    CLASS_DEF(EarthOrbitComponent, Component)
+public:
+    EarthOrbitComponent() = default;
+    void on_init() override;
+    void on_update(float delta_time) override;
+
+    float get_orbit_distance() const { return orbit_distance_; }
+    float get_orbit_speed() const { return orbit_speed_; }
+    float get_orbit_angle() const { return orbit_angle_; }
+    Vec3  get_current_position() const;
+
+    static void register_class();
+
+private:
+    float orbit_angle_ = 0.0f;
+    float orbit_distance_ = DEFAULT_EARTH_ORBIT_DISTANCE;
+    float orbit_speed_ = DEFAULT_EARTH_ORBIT_SPEED;
+};
+
+CEREAL_REGISTER_TYPE(EarthOrbitComponent);
+CEREAL_REGISTER_POLYMORPHIC_RELATION(Component, EarthOrbitComponent);
+
+// ============================================================================
+// MoonOrbitComponent - Makes Moon orbit Earth
 // ============================================================================
 class MoonOrbitComponent : public Component {
     CLASS_DEF(MoonOrbitComponent, Component)
@@ -55,6 +84,9 @@ public:
     float get_moon_orbit_distance() const { return moon_orbit_distance_; }
     float get_moon_orbit_speed() const { return moon_orbit_speed_; }
     float get_orbit_angle() const { return orbit_angle_; }
+    Vec3  get_current_position() const;
+
+    void set_earth_entity(Entity* earth) { earth_ = earth; }
 
     static void register_class();
 
@@ -62,6 +94,7 @@ private:
     float orbit_angle_ = 0.0f;
     float moon_orbit_distance_ = DEFAULT_MOON_ORBIT_DISTANCE;
     float moon_orbit_speed_ = DEFAULT_MOON_ORBIT_SPEED;
+    Entity* earth_ = nullptr;
 };
 
 CEREAL_REGISTER_TYPE(MoonOrbitComponent);
@@ -75,6 +108,7 @@ class ShipController : public Component {
 public:
     ShipController() = default;
     
+    void set_sun_entity(Entity* e)  { sun_ = e; }
     void set_earth_entity(Entity* e)  { earth_ = e; }
     void set_moon_entity(Entity* e)   { moon_ = e; }
     void set_camera_entity(Entity* e) { camera_ = e; }
@@ -102,9 +136,11 @@ private:
     void update_camera();
     
     // Helpers
+    Vec3  get_sun_pos() const;
     Vec3  get_earth_pos() const;
     Vec3  get_moon_pos() const;
     Vec3  get_ship_pos() const;
+    float get_sun_radius() const;
     float get_earth_radius() const;
     float get_moon_radius() const;
     float get_moon_angle() const;
@@ -116,7 +152,7 @@ private:
     void try_early_capture();
 
     // Data
-    Entity *earth_ = nullptr, *moon_ = nullptr, *camera_ = nullptr;
+    Entity *sun_ = nullptr, *earth_ = nullptr, *moon_ = nullptr, *camera_ = nullptr;
     ShipState state_ = ShipState::EarthOrbit;
     CameraMode camera_mode_ = CameraMode::ThirdPerson;
 
