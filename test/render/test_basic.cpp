@@ -32,7 +32,7 @@ static bool create_bunny_scene(const std::string& scene_path) {
     // Camera
     auto* cam_ent = scene->create_entity();
     auto* cam_trans = cam_ent->add_component<TransformComponent>();
-    cam_trans->transform.set_position({-3.0f, 0.0f, 0.0f});
+    cam_trans->transform.set_position({0.0f, 0.8f, -3.0f});
     
     auto* cam = cam_ent->add_component<CameraComponent>();
     cam->set_fov(60.0f);
@@ -99,15 +99,16 @@ TEST_CASE("Bunny model rendering", "[render]") {
     std::vector<uint8_t> screenshot;
     int frames = 0;
     bool captured = test_utils::RenderTestApp::run(config, screenshot, &frames);
+    REQUIRE(captured);
     
-    CHECK(frames > 0);
+    REQUIRE(frames > 0);
     
     if (captured) {
         std::string path = test_asset_dir + "/bunny.png";
         if (test_utils::save_screenshot_png(path, config.width, config.height, screenshot)) {
             float brightness = test_utils::calculate_average_brightness(screenshot);
             INFO(LogBasicRender, "Screenshot saved: {} (brightness: {:.1f})", path, brightness);
-            CHECK(brightness > 1.0f);
+            REQUIRE(brightness > 1.0f);
         }
     }
     

@@ -32,10 +32,12 @@ void TestContext::init_engine() {
     std::bitset<8> mode;
     mode.set(EngineContext::StartMode::Asset);
     mode.set(EngineContext::StartMode::Window);
+    mode.set(EngineContext::StartMode::HiddenWindow);
     mode.set(EngineContext::StartMode::Render);
     mode.set(EngineContext::StartMode::SingleThread);
     
     EngineContext::init(mode);
+    if (auto* render_system = EngineContext::render_system()) render_system->set_show_ui(false);
     
     if (auto am = EngineContext::asset()) {
         am->init(test_asset_dir_);
@@ -200,27 +202,14 @@ bool export_profiler_trace(const std::string& filename) {
 }
 
 bool RenderTestApp::capture_screenshot(std::vector<uint8_t>& screenshot_data) {
-    auto swapchain = EngineContext::render_system()->get_swapchain();
-    if (!swapchain) return false;
-
-    uint32_t current_frame = swapchain->get_current_frame_index();
-    RHITextureRef back_buffer = swapchain->get_texture(current_frame);
-    if (!back_buffer) return false;
-
-    auto backend = EngineContext::rhi();
-    auto pool = backend->create_command_pool({});
-    auto context = backend->create_command_context(pool);
-    
-    context->begin_command();
-    context->end_command();
-    auto fence = backend->create_fence(false);
-    context->execute(fence, nullptr, nullptr);
-    fence->wait();
-    
-    return context->read_texture(back_buffer, screenshot_data.data(), screenshot_data.size());
+    auto* render_system = EngineContext::render_system();
+    Extent2D extent;
+    return render_system && render_system->capture_frame(screenshot_data, extent);
 }
 
 bool RenderTestApp::run(const Config& config, std::vector<uint8_t>& out_screenshot_data, int* out_frames) {
+    if (out_frames) *out_frames = 0;
+    out_screenshot_data.clear();
     // Enable profiler and start a frame for asset loading phase
     auto& profiler = CpuProfiler::instance();
     profiler.set_enabled(true);
@@ -242,6 +231,7 @@ bool RenderTestApp::run(const Config& config, std::vector<uint8_t>& out_screensh
         result = SceneLoader::load(config.scene_path, true);
     }
     if (!result.success) {
+        std::cerr << "Render test scene load failed: " << result.error_msg << '\n';
         profiler.end_frame();
         return false;
     }
@@ -288,13 +278,14 @@ bool RenderTestApp::run(const Config& config, std::vector<uint8_t>& out_screensh
         frames++;
         
         if (config.capture_frame > 0 && frames == config.capture_frame && !screenshot_taken) {
-            out_screenshot_data.resize(config.width * config.height * 4);
-            if (capture_screenshot(out_screenshot_data)) {
-                screenshot_taken = true;
+            Extent2D extent;
+            if (EngineContext::render_system()->capture_frame(out_screenshot_data, extent)) {
+                auto path = config.screenshot_path.empty() ?
+                    (utils::get_engine_path() / "build/test-results" / (std::filesystem::path(config.scene_path).stem().string() + ".png")).string() : config.screenshot_path;
+                screenshot_taken = save_screenshot_png(path, extent.width, extent.height, out_screenshot_data);
             }
         }
         
-        std::this_thread::sleep_for(std::chrono::milliseconds(16));
     }
     
     // Clean up custom RDG build function

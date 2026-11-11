@@ -100,6 +100,7 @@ public:
 
     virtual void* map() = 0;
     virtual void unmap() = 0;
+    virtual std::vector<uint8_t> snapshot_data() const { return {}; }
 
     inline const RHIBufferInfo& get_info() const { return info_; }
 
@@ -220,14 +221,30 @@ protected:
 class RHIDescriptorSet : public RHIResource {
 public:
     RHIDescriptorSet() : RHIResource(RHI_DESCRIPTOR_SET) {}
+    RHIDescriptorSet(RHIRootSignatureRef root, uint32_t set)
+        : RHIResource(RHI_DESCRIPTOR_SET), root_signature_(root), set_(set) {}
 
-    virtual RHIDescriptorSet& update_descriptor(const RHIDescriptorUpdateInfo& descriptor_update_info) = 0;
+    virtual RHIDescriptorSet& update_descriptor(const RHIDescriptorUpdateInfo& descriptor_update_info);
+    RHIDescriptorSet& write_buffer(uint32_t binding, RHIBufferRef buffer, ResourceType type = RESOURCE_TYPE_UNIFORM_BUFFER,
+                                   uint64_t offset = 0, uint64_t range = 0, uint32_t index = 0);
+    RHIDescriptorSet& write_texture(uint32_t binding, RHITextureRef texture, ResourceType type = RESOURCE_TYPE_TEXTURE,
+                                    uint32_t mip = 0, uint32_t index = 0);
+    RHIDescriptorSet& write_sampler(uint32_t binding, RHISamplerRef sampler, uint32_t index = 0);
+    RHIRootSignatureRef get_root_signature() const { return root_signature_; }
+    uint32_t get_set() const { return set_; }
+    const std::vector<RHIDescriptorUpdateInfo>& get_descriptors() const { return descriptors_; }
+    RHIDescriptorSetRef snapshot() const;
+    void clear() { descriptors_.clear(); }
 
     RHIDescriptorSet& update_descriptors(const std::vector<RHIDescriptorUpdateInfo>& descriptor_update_infos) {
         for (auto& info : descriptor_update_infos)
             update_descriptor(info);
         return *this;
     };
+protected:
+    RHIRootSignatureRef root_signature_;
+    uint32_t set_ = 0;
+    std::vector<RHIDescriptorUpdateInfo> descriptors_;
 };
 
 // Pipeline State

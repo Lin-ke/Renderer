@@ -65,6 +65,7 @@ private:
     // Pipeline
     RHIGraphicsPipelineRef pipeline_;
     RHIRootSignatureRef root_signature_;
+    RHIDescriptorSetRef descriptor_set_;
 
     // Uniform buffers
     RHIBufferRef per_frame_buffer_;   // b0: view, proj, camera_pos

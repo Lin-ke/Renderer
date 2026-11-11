@@ -186,7 +186,10 @@ void GBufferPass::create_pipeline() {
     if (!backend || !vertex_shader_ || !fragment_shader_) return;
     
     RHIRootSignatureInfo root_info = {};
+    root_info.add_entry_from_reflect(vertex_shader_->shader_);
+    root_info.add_entry_from_reflect(fragment_shader_->shader_);
     root_signature_ = backend->create_root_signature(root_info);
+    if (root_signature_) descriptor_set_ = root_signature_->create_descriptor_set(0);
     if (!root_signature_) return;
     
     RHIGraphicsPipelineInfo pipe_info = {};
@@ -292,6 +295,8 @@ std::optional<GBufferOutputHandles> GBufferPass::build(RDGBuilder& builder, RDGT
     
     // Use depth from DepthPrePass - LOAD to preserve early-z benefits
     builder.create_render_pass("GBuffer_Pass")
+        .root_signature(root_signature_)
+        .descriptor_set(0, descriptor_set_)
         .color(GBufferData::ALBEDO_AO_INDEX, gbuffer_albedo_ao, 
                ATTACHMENT_LOAD_OP_CLEAR, ATTACHMENT_STORE_OP_STORE, 
                Color4{0.0f, 0.0f, 0.0f, 1.0f})
@@ -323,13 +328,12 @@ std::optional<GBufferOutputHandles> GBufferPass::build(RDGBuilder& builder, RDGT
                     }
                     per_frame_dirty_ = false;
                 }
-                cmd->bind_constant_buffer(per_frame_buffer_, 0, 
-                    static_cast<ShaderFrequency>(SHADER_FREQUENCY_VERTEX | SHADER_FREQUENCY_FRAGMENT));
+                descriptor_set_->write_buffer(0, per_frame_buffer_);
             }
             
             // Bind material buffer and sampler (used by all batches)
-            cmd->bind_constant_buffer(material_buffer_, 2, SHADER_FREQUENCY_FRAGMENT);
-            cmd->bind_sampler(default_sampler_, 0, SHADER_FREQUENCY_FRAGMENT);
+            descriptor_set_->write_buffer(2, material_buffer_);
+            descriptor_set_->write_sampler(0, default_sampler_);
             
             // Get fallback textures from render system
             auto* rsys = EngineContext::render_system();
@@ -348,7 +352,7 @@ std::optional<GBufferOutputHandles> GBufferPass::build(RDGBuilder& builder, RDGT
                         memcpy(mapped, &object_data, sizeof(object_data));
                         per_object_buffer_->unmap();
                     }
-                    cmd->bind_constant_buffer(per_object_buffer_, 1, SHADER_FREQUENCY_VERTEX);
+                    descriptor_set_->write_buffer(1, per_object_buffer_);
                 }
                 
                 // Update material data and bind textures
@@ -378,85 +382,85 @@ std::optional<GBufferOutputHandles> GBufferPass::build(RDGBuilder& builder, RDGT
                     // Bind albedo texture (t0)
                     auto albedo_tex = pbr_mat->get_diffuse_texture();
                     if (albedo_tex && albedo_tex->texture_) {
-                        cmd->bind_texture(albedo_tex->texture_, 0, SHADER_FREQUENCY_FRAGMENT);
+                        descriptor_set_->write_texture(0, albedo_tex->texture_);
                     } else {
                         WARN(LogGBufferPass, "Material '{}' is missing albedo/diffuse texture, using fallback white", 
                              pbr_mat->get_name());
                         if (fallback_white) {
-                            cmd->bind_texture(fallback_white, 0, SHADER_FREQUENCY_FRAGMENT);
+                            descriptor_set_->write_texture(0, fallback_white);
                         }
                     }
                     
                     // Bind normal texture (t1)
                     auto normal_tex = pbr_mat->get_normal_texture();
                     if (normal_tex && normal_tex->texture_) {
-                        cmd->bind_texture(normal_tex->texture_, 1, SHADER_FREQUENCY_FRAGMENT);
+                        descriptor_set_->write_texture(1, normal_tex->texture_);
                     } else {
                         if (fallback_normal) {
-                            cmd->bind_texture(fallback_normal, 1, SHADER_FREQUENCY_FRAGMENT);
+                            descriptor_set_->write_texture(1, fallback_normal);
                         }
                     }
                     
                     // Bind ARM texture (t2) - preferred over individual maps
                     auto arm_tex = pbr_mat->get_arm_texture();
                     if (arm_tex && arm_tex->texture_) {
-                        cmd->bind_texture(arm_tex->texture_, 2, SHADER_FREQUENCY_FRAGMENT);
+                        descriptor_set_->write_texture(2, arm_tex->texture_);
                     } else {
                         if (fallback_black) {
-                            cmd->bind_texture(fallback_black, 2, SHADER_FREQUENCY_FRAGMENT);
+                            descriptor_set_->write_texture(2, fallback_black);
                         }
                     }
                     
                     // Bind individual maps (t3-t6) when ARM is not available
                     auto roughness_tex = pbr_mat->get_roughness_texture();
                     if (roughness_tex && roughness_tex->texture_) {
-                        cmd->bind_texture(roughness_tex->texture_, 3, SHADER_FREQUENCY_FRAGMENT);
+                        descriptor_set_->write_texture(3, roughness_tex->texture_);
                     } else {
                         if (fallback_black) {
-                            cmd->bind_texture(fallback_black, 3, SHADER_FREQUENCY_FRAGMENT);
+                            descriptor_set_->write_texture(3, fallback_black);
                         }
                     }
                     
                     auto metallic_tex = pbr_mat->get_metallic_texture();
                     if (metallic_tex && metallic_tex->texture_) {
-                        cmd->bind_texture(metallic_tex->texture_, 4, SHADER_FREQUENCY_FRAGMENT);
+                        descriptor_set_->write_texture(4, metallic_tex->texture_);
                     } else {
                         if (fallback_black) {
-                            cmd->bind_texture(fallback_black, 4, SHADER_FREQUENCY_FRAGMENT);
+                            descriptor_set_->write_texture(4, fallback_black);
                         }
                     }
                     
                     auto ao_tex = pbr_mat->get_ao_texture();
                     if (ao_tex && ao_tex->texture_) {
-                        cmd->bind_texture(ao_tex->texture_, 5, SHADER_FREQUENCY_FRAGMENT);
+                        descriptor_set_->write_texture(5, ao_tex->texture_);
                     } else {
                         if (fallback_white) { // White = AO=1.0 (no occlusion)
-                            cmd->bind_texture(fallback_white, 5, SHADER_FREQUENCY_FRAGMENT);
+                            descriptor_set_->write_texture(5, fallback_white);
                         }
                     }
                     
                     auto emission_tex = pbr_mat->get_emission_texture();
                     if (emission_tex && emission_tex->texture_) {
-                        cmd->bind_texture(emission_tex->texture_, 6, SHADER_FREQUENCY_FRAGMENT);
+                        descriptor_set_->write_texture(6, emission_tex->texture_);
                     } else {
                         if (fallback_black) {
-                            cmd->bind_texture(fallback_black, 6, SHADER_FREQUENCY_FRAGMENT);
+                            descriptor_set_->write_texture(6, fallback_black);
                         }
                     }
                 } else {
                     // No material or not PBR - bind all fallbacks
                     if (fallback_white) {
-                        cmd->bind_texture(fallback_white, 0, SHADER_FREQUENCY_FRAGMENT); // albedo
-                        cmd->bind_texture(fallback_white, 5, SHADER_FREQUENCY_FRAGMENT); // ao
+                        descriptor_set_->write_texture(0, fallback_white); // albedo
+                        descriptor_set_->write_texture(5, fallback_white); // ao
                     }
                     if (fallback_normal) {
-                        cmd->bind_texture(fallback_normal, 1, SHADER_FREQUENCY_FRAGMENT); // normal
+                        descriptor_set_->write_texture(1, fallback_normal); // normal
                     }
                     if (fallback_black) {
-                        cmd->bind_texture(fallback_black, 2, SHADER_FREQUENCY_FRAGMENT); // arm
-                        cmd->bind_texture(fallback_black, 3, SHADER_FREQUENCY_FRAGMENT); // roughness
-                        cmd->bind_texture(fallback_black, 4, SHADER_FREQUENCY_FRAGMENT); // metallic
-                        cmd->bind_texture(fallback_black, 6, SHADER_FREQUENCY_FRAGMENT); // emission
+                        descriptor_set_->write_texture(2, fallback_black); // arm
+                        descriptor_set_->write_texture(3, fallback_black); // roughness
+                        descriptor_set_->write_texture(4, fallback_black); // metallic
+                        descriptor_set_->write_texture(6, fallback_black); // emission
                     }
                 }
                 
@@ -472,6 +476,7 @@ std::optional<GBufferOutputHandles> GBufferPass::build(RDGBuilder& builder, RDGT
                 
                 if (batch.index_buffer) {
                     cmd->bind_index_buffer(batch.index_buffer, 0);
+                    cmd->bind_descriptor_set(descriptor_set_, 0);
                     cmd->draw_indexed(batch.index_count, 1, batch.index_offset, 0, 0);
                 }
             }

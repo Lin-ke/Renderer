@@ -47,7 +47,7 @@ void EngineContext::init(std::bitset<8> mode) {
 	instance_->world_ = std::make_unique<World>();
 	instance_->world_->init();
 	if (mode.test(StartMode::Window)) { // Window
-		instance_->window_ = std::make_unique<class Window>(1280, 720, L"Toy Renderer");
+		instance_->window_ = std::make_unique<class Window>(1280, 720, L"Toy Renderer", !mode.test(StartMode::HiddenWindow));
 		if (instance_->window_ && instance_->window_->get_hwnd()) {
 			INFO(LogEngine, "Window created successfully");
 		} else {

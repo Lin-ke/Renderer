@@ -68,6 +68,9 @@ public:
     void destroy();
 
     bool tick(const RenderPacket& packet);
+    // Capture the completed frame, even after the swapchain has advanced.
+    bool capture_frame(std::vector<uint8_t>& rgba, Extent2D& extent);
+    void set_show_ui(bool show) { show_ui_ = show; }
 
     /**
      * @brief Set a custom RDG build function for testing
@@ -157,6 +160,7 @@ public:
     // Debug settings
     bool wireframe_mode_ = false;
     bool show_ui_ = true;
+    RHITextureRef last_rendered_texture_;
     bool show_buffer_debug_ = false;  // Toggle for buffer debug visualization (default OFF)
     
     // Pass toggles

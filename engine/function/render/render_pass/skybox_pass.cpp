@@ -178,7 +178,10 @@ void SkyboxPass::create_pipeline() {
     if (!backend || !vertex_shader_ || !fragment_shader_) return;
     
     RHIRootSignatureInfo root_info = {};
+    root_info.add_entry_from_reflect(vertex_shader_->shader_);
+    root_info.add_entry_from_reflect(fragment_shader_->shader_);
     root_signature_ = backend->create_root_signature(root_info);
+    if (root_signature_) descriptor_set_ = root_signature_->create_descriptor_set(0);
     if (!root_signature_) return;
     
     RHIGraphicsPipelineInfo pipe_info = {};
@@ -412,6 +415,8 @@ void SkyboxPass::build(RDGBuilder& builder, RDGTextureHandle color_target,
         
         // Create render pass
         builder.create_render_pass("SkyboxPass")
+        .root_signature(root_signature_)
+        .descriptor_set(0, descriptor_set_)
             .color(0, color_target, ATTACHMENT_LOAD_OP_LOAD, ATTACHMENT_STORE_OP_STORE)
             .depth_stencil(depth_target, ATTACHMENT_LOAD_OP_LOAD, ATTACHMENT_STORE_OP_DONT_CARE, 
                           1.0f, 0, {}, true)  // Read-only depth
@@ -435,8 +440,7 @@ void SkyboxPass::build(RDGBuilder& builder, RDGTextureHandle color_target,
                         }
                         per_frame_dirty_ = false;
                     }
-                    cmd->bind_constant_buffer(per_frame_buffer_, 0,
-                        static_cast<ShaderFrequency>(SHADER_FREQUENCY_VERTEX | SHADER_FREQUENCY_FRAGMENT));
+                    descriptor_set_->write_buffer(0, per_frame_buffer_);
                 }
                 
                 // Update and bind per-object buffer
@@ -450,7 +454,7 @@ void SkyboxPass::build(RDGBuilder& builder, RDGTextureHandle color_target,
                         memcpy(mapped, &obj_data, sizeof(PerObjectData));
                         per_object_buffer_->unmap();
                     }
-                    cmd->bind_constant_buffer(per_object_buffer_, 1, SHADER_FREQUENCY_VERTEX);
+                    descriptor_set_->write_buffer(1, per_object_buffer_);
                 }
                 
                 // Update and bind params buffer
@@ -463,20 +467,21 @@ void SkyboxPass::build(RDGBuilder& builder, RDGTextureHandle color_target,
                         memcpy(mapped, &params, sizeof(SkyboxParams));
                         params_buffer_->unmap();
                     }
-                    cmd->bind_constant_buffer(params_buffer_, 2, SHADER_FREQUENCY_FRAGMENT);
+                    descriptor_set_->write_buffer(2, params_buffer_);
                 }
 
                   
                 
                 // Bind cube texture and sampler
-                cmd->bind_texture(captured_cube_tex, 0, SHADER_FREQUENCY_FRAGMENT);
-                cmd->bind_sampler(cube_sampler_, 0, SHADER_FREQUENCY_FRAGMENT);
+                descriptor_set_->write_texture(0, captured_cube_tex);
+                descriptor_set_->write_sampler(0, cube_sampler_);
                 
                 // Bind vertex and index buffers
                 cmd->bind_vertex_buffer(vertex_buffer, 0, 0);
                 cmd->bind_index_buffer(index_buffer, 0);
                 
                 // Draw the cube
+                cmd->bind_descriptor_set(descriptor_set_, 0);
                 cmd->draw_indexed(index_count, 1, 0, 0, 0);
             })
             .finish();

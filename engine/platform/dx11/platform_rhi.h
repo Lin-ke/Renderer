@@ -242,7 +242,7 @@ public:
 class DX11DescriptorSet : public RHIDescriptorSet {
 public:
     DX11DescriptorSet(DX11Backend& backend) {}
-    virtual RHIDescriptorSet& update_descriptor(const RHIDescriptorUpdateInfo& info) override final { return *this; }
+    virtual RHIDescriptorSet& update_descriptor(const RHIDescriptorUpdateInfo& info) override final { return RHIDescriptorSet::update_descriptor(info); }
     virtual void destroy() override final {}
     virtual void* raw_handle() override final { return nullptr; }
 };
@@ -373,12 +373,12 @@ public:
 
     virtual void push_constants(void* data, uint16_t size, ShaderFrequency frequency) override final;
     virtual void bind_descriptor_set(RHIDescriptorSetRef descriptor, uint32_t set) override final;
-    virtual void bind_constant_buffer(RHIBufferRef buffer, uint32_t slot, ShaderFrequency frequency) override final;
+    virtual void bind_constant_buffer(RHIBufferRef buffer, uint32_t slot, ShaderFrequency frequency);
     virtual void bind_vertex_buffer(RHIBufferRef buffer, uint32_t stream_index, uint32_t offset) override final;
     virtual void bind_index_buffer(RHIBufferRef buffer, uint32_t offset) override final;
-    virtual void bind_texture(RHITextureRef texture, uint32_t slot, ShaderFrequency frequency) override final;
-    virtual void bind_rw_texture(RHITextureRef texture, uint32_t slot, uint32_t mip_level, ShaderFrequency frequency) override final;
-    virtual void bind_sampler(RHISamplerRef sampler, uint32_t slot, ShaderFrequency frequency) override final;
+    virtual void bind_texture(RHITextureRef texture, uint32_t slot, ShaderFrequency frequency);
+    virtual void bind_rw_texture(RHITextureRef texture, uint32_t slot, uint32_t mip_level, ShaderFrequency frequency);
+    virtual void bind_sampler(RHISamplerRef sampler, uint32_t slot, ShaderFrequency frequency);
 
     virtual void dispatch(uint32_t group_count_x, uint32_t group_count_y, uint32_t group_count_z) override final;
     virtual void dispatch_indirect(RHIBufferRef argument_buffer, uint32_t argument_offset) override final;

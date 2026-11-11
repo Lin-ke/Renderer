@@ -201,5 +201,7 @@ RHIGraphicsPipelineRef pipeline = backend->create_graphics_pipeline(info);
    - 更新AGENTS.md（如必要）
 
 ## Docs
+DX12 后端、DescriptorSet 绑定、隐藏窗口截图测试：`docs/dx12.md`。
+当前默认后端为 DX12。Shader 资源必须通过 RootSignature 布局和 DescriptorSet 绑定，不能恢复逐槽位的 CommandList 资源绑定 API。测试使用隐藏窗口，通过截图和像素验证输出。
 Test格式（写Test前必看）
 Asset 系统（写Asset前必看）

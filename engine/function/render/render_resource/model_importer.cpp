@@ -908,7 +908,8 @@ std::shared_ptr<Texture> ModelImporter::load_texture_safe(const std::string& pat
         if (settings_.force_png_texture) {
             tex_path.replace_extension(".png");
         }
-        if (std::filesystem::exists(tex_path)) {
+        std::error_code error;
+        if (std::filesystem::exists(tex_path, error)) {
             return std::make_shared<Texture>(tex_path.string(), format);
         }
     } catch (const std::exception& e) {
@@ -1174,7 +1175,8 @@ std::shared_ptr<Texture> ModelImporter::load_material_texture(aiMaterial* mat, a
                     try_path.replace_extension(".png");
                 }
                 
-                if (std::filesystem::exists(try_path)) {
+                std::error_code error;
+                if (std::filesystem::exists(try_path, error)) {
                     found_path = try_path;
                     break; // 找到了就跳出
                 }

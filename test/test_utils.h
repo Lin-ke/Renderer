@@ -146,6 +146,11 @@ private:
  * @return true on success
  */
 inline bool save_screenshot_png(const std::string& filename, uint32_t width, uint32_t height, const std::vector<uint8_t>& data) {
+    if (!width || !height || uint64_t(width) * height * 4 != data.size()) return false;
+    std::error_code error;
+    auto parent = std::filesystem::path(filename).parent_path();
+    if (!parent.empty()) std::filesystem::create_directories(parent, error);
+    if (error) return false;
     int stride_in_bytes = width * 4;
     int result = stbi_write_png(filename.c_str(), static_cast<int>(width), static_cast<int>(height), 4, data.data(), stride_in_bytes);
     return result != 0;
@@ -227,6 +232,7 @@ public:
         uint32_t height = 720;
         int max_frames = 60;
         int capture_frame = 30; // 0 to disable
+        std::string screenshot_path; // Empty: build/test-results/<scene-name>.png
         SceneCreateFunc create_scene_func = nullptr;
         SceneLoadedFunc on_scene_loaded_func = nullptr;
         BuildRDGFunc build_rdg_func = nullptr;  // Custom RDG building function

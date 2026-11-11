@@ -244,7 +244,7 @@ public:
     // --- Resource Binding ---
     // These methods declare dependencies. The graph will ensure barriers are inserted.
 
-    RDGRenderPassBuilder& read(uint32_t set, uint32_t binding, uint32_t index, RDGBufferHandle buffer, uint32_t offset = 0, uint32_t size = 0);
+    RDGRenderPassBuilder& read(uint32_t set, uint32_t binding, uint32_t index, RDGBufferHandle buffer, uint32_t offset = 0, uint32_t size = 0, ResourceType type = RESOURCE_TYPE_UNIFORM_BUFFER);
     RDGRenderPassBuilder& read(uint32_t set, uint32_t binding, uint32_t index, RDGTextureHandle texture, TextureViewType view_type = VIEW_TYPE_2D,
                                TextureSubresourceRange subresource = {});
     RDGRenderPassBuilder& read_write(uint32_t set, uint32_t binding, uint32_t index, RDGBufferHandle buffer, uint32_t offset = 0,
@@ -296,7 +296,7 @@ public:
     RDGComputePassBuilder& root_signature(RHIRootSignatureRef root_signature);
     RDGComputePassBuilder& descriptor_set(uint32_t set, RHIDescriptorSetRef descriptor_set);
     
-    RDGComputePassBuilder& read(uint32_t set, uint32_t binding, uint32_t index, RDGBufferHandle buffer, uint32_t offset = 0, uint32_t size = 0);
+    RDGComputePassBuilder& read(uint32_t set, uint32_t binding, uint32_t index, RDGBufferHandle buffer, uint32_t offset = 0, uint32_t size = 0, ResourceType type = RESOURCE_TYPE_UNIFORM_BUFFER);
     RDGComputePassBuilder& read(uint32_t set, uint32_t binding, uint32_t index, RDGTextureHandle texture, TextureViewType view_type = VIEW_TYPE_2D,
                                 TextureSubresourceRange subresource = {});
     RDGComputePassBuilder& read_write(uint32_t set, uint32_t binding, uint32_t index, RDGBufferHandle buffer, uint32_t offset = 0,
@@ -333,7 +333,7 @@ public:
     RDGRayTracingPassBuilder& root_signature(RHIRootSignatureRef root_signature);
     RDGRayTracingPassBuilder& descriptor_set(uint32_t set, RHIDescriptorSetRef descriptor_set);
     
-    RDGRayTracingPassBuilder& read(uint32_t set, uint32_t binding, uint32_t index, RDGBufferHandle buffer, uint32_t offset = 0, uint32_t size = 0);
+    RDGRayTracingPassBuilder& read(uint32_t set, uint32_t binding, uint32_t index, RDGBufferHandle buffer, uint32_t offset = 0, uint32_t size = 0, ResourceType type = RESOURCE_TYPE_UNIFORM_BUFFER);
     RDGRayTracingPassBuilder& read(uint32_t set, uint32_t binding, uint32_t index, RDGTextureHandle texture, TextureViewType view_type = VIEW_TYPE_2D,
                                    TextureSubresourceRange subresource = {});
     RDGRayTracingPassBuilder& read_write(uint32_t set, uint32_t binding, uint32_t index, RDGBufferHandle buffer, uint32_t offset = 0,

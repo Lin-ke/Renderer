@@ -91,7 +91,9 @@ void DepthPrePass::create_pipeline() {
     if (!backend || !vertex_shader_) return;
 
     RHIRootSignatureInfo root_info = {};
+    root_info.add_entry_from_reflect(vertex_shader_->shader_);
     root_signature_ = backend->create_root_signature(root_info);
+    if (root_signature_) descriptor_set_ = root_signature_->create_descriptor_set(0);
     if (!root_signature_) return;
 
     RHIGraphicsPipelineInfo pipe_info = {};
@@ -153,6 +155,8 @@ void DepthPrePass::build(RDGBuilder& builder, RDGTextureHandle depth_target, con
 
     // Create Render Pass
     auto rp_builder = builder.create_render_pass("DepthPrePass")
+        .root_signature(root_signature_)
+        .descriptor_set(0, descriptor_set_)
         .depth_stencil(depth_target, ATTACHMENT_LOAD_OP_CLEAR, ATTACHMENT_STORE_OP_STORE, 1.0f, 0);
 
     // Get extent for viewport
@@ -182,7 +186,7 @@ void DepthPrePass::build(RDGBuilder& builder, RDGTextureHandle depth_target, con
                 memcpy(mapped, &per_frame_data_, sizeof(PerFrameData));
                 current_frame_buffer->unmap();
             }
-            cmd->bind_constant_buffer(current_frame_buffer, 0, SHADER_FREQUENCY_VERTEX);
+            descriptor_set_->write_buffer(0, current_frame_buffer);
         }
 
         // Draw Batches
@@ -198,7 +202,7 @@ void DepthPrePass::build(RDGBuilder& builder, RDGTextureHandle depth_target, con
                     memcpy(mapped, &obj_data, sizeof(PerObjectData));
                     per_object_buffer_->unmap();
                 }
-                cmd->bind_constant_buffer(per_object_buffer_, 1, SHADER_FREQUENCY_VERTEX);
+                descriptor_set_->write_buffer(1, per_object_buffer_);
             }
 
             // Vertex Buffer
@@ -210,6 +214,7 @@ void DepthPrePass::build(RDGBuilder& builder, RDGTextureHandle depth_target, con
             // Draw
             if (batch.index_buffer) {
                 cmd->bind_index_buffer(batch.index_buffer, 0);
+                cmd->bind_descriptor_set(descriptor_set_, 0);
                 cmd->draw_indexed(batch.index_count, 1, batch.index_offset, 0, 0);
             }
         }

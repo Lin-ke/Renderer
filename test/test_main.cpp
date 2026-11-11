@@ -3,8 +3,12 @@
 #include <catch2/catch_session.hpp>
 #include "engine/core/log/Log.h"
 #include "test_utils.h"
+#include <Windows.h>
+#include <cstdlib>
 
 int main(int argc, char* argv[]) {
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
+    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
     // Set log level to WARNING to reduce noise during tests
     // 0=INFO, 1=WARNING, 2=ERROR, 3=FATAL
     Log::set_min_log_level(1);

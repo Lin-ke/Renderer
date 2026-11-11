@@ -25,7 +25,7 @@
 DEFINE_LOG_TAG(LogPBRTest, "PBR");
 
 static const std::string PBR_SCENE_PATH = "/Game/pbr_scene.asset";
-static const std::string MODEL_PATH = "/Engine/models/earth/Planet.fbx";
+static const std::string MODEL_PATH = "/Engine/models/material_ball/material_ball.fbx";
 
 static bool create_pbr_scene(const std::string& scene_path) {
     auto scene = std::make_shared<Scene>();
@@ -33,8 +33,8 @@ static bool create_pbr_scene(const std::string& scene_path) {
     // Camera
     auto* cam_ent = scene->create_entity();
     auto* cam_trans = cam_ent->add_component<TransformComponent>();
-    cam_trans->transform.set_position({0.0f, 1.0f, 3.0f});
-    cam_trans->transform.set_rotation({-15.0f, 0.0f, 0.0f});
+    cam_trans->transform.set_position({0.0f, 1.0f, -3.0f});
+    cam_trans->transform.set_rotation({15.0f, 0.0f, 0.0f});
     
     auto* cam = cam_ent->add_component<CameraComponent>();
     cam->set_fov(60.0f);
@@ -64,6 +64,10 @@ static bool create_pbr_scene(const std::string& scene_path) {
     auto* model_ent = scene->create_entity();
     auto* model_trans = model_ent->add_component<TransformComponent>();
     model_trans->transform.set_position({0.0f, 0.0f, 0.0f});
+    auto bounds = model->get_bounding_box();
+    float scale = 8.0f / std::max((bounds.max - bounds.min).norm(), 0.001f);
+    model_trans->transform.set_scale({scale,scale,scale});
+    model_trans->transform.set_position(-(bounds.min + bounds.max) * (0.5f * scale));
     
     auto* mesh = model_ent->add_component<MeshRendererComponent>();
     mesh->set_model(model);
@@ -92,7 +96,7 @@ TEST_CASE("PBR deferred rendering", "[pbr]") {
     config.scene_path = PBR_SCENE_PATH;
     config.width = 1280;
     config.height = 720;
-    config.max_frames = 6000;
+    config.max_frames = 60;
     config.capture_frame = 30;
     config.create_scene_func = create_pbr_scene;
     config.on_scene_loaded_func = on_scene_loaded;
@@ -100,16 +104,17 @@ TEST_CASE("PBR deferred rendering", "[pbr]") {
     std::vector<uint8_t> screenshot;
     int frames = 0;
     bool captured = test_utils::RenderTestApp::run(config, screenshot, &frames);
+    REQUIRE(captured);
     
-    CHECK(frames > 0);
+    REQUIRE(frames > 0);
     
     if (captured) {
         std::string path = test_asset_dir + "/pbr_deferred.png";
         if (test_utils::save_screenshot_png(path, config.width, config.height, screenshot)) {
             float brightness = test_utils::calculate_average_brightness(screenshot);
             INFO(LogPBRTest, "Screenshot saved: {} (brightness: {:.1f})", path, brightness);
-            CHECK(brightness > 1.0f);
-            CHECK(brightness < 255.0f);
+            REQUIRE(brightness > 1.0f);
+            REQUIRE(brightness < 255.0f);
         }
     }
     
@@ -125,9 +130,9 @@ TEST_CASE("PBR material params", "[pbr]") {
     mat->set_roughness(0.5f);
     mat->set_metallic(0.8f);
     
-    CHECK(mat->get_diffuse().x == Catch::Approx(0.8f));
-    CHECK(mat->get_roughness() == Catch::Approx(0.5f));
-    CHECK(mat->get_metallic() == Catch::Approx(0.8f));
+    REQUIRE(mat->get_diffuse().x == Catch::Approx(0.8f));
+    REQUIRE(mat->get_roughness() == Catch::Approx(0.5f));
+    REQUIRE(mat->get_metallic() == Catch::Approx(0.8f));
     
     test_utils::TestContext::reset();
 }

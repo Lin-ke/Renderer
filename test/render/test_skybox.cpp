@@ -94,8 +94,9 @@ TEST_CASE("Cosmic Skybox Rendering", "[skybox]") {
     std::vector<uint8_t> screenshot;
     int frames = 0;
     bool captured = test_utils::RenderTestApp::run(config, screenshot, &frames);
+    REQUIRE(captured);
     
-    CHECK(frames > 0);
+    REQUIRE(frames > 0);
     
     if (captured && !screenshot.empty()) {
         std::string path = test_asset_dir + "/cosmic_skybox_test.png";

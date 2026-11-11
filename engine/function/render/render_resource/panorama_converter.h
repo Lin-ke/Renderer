@@ -49,6 +49,7 @@ private:
     // Pipeline
     RHIComputePipelineRef pipeline_;
     RHIRootSignatureRef root_signature_;
+    RHIDescriptorSetRef descriptor_set_;
 
     // Sampler for panorama
     RHISamplerRef panorama_sampler_;

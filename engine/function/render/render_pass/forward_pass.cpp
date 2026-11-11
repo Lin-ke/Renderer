@@ -140,7 +140,10 @@ void ForwardPass::create_pipeline() {
     if (!backend || !vertex_shader_ || !fragment_shader_) return;
     
     RHIRootSignatureInfo root_info = {};
+    root_info.add_entry_from_reflect(vertex_shader_->shader_);
+    root_info.add_entry_from_reflect(fragment_shader_->shader_);
     root_signature_ = backend->create_root_signature(root_info);
+    if (root_signature_) descriptor_set_ = root_signature_->create_descriptor_set(0);
     if (!root_signature_) return;
     
     RHIGraphicsPipelineInfo pipe_info = {};
@@ -276,6 +279,8 @@ void ForwardPass::build(RDGBuilder& builder) {
         .finish();
     
     builder.create_render_pass("ForwardPass_Main")
+        .root_signature(root_signature_)
+        .descriptor_set(0, descriptor_set_)
         .color(0, color_target, ATTACHMENT_LOAD_OP_CLEAR, ATTACHMENT_STORE_OP_STORE, 
                Color4{0.1f, 0.2f, 0.4f, 1.0f})
         .execute([this, render_system](RDGPassContext context) {
@@ -305,8 +310,7 @@ void ForwardPass::build(RDGBuilder& builder) {
                     }
                     per_frame_dirty_ = false;
                 }
-                cmd->bind_constant_buffer(per_frame_buffer_, 0, 
-                    static_cast<ShaderFrequency>(SHADER_FREQUENCY_VERTEX | SHADER_FREQUENCY_FRAGMENT));
+                descriptor_set_->write_buffer(0, per_frame_buffer_);
             }
             
             std::vector<DrawBatch> batches;
@@ -321,7 +325,7 @@ void ForwardPass::build(RDGBuilder& builder) {
                         memcpy(mapped, &object_data, sizeof(object_data));
                         per_object_buffer_->unmap();
                     }
-                    cmd->bind_constant_buffer(per_object_buffer_, 1, SHADER_FREQUENCY_VERTEX);
+                    descriptor_set_->write_buffer(1, per_object_buffer_);
                 }
                 
                 if (batch.vertex_buffer) {
@@ -333,6 +337,7 @@ void ForwardPass::build(RDGBuilder& builder) {
                 
                 if (batch.index_buffer) {
                     cmd->bind_index_buffer(batch.index_buffer, 0);
+                    cmd->bind_descriptor_set(descriptor_set_, 0);
                     cmd->draw_indexed(batch.index_count, 1, batch.index_offset, 0, 0);
                 }
             }
@@ -359,6 +364,8 @@ void ForwardPass::build(RDGBuilder& builder, RDGTextureHandle color_target,
     
     // Create render pass
     auto rp_builder = builder.create_render_pass("ForwardPass_RDG")
+        .root_signature(root_signature_)
+        .descriptor_set(0, descriptor_set_)
         .color(0, color_target, ATTACHMENT_LOAD_OP_LOAD, ATTACHMENT_STORE_OP_STORE);
     
     // Add depth attachment if available
@@ -375,8 +382,7 @@ void ForwardPass::build(RDGBuilder& builder, RDGTextureHandle color_target,
         cmd->set_graphics_pipeline(pipeline_);
         
         if (per_frame_buffer_) {
-            cmd->bind_constant_buffer(per_frame_buffer_, 0,
-                static_cast<ShaderFrequency>(SHADER_FREQUENCY_VERTEX | SHADER_FREQUENCY_FRAGMENT));
+            descriptor_set_->write_buffer(0, per_frame_buffer_);
         }
         
         for (const auto& batch : batches) {
@@ -390,7 +396,7 @@ void ForwardPass::build(RDGBuilder& builder, RDGTextureHandle color_target,
                     memcpy(mapped, &object_data, sizeof(object_data));
                     per_object_buffer_->unmap();
                 }
-                cmd->bind_constant_buffer(per_object_buffer_, 1, SHADER_FREQUENCY_VERTEX);
+                descriptor_set_->write_buffer(1, per_object_buffer_);
             }
             
             // Bind vertex buffers
@@ -404,6 +410,7 @@ void ForwardPass::build(RDGBuilder& builder, RDGTextureHandle color_target,
             // Draw
             if (batch.index_buffer) {
                 cmd->bind_index_buffer(batch.index_buffer, 0);
+                cmd->bind_descriptor_set(descriptor_set_, 0);
                 cmd->draw_indexed(batch.index_count, 1, batch.index_offset, 0, 0);
             }
         }
@@ -428,8 +435,7 @@ void ForwardPass::draw_batch(RHICommandContextRef command, const DrawBatch& batc
             }
             per_frame_dirty_ = false;
         }
-        command->bind_constant_buffer(per_frame_buffer_, 0, 
-            static_cast<ShaderFrequency>(SHADER_FREQUENCY_VERTEX | SHADER_FREQUENCY_FRAGMENT));
+        descriptor_set_->write_buffer(0, per_frame_buffer_);
     }
     
     if (per_object_buffer_) {
@@ -443,7 +449,7 @@ void ForwardPass::draw_batch(RHICommandContextRef command, const DrawBatch& batc
             per_object_buffer_->unmap();
         }
         
-        command->bind_constant_buffer(per_object_buffer_, 1, SHADER_FREQUENCY_VERTEX);
+        descriptor_set_->write_buffer(1, per_object_buffer_);
     }
     
     if (batch.vertex_buffer) {
@@ -455,6 +461,7 @@ void ForwardPass::draw_batch(RHICommandContextRef command, const DrawBatch& batc
     
     if (batch.index_buffer) {
         command->bind_index_buffer(batch.index_buffer, 0);
+        command->bind_descriptor_set(descriptor_set_, 0);
         command->draw_indexed(batch.index_count, 1, batch.index_offset, 0, 0);
     }
 }

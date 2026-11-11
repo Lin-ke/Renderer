@@ -60,8 +60,11 @@ void RDGTexturePool::release(const RDGTexturePool::PooledTexture& pooled_texture
 
 RDGTextureViewPool::PooledTextureView RDGTextureViewPool::allocate(const RHITextureViewInfo& info) {
     RHITextureViewInfo actual_info = info;
-    if (actual_info.subresource.aspect == TEXTURE_ASPECT_NONE)
-        actual_info.subresource = actual_info.texture->get_default_subresource_range();
+    auto& range = actual_info.subresource;
+    const auto& defaults = actual_info.texture->get_default_subresource_range();
+    if (range.aspect == TEXTURE_ASPECT_NONE) range.aspect = defaults.aspect;
+    if (!range.level_count) range.level_count = defaults.level_count - range.base_mip_level;
+    if (!range.layer_count) range.layer_count = defaults.layer_count - range.base_array_layer;
 
     RDGTextureViewPool::PooledTextureView ret;
 
@@ -90,6 +93,7 @@ RDGDescriptorSetPool::PooledDescriptor RDGDescriptorSetPool::allocate(const RHIR
     auto& descriptors = pooled_descriptors_[{root_signature->get_info(), set}];
     for (auto iter = descriptors.begin(); iter != descriptors.end(); iter++) {
         ret = *iter;
+        ret.descriptor->clear();
         descriptors.erase(iter);
         pooled_size_--;
         return ret;

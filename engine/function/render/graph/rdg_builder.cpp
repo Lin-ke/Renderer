@@ -208,7 +208,7 @@ void RDGBuilder::prepare_descriptor_set(RDGPassNodeRef pass) {
         // For compute passes, read_write textures are output edges but still need descriptors
         // For render passes, pure output edges (color/depth) don't need descriptor set binding
         bool needs_descriptor = edge->as_shader_read || edge->as_shader_read_write;
-        if (edge->is_output() && !needs_descriptor) return;
+        if (!needs_descriptor) return;
         
         auto view_pool_alloc = RDGTextureViewPool::get()->allocate({
             .texture = resolve(texture),
@@ -239,6 +239,7 @@ void RDGBuilder::prepare_descriptor_set(RDGPassNodeRef pass) {
     });
 
     pass->for_each_buffer([&](RDGBufferEdgeRef edge, RDGBufferNodeRef buffer) {
+        if (!edge->as_shader_read && !edge->as_shader_read_write) return;
         if (pass->descriptor_sets_[edge->set] == nullptr && pass->root_signature_ != nullptr) {
             auto descriptor = RDGDescriptorSetPool::get(EngineContext::current_frame_index())
                                   ->allocate(pass->root_signature_, edge->set)
@@ -759,7 +760,7 @@ RDGRenderPassBuilder& RDGRenderPassBuilder::descriptor_set(uint32_t set, RHIDesc
 }
 
 RDGRenderPassBuilder& RDGRenderPassBuilder::read(uint32_t set, uint32_t binding, uint32_t index, RDGBufferHandle buffer, uint32_t offset,
-                                                 uint32_t size) {
+                                                 uint32_t size, ResourceType type) {
     RDGBufferEdgeRef edge = graph_->CreateEdge<RDGBufferEdge>();
     edge->state = RESOURCE_STATE_SHADER_RESOURCE;
     edge->offset = offset;
@@ -768,7 +769,7 @@ RDGRenderPassBuilder& RDGRenderPassBuilder::read(uint32_t set, uint32_t binding,
     edge->set = set;
     edge->binding = binding;
     edge->index = index;
-    edge->type = RESOURCE_TYPE_UNIFORM_BUFFER;
+    edge->type = type;
 
     graph_->Link(graph_->GetNode(buffer.id()), pass_, edge);
 
@@ -941,7 +942,7 @@ RDGComputePassBuilder& RDGComputePassBuilder::descriptor_set(uint32_t set, RHIDe
 }
 
 RDGComputePassBuilder& RDGComputePassBuilder::read(uint32_t set, uint32_t binding, uint32_t index, RDGBufferHandle buffer, uint32_t offset,
-                                                   uint32_t size) {
+                                                  uint32_t size, ResourceType type) {
     RDGBufferEdgeRef edge = graph_->CreateEdge<RDGBufferEdge>();
     edge->state = RESOURCE_STATE_SHADER_RESOURCE;
     edge->offset = offset;
@@ -950,7 +951,7 @@ RDGComputePassBuilder& RDGComputePassBuilder::read(uint32_t set, uint32_t bindin
     edge->set = set;
     edge->binding = binding;
     edge->index = index;
-    edge->type = RESOURCE_TYPE_UNIFORM_BUFFER;
+    edge->type = type;
 
     graph_->Link(graph_->GetNode(buffer.id()), pass_, edge);
 
@@ -1094,7 +1095,7 @@ RDGRayTracingPassBuilder& RDGRayTracingPassBuilder::descriptor_set(uint32_t set,
 }
 
 RDGRayTracingPassBuilder& RDGRayTracingPassBuilder::read(uint32_t set, uint32_t binding, uint32_t index, RDGBufferHandle buffer,
-                                                         uint32_t offset, uint32_t size) {
+                                                         uint32_t offset, uint32_t size, ResourceType type) {
     RDGBufferEdgeRef edge = graph_->CreateEdge<RDGBufferEdge>();
     edge->state = RESOURCE_STATE_SHADER_RESOURCE;
     edge->offset = offset;
@@ -1103,7 +1104,7 @@ RDGRayTracingPassBuilder& RDGRayTracingPassBuilder::read(uint32_t set, uint32_t 
     edge->set = set;
     edge->binding = binding;
     edge->index = index;
-    edge->type = RESOURCE_TYPE_UNIFORM_BUFFER;
+    edge->type = type;
 
     graph_->Link(graph_->GetNode(buffer.id()), pass_, edge);
 

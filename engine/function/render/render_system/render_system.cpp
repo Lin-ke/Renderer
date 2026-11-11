@@ -116,7 +116,7 @@ void RenderSystem::init(void *window_handle) {
 
 void RenderSystem::init_base_resource() {
 	RHIBackendInfo info = {};
-	info.type = BACKEND_DX11;
+	info.type = BACKEND_DX12;
 	info.enable_debug = true;
 	backend_ = RHIBackend::init(info);
 
@@ -348,12 +348,12 @@ void RenderSystem::build_and_execute_rdg(uint32_t frame_index, const RenderPacke
 		return;
 	}
 
-	if (batches.empty()) {
-		// No geometry to render, just clear the screen
-		INFO(LogRenderSystem, "ClearPass executed (no geometry to render)");
+	{
+		// Initialize every frame, including forward-only scenes whose passes load
+		// the color attachment. Otherwise swapchain images retain older scenes.
 		rdg_builder.create_render_pass("ClearPass")
 				.color(0, color_target, ATTACHMENT_LOAD_OP_CLEAR, ATTACHMENT_STORE_OP_STORE,
-						Color4{ 1.0f, 0.0f, 0.0f, 1.0f })
+						Color4{ 0.0f, 0.0f, 0.0f, 1.0f })
 				.execute([extent](RDGPassContext context) {
 					context.command->set_viewport({ 0, 0 }, { extent.width, extent.height });
 					context.command->set_scissor({ 0, 0 }, { extent.width, extent.height });
@@ -764,6 +764,7 @@ bool RenderSystem::tick(const RenderPacket &packet) {
 	command->end_command();
 
 	command->execute(resource.fence, resource.start_semaphore, resource.finish_semaphore);
+	last_rendered_texture_ = swapchain_texture;
 
 	swapchain_->present(resource.finish_semaphore);
 
@@ -772,6 +773,23 @@ bool RenderSystem::tick(const RenderPacket &packet) {
 	}
 
 	return true;
+}
+
+bool RenderSystem::capture_frame(std::vector<uint8_t>& rgba, Extent2D& extent) {
+    rgba.clear();
+    if (!backend_ || !last_rendered_texture_) return false;
+    const auto& info = last_rendered_texture_->get_info();
+    if (info.format != FORMAT_R8G8B8A8_UNORM && info.format != FORMAT_R8G8B8A8_SRGB) return false;
+    extent = {info.extent.width, info.extent.height};
+    uint64_t size = uint64_t(extent.width) * extent.height * 4;
+    if (size > UINT32_MAX) return false;
+    rgba.resize(size_t(size));
+    auto context = backend_->create_command_context(nullptr);
+    if (!context || !context->read_texture(last_rendered_texture_, rgba.data(), uint32_t(size))) {
+        rgba.clear();
+        return false;
+    }
+    return true;
 }
 
 bool RenderSystem::add_custom_ui_callback(const std::string& name, std::function<void()> func) {
@@ -791,6 +809,8 @@ void RenderSystem::clear_custom_ui_callbacks() {
 }
 
 void RenderSystem::cleanup_for_test() {
+    clear_custom_rdg_build_func();
+    last_rendered_texture_.reset();
 	// WARN(LogRenderSystem, "cleanup_for_test() called, backend_={}", (void*)backend_.get());
 	
 	// Clear custom UI callbacks

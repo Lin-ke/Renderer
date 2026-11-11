@@ -103,6 +103,7 @@ private:
     RHIGraphicsPipelineRef solid_pipeline_;  // Solid fill pipeline
     RHIGraphicsPipelineRef wireframe_pipeline_; // Wireframe pipeline
     RHIRootSignatureRef root_signature_;
+    RHIDescriptorSetRef descriptor_set_;
     
     bool wireframe_mode_ = false;
 

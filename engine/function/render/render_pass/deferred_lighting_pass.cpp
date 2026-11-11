@@ -217,7 +217,10 @@ void DeferredLightingPass::create_pipeline() {
     
     // Create root signature
     RHIRootSignatureInfo root_info = {};
+    root_info.add_entry_from_reflect(vertex_shader_->shader_);
+    root_info.add_entry_from_reflect(fragment_shader_->shader_);
     root_signature_ = backend->create_root_signature(root_info);
+    if (root_signature_) descriptor_set_ = root_signature_->create_descriptor_set(0);
     if (!root_signature_) return;
     
     // Pipeline configuration
@@ -354,16 +357,16 @@ void DeferredLightingPass::build(RDGBuilder& builder, RDGTextureHandle color_tar
     
     // Declare read dependencies on GBuffer textures via RDG
     auto rp_builder = builder.create_render_pass("DeferredLighting_Pass")
+        .root_signature(root_signature_)
+        .descriptor_set(0, descriptor_set_)
         .color(0, color_target, ATTACHMENT_LOAD_OP_LOAD, ATTACHMENT_STORE_OP_STORE)
         .read(0, 0, 0, gbuffer.albedo_ao)
         .read(0, 1, 0, gbuffer.normal_roughness)
         .read(0, 2, 0, gbuffer.material_emission)
         .read(0, 3, 0, gbuffer.position_depth);
     
-    // Capture handles for resolving in execute lambda
-    auto gb = gbuffer;
-    
-    rp_builder.execute([this, extent, gb](RDGPassContext context) {
+
+    rp_builder.execute([this, extent](RDGPassContext context) {
         RHICommandListRef cmd = context.command;
         if (!cmd) return;
         
@@ -371,21 +374,9 @@ void DeferredLightingPass::build(RDGBuilder& builder, RDGTextureHandle color_tar
         cmd->set_scissor({0, 0}, {extent.width, extent.height});
         cmd->set_graphics_pipeline(pipeline_);
         
-        // Resolve GBuffer textures from RDG handles (already allocated by prepare_descriptor_set)
-        RHITextureRef albedo_tex = context.builder->resolve(gb.albedo_ao);
-        RHITextureRef normal_tex = context.builder->resolve(gb.normal_roughness);
-        RHITextureRef material_tex = context.builder->resolve(gb.material_emission);
-        RHITextureRef position_tex = context.builder->resolve(gb.position_depth);
-        
-        // Bind GBuffer textures (manual binding for DX11 backend)
-        if (albedo_tex)  cmd->bind_texture(albedo_tex, 0, SHADER_FREQUENCY_FRAGMENT);
-        if (normal_tex)  cmd->bind_texture(normal_tex, 1, SHADER_FREQUENCY_FRAGMENT);
-        if (material_tex) cmd->bind_texture(material_tex, 2, SHADER_FREQUENCY_FRAGMENT);
-        if (position_tex) cmd->bind_texture(position_tex, 3, SHADER_FREQUENCY_FRAGMENT);
-        
         // Bind sampler for GBuffer textures
         if (gbuffer_sampler_) {
-            cmd->bind_sampler(gbuffer_sampler_, 0, SHADER_FREQUENCY_FRAGMENT);
+            descriptor_set_->write_sampler(0, gbuffer_sampler_);
         }
         
         if (per_frame_buffer_) {
@@ -397,8 +388,7 @@ void DeferredLightingPass::build(RDGBuilder& builder, RDGTextureHandle color_tar
                 }
                 per_frame_dirty_ = false;
             }
-            cmd->bind_constant_buffer(per_frame_buffer_, 0, 
-                static_cast<ShaderFrequency>(SHADER_FREQUENCY_VERTEX | SHADER_FREQUENCY_FRAGMENT));
+            descriptor_set_->write_buffer(0, per_frame_buffer_);
         }
         
         // Upload and bind light buffer (cbuffer b1)
@@ -415,9 +405,10 @@ void DeferredLightingPass::build(RDGBuilder& builder, RDGTextureHandle color_tar
             lights_dirty_ = false;
         }
         if (light_buffer_) {
-            cmd->bind_constant_buffer(light_buffer_, 1, SHADER_FREQUENCY_FRAGMENT);
+            descriptor_set_->write_buffer(1, light_buffer_);
         }
         
+        cmd->bind_descriptor_set(descriptor_set_, 0);
         cmd->draw(3, 1, 0, 0);  // 3 vertices for full-screen triangle using SV_VertexID
     })
     .finish();

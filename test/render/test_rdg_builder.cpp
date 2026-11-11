@@ -1,6 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include "engine/function/render/graph/rdg_builder.h"
 #include <fstream>
+#include <filesystem>
+#include "engine/core/utils/path_utils.h"
 
 TEST_CASE("RDG Graphviz Export", "[rdg]") {
     RDGBuilder builder;
@@ -43,7 +45,9 @@ TEST_CASE("RDG Graphviz Export", "[rdg]") {
             // No-op
         });
 
-    std::string export_path = "test_rdg.dot";
+    auto output_dir = utils::get_engine_path() / "build/test-results";
+    std::filesystem::create_directories(output_dir);
+    std::string export_path = (output_dir / "rdg.dot").string();
     builder.export_graphviz(export_path);
 
     // Verify file exists

@@ -10,6 +10,7 @@
 #include "engine/function/framework/component/camera_component.h"
 #include "engine/function/framework/component/directional_light_component.h"
 #include "engine/function/render/render_resource/model.h"
+#include "engine/function/render/render_resource/model_importer.h"
 #include "engine/function/render/render_resource/material.h"
 #include "engine/function/render/render_resource/texture.h"
 #include "engine/function/render/render_system/render_system.h"
@@ -74,13 +75,26 @@ static bool create_npr_scene(const std::string& scene_path) {
     npr_setting.flip_uv = false;
     npr_setting.material_type = ModelMaterialType::NPR;
     
-    auto npr_model = Model::Load(KLEE_MODEL_PATH, npr_setting);
+    // Reimport the fixture so old cached assets cannot hide missing mesh data
+    // or a different material import setting.
+    auto physical_path = EngineContext::asset()->get_physical_path(KLEE_MODEL_PATH);
+    if (!physical_path) return false;
+    ModelImporter importer;
+    auto npr_model = importer.import_model(physical_path->string(), "/Game/render_fixtures/klee", npr_setting);
     if (!npr_model || npr_model->get_submesh_count() == 0) {
         ERR(LogNPRTest, "Failed to load Klee model");
         return false;
     }
     
     INFO(LogNPRTest, "NPR model loaded: {} submeshes", npr_model->get_submesh_count());
+    // This FBX contains author-machine texture paths. Resolve the checked-in
+    // fixture textures explicitly so screenshot validation exercises sampling.
+    const char* texture_names[] = {"face.jpg", "hair.jpg", "dressing.jpg", "emoji.png"};
+    for (uint32_t i = 0; i < npr_model->get_submesh_count() && i < 4; ++i) {
+        auto material = std::dynamic_pointer_cast<NPRMaterial>(npr_model->get_material(i));
+        if (!material) continue;
+        material->set_diffuse_texture(std::make_shared<Texture>(std::string("/Engine/models/Klee/Texture/") + texture_names[i]));
+    }
     
     // Add MeshRendererComponent
     auto* model_mesh = model_ent->add_component<MeshRendererComponent>();
@@ -98,7 +112,7 @@ static bool create_npr_scene(const std::string& scene_path) {
     // Default front is +Z. Place camera at -Z (behind model), it naturally looks toward +Z (model).
     // Add slight negative pitch to tilt view downward toward model center.
     cam_trans->transform.set_position(center + Vec3(0.0f, size * 0.5f, -dist));
-    cam_trans->transform.set_rotation({-15.0f, 0.0f, 0.0f});  // pitch down slightly to frame model
+    cam_trans->transform.set_rotation({15.0f, 0.0f, 0.0f});
     
     INFO(LogNPRTest, "Model bounds: min=({},{},{}), max=({},{},{}), size={}",
          box.min.x, box.min.y, box.min.z, 
@@ -143,7 +157,7 @@ TEST_CASE("NPR Klee rendering", "[npr]") {
     config.scene_path = NPR_SCENE_PATH;
     config.width = 1280;
     config.height = 720;
-    config.max_frames = 6000;
+    config.max_frames = 60;
     config.capture_frame = 45;  // Capture at frame 45 for NPR
     config.create_scene_func = create_npr_scene;
     
@@ -152,15 +166,16 @@ TEST_CASE("NPR Klee rendering", "[npr]") {
     std::vector<uint8_t> screenshot;
     int frames = 0;
     bool captured = test_utils::RenderTestApp::run(config, screenshot, &frames);
+    REQUIRE(captured);
     
-    CHECK(frames > 0);
+    REQUIRE(frames > 0);
     
     if (captured) {
         std::string screenshot_path = test_asset_dir + "/klee_npr.png";
         if (test_utils::save_screenshot_png(screenshot_path, config.width, config.height, screenshot)) {
             float brightness = test_utils::calculate_average_brightness(screenshot);
             INFO(LogNPRTest, "Screenshot saved: {} (brightness: {:.1f})", screenshot_path, brightness);
-            CHECK(brightness > 0.0f);
+            REQUIRE(brightness > 0.0f);
         }
     }
     

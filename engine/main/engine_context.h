@@ -28,6 +28,7 @@ public:
         Asset = 0,
         Render = 1,
         Window = 2,
+        HiddenWindow = 3,
         SingleThread = 4
     };
 

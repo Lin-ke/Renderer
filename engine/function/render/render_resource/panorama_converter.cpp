@@ -162,12 +162,9 @@ bool PanoramaConverter::create_pipeline() {
     
     // Create root signature with push constants
     RHIRootSignatureInfo root_info = {};
-    PushConstantInfo pc_info = {};
-    pc_info.size = sizeof(PushConstants);
-    pc_info.frequency = SHADER_FREQUENCY_COMPUTE;
-    root_info.add_push_constant(pc_info);
-    
+    root_info.add_entry_from_reflect(compute_shader_);
     root_signature_ = backend->create_root_signature(root_info);
+    if (root_signature_) descriptor_set_ = root_signature_->create_descriptor_set(0);
     if (!root_signature_) {
         ERR(LogPanoramaConverter, "Failed to create root signature");
         return false;
@@ -256,9 +253,9 @@ TextureRef PanoramaConverter::convert(TextureRef panorama, uint32_t resolution) 
         
         // Set pipeline and bind resources
         ctx->set_compute_pipeline(pipeline_);
-        ctx->bind_sampler(panorama_sampler_, 0, SHADER_FREQUENCY_COMPUTE);
-        ctx->bind_texture(panorama->texture_, 0, SHADER_FREQUENCY_COMPUTE);
-        ctx->bind_rw_texture(cubemap_texture, 0, 0, SHADER_FREQUENCY_COMPUTE);
+        descriptor_set_->write_sampler(0, panorama_sampler_);
+        descriptor_set_->write_texture(0, panorama->texture_);
+        descriptor_set_->write_texture(0, cubemap_texture, RESOURCE_TYPE_RW_TEXTURE, 0);
         
         // Push constants (Using Constant Buffer to support DX11)
         PushConstants pc = { face, resolution, {0, 0} };
@@ -268,14 +265,13 @@ TextureRef PanoramaConverter::convert(TextureRef panorama, uint32_t resolution) 
                 memcpy(mapped, &pc, sizeof(pc));
                 params_buffers_[face]->unmap();
             }
-            ctx->bind_constant_buffer(params_buffers_[face], 0, SHADER_FREQUENCY_COMPUTE);
-        } else {
-            ctx->push_constants(&pc, sizeof(pc), SHADER_FREQUENCY_COMPUTE); // Fallback
+            descriptor_set_->write_buffer(0, params_buffers_[face]);
         }
         
         // Dispatch compute shader
         uint32_t groups_x = (resolution + 7) / 8;
         uint32_t groups_y = (resolution + 7) / 8;
+        ctx->bind_descriptor_set(descriptor_set_, 0);
         ctx->dispatch(groups_x, groups_y, 1);
         
         INFO(LogPanoramaConverter, "Dispatched face {} ({}x{} thread groups)", face, groups_x, groups_y);

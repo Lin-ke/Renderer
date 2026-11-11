@@ -275,7 +275,10 @@ void NPRForwardPass::create_pipeline() {
     
     // Create root signature
     RHIRootSignatureInfo root_info = {};
+    root_info.add_entry_from_reflect(vertex_shader_->shader_);
+    root_info.add_entry_from_reflect(fragment_shader_->shader_);
     root_signature_ = backend->create_root_signature(root_info);
+    if (root_signature_) descriptor_set_ = root_signature_->create_descriptor_set(0);
     if (!root_signature_) return;
     
     // Common pipeline configuration
@@ -314,7 +317,7 @@ void NPRForwardPass::create_pipeline() {
     
     // Enable depth testing
     pipe_info.depth_stencil_state.enable_depth_test = true;
-    pipe_info.depth_stencil_state.enable_depth_write = true;
+    pipe_info.depth_stencil_state.enable_depth_write = false;
     pipe_info.depth_stencil_state.depth_test = COMPARE_FUNCTION_LESS_EQUAL;
     
     // Render targets
@@ -391,19 +394,18 @@ void NPRForwardPass::draw_batch(RHICommandContextRef cmd, const DrawBatch& batch
             }
             per_frame_dirty_ = false;
         }
-        cmd->bind_constant_buffer(per_frame_buffer_, 0, 
-            static_cast<ShaderFrequency>(SHADER_FREQUENCY_VERTEX | SHADER_FREQUENCY_FRAGMENT));
+        descriptor_set_->write_buffer(0, per_frame_buffer_);
     }
 
     // Bind common resources
     cmd->set_graphics_pipeline(pipeline_);
-    cmd->bind_constant_buffer(material_buffer_, 2, SHADER_FREQUENCY_FRAGMENT);
-    cmd->bind_sampler(default_sampler_, 0, SHADER_FREQUENCY_FRAGMENT);
-    cmd->bind_sampler(clamp_sampler_, 1, SHADER_FREQUENCY_FRAGMENT);
+    descriptor_set_->write_buffer(2, material_buffer_);
+    descriptor_set_->write_sampler(0, default_sampler_);
+    descriptor_set_->write_sampler(1, clamp_sampler_);
     
     // Bind depth texture for screen space rim light (slot 4)
     if (depth_texture_) {
-        cmd->bind_texture(depth_texture_, 4, SHADER_FREQUENCY_FRAGMENT);
+        descriptor_set_->write_texture(4, depth_texture_);
     }
 
     // Update per-object buffer
@@ -416,7 +418,7 @@ void NPRForwardPass::draw_batch(RHICommandContextRef cmd, const DrawBatch& batch
             memcpy(mapped, &object_data, sizeof(object_data));
             per_object_buffer_->unmap();
         }
-        cmd->bind_constant_buffer(per_object_buffer_, 1, SHADER_FREQUENCY_VERTEX);
+        descriptor_set_->write_buffer(1, per_object_buffer_);
     }
 
     // Update material buffer
@@ -463,63 +465,63 @@ void NPRForwardPass::draw_batch(RHICommandContextRef cmd, const DrawBatch& batch
     // Bind depth texture fallback if not set
     if (!depth_texture_ && fallback_black) {
         WARN(LogNPRForwardPass, "Depth texture not set for NPR pass, using fallback black");
-        cmd->bind_texture(fallback_black, 4, SHADER_FREQUENCY_FRAGMENT);
+        descriptor_set_->write_texture(4, fallback_black);
     }
     
     if (npr_mat) {
         auto albedo_tex = npr_mat->get_diffuse_texture();
         if (albedo_tex && albedo_tex->texture_) {
-            cmd->bind_texture(albedo_tex->texture_, 0, SHADER_FREQUENCY_FRAGMENT);
+            descriptor_set_->write_texture(0, albedo_tex->texture_);
         } else {
             WARN(LogNPRForwardPass, "NPR Material '{}' is missing diffuse/albedo texture, using fallback white", 
                  npr_mat->get_name());
             if (fallback_white) {
-                cmd->bind_texture(fallback_white, 0, SHADER_FREQUENCY_FRAGMENT);
+                descriptor_set_->write_texture(0, fallback_white);
             }
         }
         
         auto normal_tex = npr_mat->get_normal_texture();
         if (normal_tex && normal_tex->texture_) {
-            cmd->bind_texture(normal_tex->texture_, 1, SHADER_FREQUENCY_FRAGMENT);
+            descriptor_set_->write_texture(1, normal_tex->texture_);
         } else {
             // WARN(LogNPRForwardPass, "NPR Material '{}' is missing normal texture, using fallback", 
                 //  npr_mat->get_name());
             if (fallback_normal) {
-                cmd->bind_texture(fallback_normal, 1, SHADER_FREQUENCY_FRAGMENT);
+                descriptor_set_->write_texture(1, fallback_normal);
             }
         }
         
         auto light_map_tex = npr_mat->get_light_map_texture();
         if (light_map_tex && light_map_tex->texture_) {
-            cmd->bind_texture(light_map_tex->texture_, 2, SHADER_FREQUENCY_FRAGMENT);
+            descriptor_set_->write_texture(2, light_map_tex->texture_);
         } else {
             // WARN(LogNPRForwardPass, "NPR Material '{}' is missing light map texture, using fallback white", 
                 //  npr_mat->get_name());
             if (fallback_white) {
-                cmd->bind_texture(fallback_white, 2, SHADER_FREQUENCY_FRAGMENT);
+                descriptor_set_->write_texture(2, fallback_white);
             }
         }
         
         auto ramp_tex = npr_mat->get_ramp_texture();
         if (ramp_tex && ramp_tex->texture_) {
-            cmd->bind_texture(ramp_tex->texture_, 3, SHADER_FREQUENCY_FRAGMENT);
+            descriptor_set_->write_texture(3, ramp_tex->texture_);
         } else {
             // WARN(LogNPRForwardPass, "NPR Material '{}' is missing ramp texture, using fallback white", 
                 //  npr_mat->get_name());
             if (fallback_white) {
-                cmd->bind_texture(fallback_white, 3, SHADER_FREQUENCY_FRAGMENT);
+                descriptor_set_->write_texture(3, fallback_white);
             }
         }
     } else {
         // No material, bind all fallbacks
         WARN(LogNPRForwardPass, "Draw batch has no NPR material, using all fallback textures");
         if (fallback_white) {
-            cmd->bind_texture(fallback_white, 0, SHADER_FREQUENCY_FRAGMENT);
-            cmd->bind_texture(fallback_white, 2, SHADER_FREQUENCY_FRAGMENT);
-            cmd->bind_texture(fallback_white, 3, SHADER_FREQUENCY_FRAGMENT);
+            descriptor_set_->write_texture(0, fallback_white);
+            descriptor_set_->write_texture(2, fallback_white);
+            descriptor_set_->write_texture(3, fallback_white);
         }
         if (fallback_normal) {
-            cmd->bind_texture(fallback_normal, 1, SHADER_FREQUENCY_FRAGMENT);
+            descriptor_set_->write_texture(1, fallback_normal);
         }
     }
 
@@ -546,6 +548,7 @@ void NPRForwardPass::draw_batch(RHICommandContextRef cmd, const DrawBatch& batch
     // Draw
     if (batch.index_buffer) {
         cmd->bind_index_buffer(batch.index_buffer, 0);
+        cmd->bind_descriptor_set(descriptor_set_, 0);
         cmd->draw_indexed(batch.index_count, 1, batch.index_offset, 0, 0);
     }
 }
@@ -573,23 +576,22 @@ void NPRForwardPass::execute_batches(RHICommandListRef cmd, const std::vector<Dr
             }
             per_frame_dirty_ = false;
         }
-        cmd->bind_constant_buffer(per_frame_buffer_, 0, 
-            static_cast<ShaderFrequency>(SHADER_FREQUENCY_VERTEX | SHADER_FREQUENCY_FRAGMENT));
+        descriptor_set_->write_buffer(0, per_frame_buffer_);
     }
 
-    cmd->bind_constant_buffer(material_buffer_, 2, SHADER_FREQUENCY_FRAGMENT);
-    cmd->bind_sampler(default_sampler_, 0, SHADER_FREQUENCY_FRAGMENT);
-    cmd->bind_sampler(clamp_sampler_, 1, SHADER_FREQUENCY_FRAGMENT);
+    descriptor_set_->write_buffer(2, material_buffer_);
+    descriptor_set_->write_sampler(0, default_sampler_);
+    descriptor_set_->write_sampler(1, clamp_sampler_);
     
     // Bind depth texture for screen space rim light (slot 4)
     if (depth_texture_) {
-        cmd->bind_texture(depth_texture_, 4, SHADER_FREQUENCY_FRAGMENT);
+        descriptor_set_->write_texture(4, depth_texture_);
     } else {
         auto* render_system = EngineContext::render_system();
         RHITextureRef fallback_black = render_system ? render_system->get_fallback_black_texture() : nullptr;
         WARN(LogNPRForwardPass, "Depth texture not available for NPR pass, using fallback black");
         if (fallback_black) {
-            cmd->bind_texture(fallback_black, 4, SHADER_FREQUENCY_FRAGMENT);
+            descriptor_set_->write_texture(4, fallback_black);
         }
     }
 
@@ -605,7 +607,7 @@ void NPRForwardPass::execute_batches(RHICommandListRef cmd, const std::vector<Dr
                 memcpy(mapped, &object_data, sizeof(object_data));
                 per_object_buffer_->unmap();
             }
-            cmd->bind_constant_buffer(per_object_buffer_, 1, SHADER_FREQUENCY_VERTEX);
+            descriptor_set_->write_buffer(1, per_object_buffer_);
         }
 
         // Update material buffer
@@ -650,57 +652,57 @@ void NPRForwardPass::execute_batches(RHICommandListRef cmd, const std::vector<Dr
         if (npr_mat) {
             auto albedo_tex = npr_mat->get_diffuse_texture();
             if (albedo_tex && albedo_tex->texture_) {
-                cmd->bind_texture(albedo_tex->texture_, 0, SHADER_FREQUENCY_FRAGMENT);
+                descriptor_set_->write_texture(0, albedo_tex->texture_);
             } else {
                 WARN(LogNPRForwardPass, "NPR Material '{}' is missing diffuse/albedo texture, using fallback white", 
                      npr_mat->get_name());
                 if (fallback_white) {
-                    cmd->bind_texture(fallback_white, 0, SHADER_FREQUENCY_FRAGMENT);
+                    descriptor_set_->write_texture(0, fallback_white);
                 }
             }
             
             auto normal_tex = npr_mat->get_normal_texture();
             if (normal_tex && normal_tex->texture_) {
-                cmd->bind_texture(normal_tex->texture_, 1, SHADER_FREQUENCY_FRAGMENT);
+                descriptor_set_->write_texture(1, normal_tex->texture_);
             } else {
                 // WARN(LogNPRForwardPass, "NPR Material '{}' is missing normal texture, using fallback", 
                     //  npr_mat->get_name());
                 if (fallback_normal) {
-                    cmd->bind_texture(fallback_normal, 1, SHADER_FREQUENCY_FRAGMENT);
+                    descriptor_set_->write_texture(1, fallback_normal);
                 }
             }
             
             auto light_map_tex = npr_mat->get_light_map_texture();
             if (light_map_tex && light_map_tex->texture_) {
-                cmd->bind_texture(light_map_tex->texture_, 2, SHADER_FREQUENCY_FRAGMENT);
+                descriptor_set_->write_texture(2, light_map_tex->texture_);
             } else {
                 // WARN(LogNPRForwardPass, "NPR Material '{}' is missing light map texture, using fallback white", 
                     //  npr_mat->get_name());
                 if (fallback_white) {
-                    cmd->bind_texture(fallback_white, 2, SHADER_FREQUENCY_FRAGMENT);
+                    descriptor_set_->write_texture(2, fallback_white);
                 }
             }
             
             auto ramp_tex = npr_mat->get_ramp_texture();
             if (ramp_tex && ramp_tex->texture_) {
-                cmd->bind_texture(ramp_tex->texture_, 3, SHADER_FREQUENCY_FRAGMENT);
+                descriptor_set_->write_texture(3, ramp_tex->texture_);
             } else {
                 // WARN(LogNPRForwardPass, "NPR Material '{}' is missing ramp texture, using fallback white", 
                     //  npr_mat->get_name());
                 if (fallback_white) {
-                    cmd->bind_texture(fallback_white, 3, SHADER_FREQUENCY_FRAGMENT);
+                    descriptor_set_->write_texture(3, fallback_white);
                 }
             }
         } else {
             // No material, bind all fallbacks
             WARN(LogNPRForwardPass, "Draw batch has no NPR material, using all fallback textures");
             if (fallback_white) {
-                cmd->bind_texture(fallback_white, 0, SHADER_FREQUENCY_FRAGMENT);
-                cmd->bind_texture(fallback_white, 2, SHADER_FREQUENCY_FRAGMENT);
-                cmd->bind_texture(fallback_white, 3, SHADER_FREQUENCY_FRAGMENT);
+                descriptor_set_->write_texture(0, fallback_white);
+                descriptor_set_->write_texture(2, fallback_white);
+                descriptor_set_->write_texture(3, fallback_white);
             }
             if (fallback_normal) {
-                cmd->bind_texture(fallback_normal, 1, SHADER_FREQUENCY_FRAGMENT);
+                descriptor_set_->write_texture(1, fallback_normal);
             }
         }
 
@@ -727,6 +729,7 @@ void NPRForwardPass::execute_batches(RHICommandListRef cmd, const std::vector<Dr
         // Draw
         if (batch.index_buffer) {
             cmd->bind_index_buffer(batch.index_buffer, 0);
+            cmd->bind_descriptor_set(descriptor_set_, 0);
             cmd->draw_indexed(batch.index_count, 1, batch.index_offset, 0, 0);
         }
     }
@@ -749,13 +752,15 @@ void NPRForwardPass::build(RDGBuilder& builder, RDGTextureHandle color_target,
     
     // Create render pass
     auto rp_builder = builder.create_render_pass("NPRForwardPass")
+        .root_signature(root_signature_)
+        .descriptor_set(0, descriptor_set_)
         .color(0, color_target, ATTACHMENT_LOAD_OP_LOAD, ATTACHMENT_STORE_OP_STORE, 
                Color4{0.1f, 0.1f, 0.2f, 1.0f});
     
     rp_builder.depth_stencil(depth_target, ATTACHMENT_LOAD_OP_LOAD, 
                              ATTACHMENT_STORE_OP_DONT_CARE, 1.0f, 0, {}, true);
     
-    rp_builder.read(0, 0, 0, depth_target, VIEW_TYPE_2D, 
+    rp_builder.read(0, 4, 0, depth_target, VIEW_TYPE_2D,
                     TextureSubresourceRange{TEXTURE_ASPECT_DEPTH, 0, 1, 0, 1});
     
     RHITextureRef depth_tex = render_system ? render_system->get_prepass_depth_texture() : nullptr;

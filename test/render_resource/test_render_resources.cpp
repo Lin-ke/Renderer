@@ -11,6 +11,7 @@
 #include "engine/function/render/render_resource/material.h"
 #include "engine/function/render/render_resource/shader.h"
 #include "engine/function/render/render_resource/model.h"
+#include "engine/function/render/render_resource/model_importer.h"
 #include "engine/function/asset/asset_manager.h"
 
 /**
@@ -293,7 +294,11 @@ TEST_CASE("FBX Material System", "[render_resource][fbx]") {
         setting.smooth_normal = true;
         setting.load_materials = false;  // Disable material loading
         
-        auto model = Model::Load(model_path, setting);
+        // Import options apply to source import, not an already cached .asset.
+        auto physical_path = EngineContext::asset()->get_physical_path(model_path);
+        REQUIRE(physical_path);
+        ModelImporter importer;
+        auto model = importer.import_model(physical_path->string(), model_path, setting);
         REQUIRE(model != nullptr);
         REQUIRE(model->get_submesh_count() > 0);
         

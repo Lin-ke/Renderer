@@ -9,6 +9,7 @@
 #include "engine/function/framework/component/camera_component.h"
 #include "engine/function/framework/component/directional_light_component.h"
 #include "engine/function/render/render_resource/model.h"
+#include "engine/function/render/render_resource/material.h"
 #include "engine/function/render/render_system/render_system.h"
 #include "engine/function/asset/asset_manager.h"
 #include "engine/core/utils/path_utils.h"
@@ -30,7 +31,7 @@ static bool create_rdg_scene(const std::string& scene_path) {
     // Camera
     auto* cam_ent = scene->create_entity();
     auto* cam_trans = cam_ent->add_component<TransformComponent>();
-    cam_trans->transform.set_position({0.0f, 0.0f, 3.0f});
+    cam_trans->transform.set_position({0.0f, 0.8f, -3.0f});
     
     auto* cam = cam_ent->add_component<CameraComponent>();
     cam->set_fov(60.0f);
@@ -63,6 +64,7 @@ static bool create_rdg_scene(const std::string& scene_path) {
     
     auto* mesh = model_ent->add_component<MeshRendererComponent>();
     mesh->set_model(model);
+    mesh->set_material(std::make_shared<PBRMaterial>());
     
     INFO(LogRDGTest, "Scene created with {} submeshes", model->get_submesh_count());
     
@@ -83,14 +85,14 @@ TEST_CASE("RDG forward rendering", "[rdg]") {
     config.width = 1280;
     config.height = 720;
     config.max_frames = 60;
-    config.capture_frame = 0;  // No screenshot for RDG test
+    config.capture_frame = 30;
     config.create_scene_func = create_rdg_scene;
     
     std::vector<uint8_t> screenshot;
     int frames = 0;
-    test_utils::RenderTestApp::run(config, screenshot, &frames);
+    REQUIRE(test_utils::RenderTestApp::run(config, screenshot, &frames));
     
-    CHECK(frames == 60);
+    REQUIRE(frames == 60);
     
     test_utils::TestContext::reset();
 }

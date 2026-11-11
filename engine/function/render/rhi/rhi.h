@@ -15,6 +15,7 @@ using GPUProfilerRef = std::unique_ptr<GPUProfiler>;
 enum RHIBackendType {
     BACKEND_VULKAN = 0,
     BACKEND_DX11,
+    BACKEND_DX12,
 
     BACKEND_MAX_ENUM,
 };
@@ -32,6 +33,7 @@ private:
     static RHIBackendRef backend_;
 
 public:
+    virtual ~RHIBackend() = default;
     static RHIBackendRef init(const RHIBackendInfo& info);
 
     static RHIBackendRef get() { return backend_; }
@@ -201,13 +203,9 @@ public:
 
     virtual void bind_descriptor_set(RHIDescriptorSetRef descriptor, uint32_t set) = 0;
 
-    virtual void bind_constant_buffer(RHIBufferRef buffer, uint32_t slot, ShaderFrequency frequency) = 0;
     
-    virtual void bind_texture(RHITextureRef texture, uint32_t slot, ShaderFrequency frequency) = 0;
 
-    virtual void bind_rw_texture(RHITextureRef texture, uint32_t slot, uint32_t mip_level, ShaderFrequency frequency) = 0;
     
-    virtual void bind_sampler(RHISamplerRef sampler, uint32_t slot, ShaderFrequency frequency) = 0;
 
     virtual void bind_vertex_buffer(RHIBufferRef vertex_buffer, uint32_t stream_index, uint32_t offset) = 0;
 
@@ -242,7 +240,7 @@ public:
     virtual void imgui_render_draw_data() = 0;
 
 private:
-    RHICommandPoolRef pool_;
+    std::weak_ptr<RHICommandPool> pool_;
 
 protected:
     GPUProfiler* gpu_profiler_ = nullptr;

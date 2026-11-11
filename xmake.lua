@@ -4,7 +4,7 @@ add_rules("plugin.compile_commands.autoupdate", {outputdir = ".vscode"})
 
 add_requires("glog", {configs = {gflags = false}})
 add_requires("stb", "assimp", "cereal", "stduuid", "catch2", "zlib")
-add_requires("imgui", {configs = {win32 = true, dx11 = true}})
+add_requires("imgui", {configs = {win32 = true, dx11 = true, dx12 = true}})
 add_requires("imguizmo", {configs = {cxflags = "-DIMGUI_DEFINE_MATH_OPERATORS"}})
 
 set_encodings("utf-8")
@@ -28,7 +28,7 @@ target("engine")
     remove_files("RD/**.cpp")
 
     add_packages("imgui", "imguizmo", "stb", "assimp", "cereal", "glog", "stduuid", {public = true} )
-    add_syslinks("d3d11", "dxgi", "dxguid", "D3DCompiler", "d2d1", "dwrite", "winmm", "user32", "gdi32", "ole32")
+    add_syslinks("d3d12", "d3d11", "dxgi", "dxguid", "D3DCompiler", "d2d1", "dwrite", "winmm", "user32", "gdi32", "ole32")
 
     -- Compile shaders before building the engine
     -- before_build(function (target)

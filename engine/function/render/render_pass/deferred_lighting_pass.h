@@ -117,6 +117,7 @@ private:
     ShaderRef fragment_shader_;
     RHIGraphicsPipelineRef pipeline_;
     RHIRootSignatureRef root_signature_;
+    RHIDescriptorSetRef descriptor_set_;
     
     // Full-screen quad
     RHIBufferRef quad_vertex_buffer_;

@@ -723,7 +723,9 @@ struct ShaderReflectInfo {
 
 struct PushConstantInfo {
     uint32_t size = 128;
-    ShaderFrequency frequency;
+    ShaderFrequency frequency = SHADER_FREQUENCY_ALL;
+    uint32_t binding = 0;
+    uint32_t set = 0;
 };
 
 struct AttachmentInfo {
@@ -749,6 +751,10 @@ struct RHIRenderPassInfo {
 };
 
 struct RHIRootSignatureInfo {
+    // (set, register namespace, binding) identifies a binding. b0/t0/u0/s0
+    // are independent; set maps to the HLSL register space.
+    const ShaderResourceEntry* find_entry(uint32_t set, uint32_t binding, ResourceType type) const;
+    bool is_valid() const;
     RHIRootSignatureInfo& add_push_constant(const PushConstantInfo& push_constant) {
         push_constants.push_back(push_constant);
         return *this;
@@ -777,6 +783,8 @@ struct RHIDescriptorUpdateInfo {
 
     uint64_t buffer_offset = 0;
     uint64_t buffer_range = 0;
+    // CPU data captured when a constant buffer is recorded for a deferred draw.
+    std::vector<uint8_t> constant_data;
 };
 
 struct RHIRasterizerStateInfo {
@@ -888,7 +896,9 @@ struct RHIGraphicsPipelineInfo {
         return a.vertex_shader.get() == b.vertex_shader.get() && a.geometry_shader.get() == b.geometry_shader.get() &&
                a.fragment_shader.get() == b.fragment_shader.get() && a.root_signature.get() == b.root_signature.get() &&
                a.vertex_input_state == b.vertex_input_state && a.primitive_type == b.primitive_type && a.rasterizer_state == b.rasterizer_state &&
-               a.blend_state == b.blend_state && a.depth_stencil_state == b.depth_stencil_state;
+               a.blend_state == b.blend_state && a.depth_stencil_state == b.depth_stencil_state &&
+               a.color_attachment_formats == b.color_attachment_formats &&
+               a.depth_stencil_attachment_format == b.depth_stencil_attachment_format;
     }
 };
 

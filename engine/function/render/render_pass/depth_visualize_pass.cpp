@@ -82,7 +82,13 @@ void DepthVisualizePass::create_pipeline() {
     if (!backend || !vertex_shader_ || !fragment_shader_) return;
 
     RHIRootSignatureInfo root_info = {};
+    root_info.add_entry_from_reflect(vertex_shader_->shader_);
+    root_info.add_entry_from_reflect(fragment_shader_->shader_);
+    // Keep the parameter slot stable when the current visualization shader
+    // optimizes out near/far plane constants.
+    root_info.add_entry({.binding = 0, .frequency = SHADER_FREQUENCY_FRAGMENT, .type = RESOURCE_TYPE_UNIFORM_BUFFER});
     root_signature_ = backend->create_root_signature(root_info);
+    if (root_signature_) descriptor_set_ = root_signature_->create_descriptor_set(0);
 
     RHIGraphicsPipelineInfo pipe_info = {};
     pipe_info.vertex_shader = vertex_shader_->shader_;
@@ -138,11 +144,12 @@ void DepthVisualizePass::draw(RHICommandContextRef command, RHITextureRef depth_
 
     command->set_graphics_pipeline(pipeline_);
     
-    command->bind_constant_buffer(constant_buffer_, 0, SHADER_FREQUENCY_FRAGMENT);
+    descriptor_set_->write_buffer(0, constant_buffer_);
     
-    command->bind_texture(depth_texture, 0, SHADER_FREQUENCY_FRAGMENT);
-    command->bind_sampler(sampler_, 0, SHADER_FREQUENCY_FRAGMENT);
+    descriptor_set_->write_texture(0, depth_texture);
+    descriptor_set_->write_sampler(0, sampler_);
     
+    command->bind_descriptor_set(descriptor_set_, 0);
     command->draw(3, 1, 0, 0);
     
     command->end_render_pass();

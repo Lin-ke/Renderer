@@ -1,5 +1,6 @@
 #include "platform_rhi.h"
 #include "dx11_gpu_profiler.h"
+#include "engine/platform/dx_shader_reflection.h"
 #include "engine/core/log/Log.h"
 #include "engine/function/render/render_system/render_system.h"
 #include "engine/main/engine_context.h"
@@ -654,6 +655,7 @@ bool DX11Shader::init() {
         return false;
     }
 
+    reflect_info_ = reflect_dx_shader(info_.code, info_.frequency);
     return true;
 }
 
@@ -1584,7 +1586,21 @@ void DX11CommandContext::set_compute_pipeline(RHIComputePipelineRef p) {
 }
 void DX11CommandContext::set_ray_tracing_pipeline(RHIRayTracingPipelineRef p) {}
 void DX11CommandContext::push_constants(void* d, uint16_t s, ShaderFrequency f) {}
-void DX11CommandContext::bind_descriptor_set(RHIDescriptorSetRef d, uint32_t s) {}
+void DX11CommandContext::bind_descriptor_set(RHIDescriptorSetRef d, uint32_t s) {
+    if (!d || d->get_set() != s || s != 0) return;
+    for (const auto& info : d->get_descriptors()) {
+        auto* entry = d->get_root_signature()->get_info().find_entry(s, info.binding, info.resource_type);
+        uint32_t slot = info.binding + info.index;
+        if (!entry) continue;
+        if (info.resource_type == RESOURCE_TYPE_UNIFORM_BUFFER) bind_constant_buffer(info.buffer, slot, entry->frequency);
+        else if (info.resource_type == RESOURCE_TYPE_SAMPLER) bind_sampler(info.sampler, slot, entry->frequency);
+        else if (info.texture_view) {
+            if (info.resource_type == RESOURCE_TYPE_RW_TEXTURE)
+                bind_rw_texture(info.texture_view->get_info().texture, slot, info.texture_view->get_info().subresource.base_mip_level, entry->frequency);
+            else bind_texture(info.texture_view->get_info().texture, slot, entry->frequency);
+        }
+    }
+}
 void DX11CommandContext::bind_constant_buffer(RHIBufferRef b, uint32_t s, ShaderFrequency f) {
     ID3D11Buffer* cb = (ID3D11Buffer*)b->raw_handle();
     if (f & SHADER_FREQUENCY_VERTEX) context_->VSSetConstantBuffers(s, 1, &cb);
@@ -1771,7 +1787,10 @@ bool DX11CommandContext::read_texture(RHITextureRef texture, void* data, uint32_
 }
 
 DX11RenderPass::DX11RenderPass(const RHIRenderPassInfo& info, std::shared_ptr<DX11Backend> backend) : RHIRenderPass(info) {}
-RHIDescriptorSetRef DX11RootSignature::create_descriptor_set(uint32_t set) { return nullptr; }
+RHIDescriptorSetRef DX11RootSignature::create_descriptor_set(uint32_t set) {
+    if (set >= MAX_DESCRIPTOR_SETS) return nullptr;
+    return std::make_shared<RHIDescriptorSet>(std::static_pointer_cast<RHIRootSignature>(shared_from_this()), set);
+}
 
 // DX11CommandContextImmediate implementation
 

@@ -34,6 +34,7 @@ private:
 
     RHIGraphicsPipelineRef pipeline_;
     RHIRootSignatureRef root_signature_;
+    RHIDescriptorSetRef descriptor_set_;
     ShaderRef vertex_shader_;
     ShaderRef fragment_shader_;
     RHIBufferRef constant_buffer_;

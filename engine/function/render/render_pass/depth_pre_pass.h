@@ -37,6 +37,7 @@ private:
     // Pipeline
     RHIGraphicsPipelineRef pipeline_;
     RHIRootSignatureRef root_signature_;
+    RHIDescriptorSetRef descriptor_set_;
 
     // Buffers
     // Double/Triple buffering for per-frame data to avoid CPU-GPU sync issues

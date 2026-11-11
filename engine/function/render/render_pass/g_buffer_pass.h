@@ -156,6 +156,7 @@ private:
     ShaderRef fragment_shader_;
     RHIGraphicsPipelineRef pipeline_;
     RHIRootSignatureRef root_signature_;
+    RHIDescriptorSetRef descriptor_set_;
 
     // Uniform buffers
     RHIBufferRef per_frame_buffer_;   // Slot b0: view, proj, camera

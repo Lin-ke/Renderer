@@ -136,6 +136,7 @@ private:
     RHIGraphicsPipelineRef wireframe_pipeline_;
     RHIGraphicsPipelineRef pipeline_;
     RHIRootSignatureRef root_signature_;
+    RHIDescriptorSetRef descriptor_set_;
     
     // Uniform buffers
     RHIBufferRef per_frame_buffer_;
