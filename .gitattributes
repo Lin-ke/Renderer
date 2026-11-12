@@ -1,0 +1,4 @@
+game/assets/sun_temple/*.binasset filter=lfs diff=lfs merge=lfs -text
+game/assets/sun_temple/source/*.fbx filter=lfs diff=lfs merge=lfs -text
+game/assets/sun_temple/source/*.hdr filter=lfs diff=lfs merge=lfs -text
+game/assets/sun_temple/source/Textures/*.dds filter=lfs diff=lfs merge=lfs -text

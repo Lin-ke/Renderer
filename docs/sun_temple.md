@@ -2,17 +2,19 @@
 
 使用 ORCA SunTemple_v4 的 `SunTemple.fbx`、`Textures/*.dds` 和 `SunTemple_Skybox.hdr`。
 资源包 README 规定 `Specular.dds` 的 RGB 分别为 AO、Roughness、Metallic，法线采用 DirectX 约定。
-原始资源保留在外部目录，转换结果保存到 `game/assets/sun_temple/`，不纳入 Git。
+原始资源随仓库保存在 `game/assets/sun_temple/source/`，转换结果保存在 `game/assets/sun_temple/`。
+FBX、DDS、HDR 和二进制原生资源使用 Git LFS；克隆后先运行 `git lfs pull`。
+资源许可与署名文件保留在 `source/LICENSE.txt` 和 `source/README.txt` 中。
 
 ```powershell
 xmake build sun_temple
-xmake run sun_temple "C:\Users\17205\Downloads\SunTemple_v4\SunTemple" --reimport
+xmake run sun_temple "game/assets/sun_temple/source" --reimport
 
 # 从项目内的原生资源加载
-xmake run sun_temple "C:\Users\17205\Downloads\SunTemple_v4\SunTemple"
+xmake run sun_temple "game/assets/sun_temple/source"
 
 # 隐藏窗口截图，完成后退出
-xmake run sun_temple "C:\Users\17205\Downloads\SunTemple_v4\SunTemple" --capture "build/test-results/sun_temple.png"
+xmake run sun_temple "game/assets/sun_temple/source" --capture "build/test-results/sun_temple.png"
 ```
 
 WASD 移动，右键拖动转向，Space/Ctrl 升降，Ctrl+S 保存场景。
@@ -37,7 +39,7 @@ WASD 移动，右键拖动转向，Space/Ctrl 升降，Ctrl+S 保存场景。
 xmake build utest
 xmake run utest "[dds],[import]"
 
-$env:SUN_TEMPLE_DIR = "C:\Users\17205\Downloads\SunTemple_v4\SunTemple"
+$env:SUN_TEMPLE_DIR = (Resolve-Path "game/assets/sun_temple/source").Path
 xmake run utest "[sun_temple]"
 ```
 

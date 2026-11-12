@@ -11,3 +11,5 @@ vsxmake2026/
 RD/
 *.asset
 *.binasset
+!game/assets/sun_temple/*.asset
+!game/assets/sun_temple/*.binasset
