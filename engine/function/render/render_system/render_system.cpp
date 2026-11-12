@@ -558,7 +558,8 @@ void RenderSystem::capture_rdg_info(RDGBuilder &builder) {
 	// Helper map to track which resources we've added
 	std::unordered_map<uint32_t, size_t> node_index_map;
 
-	const auto &passes = builder.get_passes();
+	if (!builder.compile()) return;
+	const auto &passes = builder.get_execution_passes();
 
 	// First pass: collect all pass nodes
 	for (const auto &pass : passes) {

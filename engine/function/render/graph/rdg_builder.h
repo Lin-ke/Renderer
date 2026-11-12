@@ -59,6 +59,12 @@ class RDGRayTracingPassBuilder;
 class RDGPresentPassBuilder;
 class RDGCopyPassBuilder;
 
+struct RDGCompileInfo {
+    std::vector<std::string> execution_order;
+    std::vector<std::string> culled_passes;
+    std::string error;
+};
+
 /**
  * @brief The main entry point for building and executing the Render Dependency Graph.
  * 
@@ -73,7 +79,6 @@ class RDGCopyPassBuilder;
  * - Automatic transient resource allocation and aliasing (pooling).
  * 
  * **TODOs:**
- * - Pass Culling (stripping unused passes).
  * - Async Compute / Multi-queue support.
  * - Fine-grained subresource barriers.
  * - Multi-threaded command recording.
@@ -91,8 +96,7 @@ public:
     RDGTextureBuilder create_texture(std::string name);
     RDGBufferBuilder create_buffer(std::string name);
     
-    // Note: Passes are currently executed in the order they are created. 
-    // Future versions should support topological sort based on dependencies.
+    // Dependencies determine execution order; independent passes stay stable.
     RDGRenderPassBuilder create_render_pass(std::string name);
     RDGComputePassBuilder create_compute_pass(std::string name);
     RDGRayTracingPassBuilder create_ray_tracing_pass(std::string name);
@@ -113,13 +117,20 @@ public:
 
     /**
      * @brief Compiles and executes the graph.
-     * 1. Traverses the passes in order.
+     * 1. Culls unused passes and topologically sorts live dependencies.
      * 2. Allocates resources (if not imported).
      * 3. Generates barriers.
      * 4. Executes the pass callback (recording commands).
      * 5. Releases transient resources.
      */
-    void execute();
+    bool compile(); // Does not allocate GPU resources or execute callbacks.
+    bool execute(); // Compilation failure records no GPU work.
+    const RDGCompileInfo& get_compile_info() const { return compile_info_; }
+    const std::vector<RDGPassNodeRef>& get_execution_passes() const { return execution_passes_; }
+    bool keep_pass(RDGPassHandle pass, bool keep = true);
+    bool add_dependency(RDGPassHandle pass, RDGPassHandle dependency);
+    bool extract_texture(RDGTextureHandle texture, RHITextureRef& output);
+    bool extract_buffer(RDGBufferHandle buffer, RHIBufferRef& output);
 
     /**
      * @brief Exports the graph structure to a GraphViz (.dot) file for visualization.
@@ -176,6 +187,14 @@ private:
     bool is_last_used_pass(RDGBufferNodeRef buffer_node, RDGPassNodeRef pass_node, bool output = false);
 
     std::vector<RDGPassNodeRef> passes_;
+    std::vector<RDGPassNodeRef> execution_passes_;
+    RDGCompileInfo compile_info_;
+    std::unordered_map<NodeID, NodeID> resource_keys_;
+    NodeID resource_key(RDGResourceNodeRef resource) const;
+    std::unordered_map<NodeID, std::vector<std::pair<RDGPassNodeRef, RDGTextureEdgeRef>>> texture_usages_;
+    std::unordered_map<NodeID, std::vector<std::pair<RDGPassNodeRef, RDGBufferEdgeRef>>> buffer_usages_;
+    std::unordered_map<NodeID, RHITextureRef*> extracted_textures_;
+    std::unordered_map<NodeID, RHIBufferRef*> extracted_buffers_;
 
     std::shared_ptr<DependencyGraph::DependencyGraph> graph_ = std::make_shared<DependencyGraph::DependencyGraph>();
     RDGBlackBoard black_board_;
@@ -237,6 +256,9 @@ public:
     RDGRenderPassBuilder(RDGBuilder* builder, RDGRenderPassNodeRef pass)
         : builder_(builder), pass_(pass), graph_(builder->get_graph()){};
 
+    RDGRenderPassBuilder& never_cull(bool keep = true) { builder_->keep_pass(pass_->get_handle(), keep); return *this; }
+    RDGRenderPassBuilder& depends_on(RDGPassHandle dependency) { builder_->add_dependency(pass_->get_handle(), dependency); return *this; }
+
     RDGRenderPassBuilder& pass_index(uint32_t x = 0, uint32_t y = 0, uint32_t z = 0);
     RDGRenderPassBuilder& root_signature(RHIRootSignatureRef root_signature);
     RDGRenderPassBuilder& descriptor_set(uint32_t set, RHIDescriptorSetRef descriptor_set);
@@ -292,6 +314,9 @@ public:
     RDGComputePassBuilder(RDGBuilder* builder, RDGComputePassNodeRef pass)
         : builder_(builder), pass_(pass), graph_(builder->get_graph()){};
 
+    RDGComputePassBuilder& never_cull(bool keep = true) { builder_->keep_pass(pass_->get_handle(), keep); return *this; }
+    RDGComputePassBuilder& depends_on(RDGPassHandle dependency) { builder_->add_dependency(pass_->get_handle(), dependency); return *this; }
+
     RDGComputePassBuilder& pass_index(uint32_t x = 0, uint32_t y = 0, uint32_t z = 0);
     RDGComputePassBuilder& root_signature(RHIRootSignatureRef root_signature);
     RDGComputePassBuilder& descriptor_set(uint32_t set, RHIDescriptorSetRef descriptor_set);
@@ -329,6 +354,9 @@ public:
     RDGRayTracingPassBuilder(RDGBuilder* builder, RDGRayTracingPassNodeRef pass)
         : builder_(builder), pass_(pass), graph_(builder->get_graph()){};
 
+    RDGRayTracingPassBuilder& never_cull(bool keep = true) { builder_->keep_pass(pass_->get_handle(), keep); return *this; }
+    RDGRayTracingPassBuilder& depends_on(RDGPassHandle dependency) { builder_->add_dependency(pass_->get_handle(), dependency); return *this; }
+
     RDGRayTracingPassBuilder& pass_index(uint32_t x = 0, uint32_t y = 0, uint32_t z = 0);
     RDGRayTracingPassBuilder& root_signature(RHIRootSignatureRef root_signature);
     RDGRayTracingPassBuilder& descriptor_set(uint32_t set, RHIDescriptorSetRef descriptor_set);
@@ -365,6 +393,9 @@ public:
     RDGPresentPassBuilder(RDGBuilder* builder, RDGPresentPassNodeRef pass)
         : builder_(builder), pass_(pass), graph_(builder->get_graph()){};
 
+    RDGPresentPassBuilder& never_cull(bool keep = true) { builder_->keep_pass(pass_->get_handle(), keep); return *this; }
+    RDGPresentPassBuilder& depends_on(RDGPassHandle dependency) { builder_->add_dependency(pass_->get_handle(), dependency); return *this; }
+
     RDGPresentPassHandle finish() { return pass_->get_handle(); }
 
     RDGPresentPassBuilder& texture(RDGTextureHandle texture, TextureSubresourceLayers subresource = {});
@@ -384,6 +415,9 @@ class RDGCopyPassBuilder {
 public:
     RDGCopyPassBuilder(RDGBuilder* builder, RDGCopyPassNodeRef pass)
         : builder_(builder), pass_(pass), graph_(builder->get_graph()){};
+
+    RDGCopyPassBuilder& never_cull(bool keep = true) { builder_->keep_pass(pass_->get_handle(), keep); return *this; }
+    RDGCopyPassBuilder& depends_on(RDGPassHandle dependency) { builder_->add_dependency(pass_->get_handle(), dependency); return *this; }
 
     RDGCopyPassHandle finish() { return pass_->get_handle(); }
 

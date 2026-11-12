@@ -120,8 +120,14 @@ RDGBufferHandle RDGBuilder::get_buffer(std::string name) {
     return node->get_handle();
 }
 
-void RDGBuilder::execute() {
-    for (auto& pass : passes_) {
+bool RDGBuilder::execute() {
+    if (!compile()) return false;
+    if (!execution_passes_.empty() && !command_) {
+        compile_info_.error = "RDG execution requires a command list";
+        ERR(LogRDGBuilder, "{}", compile_info_.error);
+        return false;
+    }
+    for (auto& pass : execution_passes_) {
         if (!pass) continue;
         if (pass->is_culled_) {
             continue;
@@ -144,9 +150,16 @@ void RDGBuilder::execute() {
         }
     }
     
+    for (auto& [id, output] : extracted_textures_)
+        *output = resolve(static_cast<RDGTextureNode*>(graph_->GetNode(id)));
+    for (auto& [id, output] : extracted_buffers_)
+        *output = resolve(static_cast<RDGBufferNode*>(graph_->GetNode(id)));
+    extracted_textures_.clear(); extracted_buffers_.clear();
+    execution_passes_.clear(); resource_keys_.clear(); texture_usages_.clear(); buffer_usages_.clear();
     passes_.clear();
     graph_ = std::make_shared<DependencyGraph::DependencyGraph>();
     black_board_.clear();
+    return true;
 }
 
 void RDGBuilder::create_input_barriers(RDGPassNodeRef pass) {
@@ -427,12 +440,12 @@ void RDGBuilder::execute_pass(RDGPresentPassNodeRef pass) {
         if (edges[0]->as_present) {
             present_texture = edges[0]->From<RDGTextureNode>();
             texture = edges[1]->From<RDGTextureNode>();
-            subresource = edges[1]->subresource.aspect == TEXTURE_ASPECT_NONE ?
+            subresource = edges[1]->subresource_layer.is_default() ?
                 resolve(texture)->get_default_subresource_layers() : edges[1]->subresource_layer;
         } else {
             present_texture = edges[1]->From<RDGTextureNode>();
             texture = edges[0]->From<RDGTextureNode>();
-            subresource = edges[0]->subresource.aspect == TEXTURE_ASPECT_NONE ?
+            subresource = edges[0]->subresource_layer.is_default() ?
                 resolve(texture)->get_default_subresource_layers() : edges[0]->subresource_layer;
         }
     }
@@ -559,7 +572,7 @@ RHIBufferRef RDGBuilder::resolve(RDGBufferNodeRef buffer_node) {
 }
 
 void RDGBuilder::release(RDGTextureNodeRef texture_node, RHIResourceState state) {
-    if (texture_node->is_imported()) return;
+    if (texture_node->is_imported() || texture_node->is_exported_) return;
     if (texture_node->texture_) {
         RDGTexturePool::get()->release({texture_node->texture_, state});
         texture_node->texture_ = nullptr;
@@ -568,7 +581,7 @@ void RDGBuilder::release(RDGTextureNodeRef texture_node, RHIResourceState state)
 }
 
 void RDGBuilder::release(RDGBufferNodeRef buffer_node, RHIResourceState state) {
-    if (buffer_node->is_imported()) return;
+    if (buffer_node->is_imported() || buffer_node->is_exported_) return;
     if (buffer_node->buffer_) {
         RDGBufferPool::get()->release({buffer_node->buffer_, state});
         buffer_node->buffer_ = nullptr;
@@ -579,27 +592,29 @@ void RDGBuilder::release(RDGBufferNodeRef buffer_node, RHIResourceState state) {
 RHIResourceState RDGBuilder::previous_state(RDGTextureNodeRef texture_node, RDGPassNodeRef pass_node,
                                             TextureSubresourceRange subresource, bool output) {
     resolve(texture_node);
-    NodeID current_id = pass_node->ID();
+    NodeID current_id = pass_node->execution_index();
     NodeID previous_id = UINT32_MAX;
 
     RHIResourceState previous_state = texture_node->init_state_;
 
-    texture_node->for_each_pass([&](RDGTextureEdgeRef edge, RDGPassNodeRef pass) {
+    for (const auto& [pass, edge] : texture_usages_[resource_key(texture_node)]) {
+        if (pass->is_culled()) continue;
         bool is_output_first = output ? !edge->is_output() : edge->is_output();
-        bool is_previous_pass = output ? pass->ID() <= current_id : pass->ID() < current_id;
+        bool is_previous_pass = output ? pass->execution_index() <= current_id : pass->execution_index() < current_id;
         bool is_subresource_covered = subresource.is_default() ||
                                       edge->subresource.is_default() ||
                                       subresource == edge->subresource;
 
-        if (!(is_previous_pass && is_subresource_covered)) return;
-        if (pass->ID() > previous_id || previous_id == UINT32_MAX) {
+        if (!(is_previous_pass && is_subresource_covered)) continue;
+        if (pass == pass_node && edge->is_output()) continue;
+        if (pass->execution_index() > previous_id || previous_id == UINT32_MAX) {
             previous_state = edge->state;
-            previous_id = pass->ID();
-        } else if (pass->ID() == previous_id && is_output_first) {
+            previous_id = pass->execution_index();
+        } else if (pass->execution_index() == previous_id && is_output_first) {
             previous_state = edge->state;
-            previous_id = pass->ID();
+            previous_id = pass->execution_index();
         }
-    });
+    }
 
     return previous_state;
 }
@@ -607,51 +622,53 @@ RHIResourceState RDGBuilder::previous_state(RDGTextureNodeRef texture_node, RDGP
 RHIResourceState RDGBuilder::previous_state(RDGBufferNodeRef buffer_node, RDGPassNodeRef pass_node, uint32_t offset,
                                             uint32_t size, bool output) {
     resolve(buffer_node);
-    NodeID current_id = pass_node->ID();
+    NodeID current_id = pass_node->execution_index();
     NodeID previous_id = UINT32_MAX;
 
     RHIResourceState previous_state = buffer_node->init_state_;
 
-    buffer_node->for_each_pass([&](RDGBufferEdgeRef edge, RDGPassNodeRef pass) {
+    for (const auto& [pass, edge] : buffer_usages_[resource_key(buffer_node)]) {
+        if (pass->is_culled()) continue;
         bool is_output_first = output ? !edge->is_output() : edge->is_output();
-        bool is_previous_pass = output ? pass->ID() <= current_id : pass->ID() < current_id;
-        bool is_subresource_covered = (offset == 0 && size == 0) ||
-                                      (edge->offset == 0 && edge->size == 0) ||
-                                      (offset == edge->offset && size == edge->size);
+        bool is_previous_pass = output ? pass->execution_index() <= current_id : pass->execution_index() < current_id;
+        bool is_subresource_covered = true; // RHI buffer barriers transition the whole allocation.
 
-        if (!(is_previous_pass && is_subresource_covered)) return;
-        if (pass->ID() > previous_id || previous_id == UINT32_MAX) {
+        if (!(is_previous_pass && is_subresource_covered)) continue;
+        if (pass == pass_node && edge->is_output()) continue;
+        if (pass->execution_index() > previous_id || previous_id == UINT32_MAX) {
             previous_state = edge->state;
-            previous_id = pass->ID();
-        } else if (pass->ID() == previous_id && is_output_first) {
+            previous_id = pass->execution_index();
+        } else if (pass->execution_index() == previous_id && is_output_first) {
             previous_state = edge->state;
-            previous_id = pass->ID();
+            previous_id = pass->execution_index();
         }
-    });
+    }
 
     return previous_state;
 }
 
 bool RDGBuilder::is_last_used_pass(RDGTextureNodeRef texture_node, RDGPassNodeRef pass_node, bool output) {
-    NodeID current_id = pass_node->ID();
+    NodeID current_id = pass_node->execution_index();
     bool last = true;
 
-    texture_node->for_each_pass([&](RDGTextureEdgeRef edge, RDGPassNodeRef pass) {
-        if (pass->ID() > current_id) last = false;
-        if (!output && pass->ID() == current_id && edge->is_output()) last = false;
-    });
+    for (const auto& [pass, edge] : texture_usages_[resource_key(texture_node)]) {
+        if (pass->is_culled()) continue;
+        if (pass->execution_index() > current_id) last = false;
+        if (!output && pass->execution_index() == current_id && edge->is_output()) last = false;
+    }
 
     return last;
 }
 
 bool RDGBuilder::is_last_used_pass(RDGBufferNodeRef buffer_node, RDGPassNodeRef pass_node, bool output) {
-    NodeID current_id = pass_node->ID();
+    NodeID current_id = pass_node->execution_index();
     bool last = true;
 
-    buffer_node->for_each_pass([&](RDGBufferEdgeRef edge, RDGPassNodeRef pass) {
-        if (pass->ID() > current_id) last = false;
-        if (!output && pass->ID() == current_id && edge->is_output()) last = false;
-    });
+    for (const auto& [pass, edge] : buffer_usages_[resource_key(buffer_node)]) {
+        if (pass->is_culled()) continue;
+        if (pass->execution_index() > current_id) last = false;
+        if (!output && pass->execution_index() == current_id && edge->is_output()) last = false;
+    }
 
     return last;
 }
@@ -1026,7 +1043,7 @@ RDGComputePassBuilder& RDGComputePassBuilder::output_read(RDGTextureHandle textu
     RDGTextureEdgeRef edge = graph_->CreateEdge<RDGTextureEdge>();
     edge->state = RESOURCE_STATE_SHADER_RESOURCE;
     edge->subresource = subresource;
-    edge->as_output_read_write = true;
+    edge->as_output_read = true;
     edge->type = RESOURCE_TYPE_TEXTURE;
 
     graph_->Link(pass_, graph_->GetNode(texture.id()), edge);
@@ -1179,7 +1196,7 @@ RDGRayTracingPassBuilder& RDGRayTracingPassBuilder::output_read(RDGTextureHandle
     RDGTextureEdgeRef edge = graph_->CreateEdge<RDGTextureEdge>();
     edge->state = RESOURCE_STATE_SHADER_RESOURCE;
     edge->subresource = subresource;
-    edge->as_output_read_write = true;
+    edge->as_output_read = true;
     edge->type = RESOURCE_TYPE_TEXTURE;
 
     graph_->Link(pass_, graph_->GetNode(texture.id()), edge);
@@ -1221,6 +1238,7 @@ RDGPresentPassBuilder& RDGPresentPassBuilder::texture(RDGTextureHandle texture, 
     RDGTextureEdgeRef edge = graph_->CreateEdge<RDGTextureEdge>();
     edge->state = RESOURCE_STATE_TRANSFER_SRC;
     edge->subresource_layer = subresource;
+    edge->subresource = {subresource.aspect, subresource.mip_level, 1, subresource.base_array_layer, subresource.layer_count};
 
     graph_->Link(graph_->GetNode(texture.id()), pass_, edge);
 
@@ -1241,6 +1259,7 @@ RDGCopyPassBuilder& RDGCopyPassBuilder::from(RDGTextureHandle texture, TextureSu
     RDGTextureEdgeRef edge = graph_->CreateEdge<RDGTextureEdge>();
     edge->state = RESOURCE_STATE_TRANSFER_SRC;
     edge->subresource_layer = subresource;
+    edge->subresource = {subresource.aspect, subresource.mip_level, 1, subresource.base_array_layer, subresource.layer_count};
     edge->as_transfer_src = true;
 
     graph_->Link(graph_->GetNode(texture.id()), pass_, edge);
@@ -1252,6 +1271,7 @@ RDGCopyPassBuilder& RDGCopyPassBuilder::to(RDGTextureHandle texture, TextureSubr
     RDGTextureEdgeRef edge = graph_->CreateEdge<RDGTextureEdge>();
     edge->state = RESOURCE_STATE_TRANSFER_DST;
     edge->subresource_layer = subresource;
+    edge->subresource = {subresource.aspect, subresource.mip_level, 1, subresource.base_array_layer, subresource.layer_count};
     edge->as_transfer_dst = true;
 
     graph_->Link(pass_, graph_->GetNode(texture.id()), edge);
@@ -1266,8 +1286,9 @@ RDGCopyPassBuilder& RDGCopyPassBuilder::generate_mips() {
 
 RDGCopyPassBuilder& RDGCopyPassBuilder::output_read(RDGTextureHandle texture, TextureSubresourceLayers subresource) {
     RDGTextureEdgeRef edge = graph_->CreateEdge<RDGTextureEdge>();
-    edge->state = RESOURCE_STATE_UNORDERED_ACCESS;
+    edge->state = RESOURCE_STATE_SHADER_RESOURCE;
     edge->subresource_layer = subresource;
+    edge->subresource = {subresource.aspect, subresource.mip_level, 1, subresource.base_array_layer, subresource.layer_count};
     edge->as_output_read = true;
     edge->type = RESOURCE_TYPE_TEXTURE;
 
@@ -1280,6 +1301,7 @@ RDGCopyPassBuilder& RDGCopyPassBuilder::output_read_write(RDGTextureHandle textu
     RDGTextureEdgeRef edge = graph_->CreateEdge<RDGTextureEdge>();
     edge->state = RESOURCE_STATE_UNORDERED_ACCESS;
     edge->subresource_layer = subresource;
+    edge->subresource = {subresource.aspect, subresource.mip_level, 1, subresource.base_array_layer, subresource.layer_count};
     edge->as_output_read_write = true;
     edge->type = RESOURCE_TYPE_RW_TEXTURE;
 
@@ -1289,6 +1311,7 @@ RDGCopyPassBuilder& RDGCopyPassBuilder::output_read_write(RDGTextureHandle textu
 }
 
 void RDGBuilder::export_graphviz(std::string path) {
+    compile();
     std::ofstream out(path);
     if (!out.is_open()) {
         ERR(LogRDGBuilder, "Failed to open file for graphviz export: {}", path.c_str());
@@ -1308,7 +1331,10 @@ void RDGBuilder::export_graphviz(std::string path) {
         else if (pass->node_type() == RDG_PASS_NODE_TYPE_PRESENT) color = "lightblue";
         else if (pass->node_type() == RDG_PASS_NODE_TYPE_RAY_TRACING) color = "violet";
 
-        out << std::format("    \"{}\" [shape=rectangle, style=filled, fillcolor={}, label=\"{}\"];\n", pass->name(), color, pass->name());
+        std::string label = pass->name();
+        if (pass->is_culled()) { color = "grey"; label += " (culled)"; }
+        else label = std::to_string(pass->execution_index()) + ": " + label;
+        out << std::format("    \"{}\" [shape=rectangle, style=filled, fillcolor={}, label=\"{}\"];\n", pass->name(), color, label);
 
         // Writes (Pass -> Resource)
         for (auto* edge : pass->OutEdges<RDGTextureEdge>()) {

@@ -2,6 +2,8 @@
 
 当前默认后端为 DX12。绑定模型和隐藏窗口截图测试见 [DX12 文档](dx12.md)；下文 DX11 实现说明仅作历史参考。
 
+RDG 已支持拓扑排序与 Pass 剔除，依赖语义、外部副作用和输出提取见 [RDG 编译文档](rdg.md)。
+
 本文档概述了引擎的核心渲染架构，包含了 Render Dependency Graph (RDG) 的语法说明、RHI Context 中 Immediate 的语义区分、DX11 后端实现细节以及 Shader 的自动编译机制。
 
 ---

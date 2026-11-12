@@ -77,6 +77,8 @@ public:
 protected:
     RDGResourceNodeType node_type_;
     bool is_imported_ = false; ///< True if the resource is external/imported, not created by RDG.
+    bool is_exported_ = false;
+    friend class RDGBuilder;
 };
 using RDGResourceNodeRef = RDGResourceNode*;
 
@@ -101,8 +103,8 @@ public:
     RHITextureRef get_texture() const { return texture_; }
 
 private:
-    RHITextureInfo info_;
-    RHIResourceState init_state_; 
+    RHITextureInfo info_ = {};
+    RHIResourceState init_state_ = RESOURCE_STATE_UNDEFINED;
 
     RHITextureRef texture_; // The actual RHI resource, resolved during execution.
 
@@ -125,8 +127,8 @@ public:
     const RHIBufferInfo& get_info() { return info_; }
 
 private:
-    RHIBufferInfo info_;
-    RHIResourceState init_state_;
+    RHIBufferInfo info_ = {};
+    RHIResourceState init_state_ = RESOURCE_STATE_UNDEFINED;
 
     RHIBufferRef buffer_; // The actual RHI resource, resolved during execution.
 
@@ -145,8 +147,10 @@ class RDGPassNode : public RDGNode {
 public:
     RDGPassNode(std::string name, RDGPassNodeType node_type) : RDGNode(name), node_type_(node_type) {}
 
-    inline bool before(RDGPassNode* other) { return ID() < other->ID(); }
-    inline bool after(RDGPassNode* other) { return ID() > other->ID(); }
+    inline bool before(RDGPassNode* other) { return execution_index_ < other->execution_index_; }
+    inline bool after(RDGPassNode* other) { return execution_index_ > other->execution_index_; }
+    bool is_culled() const { return is_culled_; }
+    uint32_t execution_index() const { return execution_index_; }
 
     void for_each_texture(const std::function<void(RDGTextureEdgeRef, RDGTextureNodeRef)>& func);
     void for_each_buffer(const std::function<void(RDGBufferEdgeRef, RDGBufferNodeRef)>& func);
@@ -156,6 +160,9 @@ public:
 protected:
     RDGPassNodeType node_type_;
     bool is_culled_ = false;
+    bool has_side_effects_ = false;
+    uint32_t execution_index_ = UINT32_MAX;
+    std::vector<RDGPassNode*> dependencies_;
 
     RHIRootSignatureRef root_signature_;
     std::array<RHIDescriptorSetRef, MAX_DESCRIPTOR_SETS> descriptor_sets_;
