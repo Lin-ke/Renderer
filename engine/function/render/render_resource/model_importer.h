@@ -21,6 +21,12 @@ enum aiTextureType;
 struct MtlMaterial;
 struct MtlGlobalSettings;
 
+// Source conventions used only during import; native assets contain converted data.
+struct ModelImportOptions {
+    bool convert_to_left_handed = false;
+    bool specular_map_is_arm = false;
+};
+
 /**
  * @brief Handles importing of 3D model files (FBX, OBJ, etc.)
  * 
@@ -39,7 +45,8 @@ public:
      * @param settings Import settings
      * @return Shared pointer to the created Model asset
      */
-    std::shared_ptr<Model> import_model(const std::string& physical_path, const std::string& virtual_path, const ModelProcessSetting& settings);
+    std::shared_ptr<Model> import_model(const std::string& physical_path, const std::string& virtual_path,
+        const ModelProcessSetting& settings, const ModelImportOptions& options = {});
 
 private:
     // Processing state
@@ -48,6 +55,7 @@ private:
     std::filesystem::path output_dir_; // Where to save generated assets
     std::string model_name_;
     ModelProcessSetting settings_;
+    ModelImportOptions options_;
     
     // Caches to avoid duplicates during import
     std::unordered_map<std::string, std::shared_ptr<Texture>> texture_cache_;
@@ -55,10 +63,16 @@ private:
     std::unordered_map<std::string, std::shared_ptr<Mesh>> mesh_cache_;
     
     // Internal processing methods
-    void process_node(aiNode* node, const aiScene* scene, std::vector<aiMesh*>& process_meshes);
+    struct MeshInstance {
+        aiMesh* mesh;
+        Mat4 transform;
+    };
+    void process_node(aiNode* node, const aiScene* scene, const Mat4& parent_transform,
+        std::vector<MeshInstance>& process_meshes);
     
     std::shared_ptr<Mesh> process_mesh(
         aiMesh* mesh, 
+        const Mat4& transform,
         const aiScene* scene, 
         int index,
         const std::vector<MtlMaterial>& mtl_materials,

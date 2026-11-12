@@ -155,6 +155,8 @@ private:
     ShaderRef vertex_shader_;
     ShaderRef fragment_shader_;
     RHIGraphicsPipelineRef pipeline_;
+    RHIGraphicsPipelineRef double_sided_pipeline_;
+    RHIGraphicsPipelineRef front_cull_pipeline_;
     RHIRootSignatureRef root_signature_;
     RHIDescriptorSetRef descriptor_set_;
 

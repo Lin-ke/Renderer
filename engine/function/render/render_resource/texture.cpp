@@ -1,6 +1,7 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb/stb_image.h>
 #include "engine/function/render/render_resource/texture.h"
+#include "engine/function/render/render_resource/image_decode.h"
 #include "engine/main/engine_context.h"
 #include "engine/core/log/Log.h"
 #include "engine/function/asset/asset_manager.h"
@@ -208,7 +209,7 @@ void Texture::load_from_file() {
 
 void Texture::load_from_image_data() {
     PROFILE_SCOPE("Texture::load_from_image_data");
-    if (image_data_.empty()) return;
+    if (image_data_.empty() || !EngineContext::rhi()) return;
 
     bool rhi_initialized = false;
     std::vector<RHIBufferRef> staging_buffers;
@@ -218,14 +219,13 @@ void Texture::load_from_image_data() {
     for (uint32_t i = 0; i < (uint32_t)image_data_.size(); ++i) {
         if (image_data_[i].empty()) continue;
 
-        int width, height, channels;
-        stbi_uc* pixels = stbi_load_from_memory(
-            image_data_[i].data(), (int)image_data_[i].size(),
-            &width, &height, &channels, 4);
-        if (!pixels) {
+        auto decoded = decode_image_rgba(image_data_[i]);
+        if (!decoded) {
             ERR(LogRenderResource, "Failed to decode embedded image data[{}]", i);
             continue;
         }
+        const uint32_t width = decoded->width, height = decoded->height;
+        const auto* pixels = decoded->pixels.data();
 
         if (!rhi_initialized) {
             extent_ = {(uint32_t)width, (uint32_t)height, 1};
@@ -237,8 +237,8 @@ void Texture::load_from_image_data() {
 
         if (EngineContext::rhi()) {
             uint32_t row_pitch = width * 4;
-            uint32_t aligned_row_pitch = (row_pitch + 255) & ~255;
-            uint32_t total_size = aligned_row_pitch * height;
+            // RHI takes tightly packed rows; each backend handles API alignment.
+            uint32_t total_size = row_pitch * height;
             
             RHIBufferInfo staging_info = {};
             staging_info.size = total_size;
@@ -249,15 +249,7 @@ void Texture::load_from_image_data() {
             RHIBufferRef staging_buffer = EngineContext::rhi()->create_buffer(staging_info);
             void* mapped = staging_buffer->map();
             
-            if (aligned_row_pitch == row_pitch) {
-                memcpy(mapped, pixels, total_size);
-            } else {
-                uint8_t* dst = static_cast<uint8_t*>(mapped);
-                uint8_t* src = pixels;
-                for (int y = 0; y < height; ++y) {
-                    memcpy(dst + y * aligned_row_pitch, src + y * row_pitch, row_pitch);
-                }
-            }
+            memcpy(mapped, pixels, total_size);
             
             staging_buffer->unmap();
             
@@ -278,7 +270,6 @@ void Texture::load_from_image_data() {
             staging_buffers.push_back(staging_buffer);
         }
 
-        stbi_image_free(pixels);
     }
 
     if (rhi_initialized && EngineContext::rhi()) {

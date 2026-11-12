@@ -3,7 +3,7 @@ add_rules("plugin.compile_commands.autoupdate", {outputdir = ".vscode"})
 
 
 add_requires("glog", {configs = {gflags = false}})
-add_requires("stb", "assimp", "cereal", "stduuid", "catch2", "zlib")
+add_requires("stb", "assimp", "cereal", "stduuid", "catch2", "zlib", "directxtex")
 add_requires("imgui", {configs = {win32 = true, dx11 = true, dx12 = true}})
 add_requires("imguizmo", {configs = {cxflags = "-DIMGUI_DEFINE_MATH_OPERATORS"}})
 
@@ -27,7 +27,7 @@ target("engine")
     add_files("engine/**.cpp")
     remove_files("RD/**.cpp")
 
-    add_packages("imgui", "imguizmo", "stb", "assimp", "cereal", "glog", "stduuid", {public = true} )
+    add_packages("imgui", "imguizmo", "stb", "assimp", "cereal", "glog", "stduuid", "directxtex", {public = true} )
     add_syslinks("d3d12", "d3d11", "dxgi", "dxguid", "D3DCompiler", "d2d1", "dwrite", "winmm", "user32", "gdi32", "ole32")
 
     -- Compile shaders before building the engine
@@ -156,6 +156,13 @@ target("utest")
     add_files("test/**.cpp")
     add_deps("engine")
     add_packages("catch2", "stb")
+
+target("sun_temple")
+    set_kind("binary")
+    set_languages("c++20")
+    set_rundir("$(projectdir)")
+    add_files("samples/sun_temple/main.cpp")
+    add_deps("engine")
 
 -- xmake require --info gflags
 -- xmake project -k vsxmake -m "debug,release"

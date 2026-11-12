@@ -21,6 +21,8 @@ GBufferPass::GBufferPass() = default;
 
 GBufferPass::~GBufferPass() {
     if (pipeline_) pipeline_->destroy();
+    if (double_sided_pipeline_) double_sided_pipeline_->destroy();
+    if (front_cull_pipeline_) front_cull_pipeline_->destroy();
     if (root_signature_) root_signature_->destroy();
     if (per_frame_buffer_) per_frame_buffer_->destroy();
     if (per_object_buffer_) per_object_buffer_->destroy();
@@ -198,7 +200,7 @@ void GBufferPass::create_pipeline() {
     pipe_info.root_signature = root_signature_;
     pipe_info.primitive_type = PRIMITIVE_TYPE_TRIANGLE_LIST;
     
-    pipe_info.vertex_input_state.vertex_elements.resize(3);
+    pipe_info.vertex_input_state.vertex_elements.resize(4);
     pipe_info.vertex_input_state.vertex_elements[0].stream_index = 0;
     pipe_info.vertex_input_state.vertex_elements[0].semantic_name = "POSITION";
     pipe_info.vertex_input_state.vertex_elements[0].format = FORMAT_R32G32B32_SFLOAT;
@@ -211,6 +213,10 @@ void GBufferPass::create_pipeline() {
     pipe_info.vertex_input_state.vertex_elements[2].semantic_name = "TEXCOORD";
     pipe_info.vertex_input_state.vertex_elements[2].format = FORMAT_R32G32_SFLOAT;
     pipe_info.vertex_input_state.vertex_elements[2].offset = 0;
+    pipe_info.vertex_input_state.vertex_elements[3].stream_index = 3;
+    pipe_info.vertex_input_state.vertex_elements[3].semantic_name = "TANGENT";
+    pipe_info.vertex_input_state.vertex_elements[3].format = FORMAT_R32G32B32A32_SFLOAT;
+    pipe_info.vertex_input_state.vertex_elements[3].offset = 0;
     
     pipe_info.rasterizer_state.cull_mode = CULL_MODE_BACK;
     pipe_info.rasterizer_state.fill_mode = FILL_MODE_SOLID;
@@ -227,6 +233,10 @@ void GBufferPass::create_pipeline() {
     pipe_info.depth_stencil_attachment_format = get_depth_format();
     
     pipeline_ = backend->create_graphics_pipeline(pipe_info);
+    pipe_info.rasterizer_state.cull_mode = CULL_MODE_NONE;
+    double_sided_pipeline_ = backend->create_graphics_pipeline(pipe_info);
+    pipe_info.rasterizer_state.cull_mode = CULL_MODE_FRONT;
+    front_cull_pipeline_ = backend->create_graphics_pipeline(pipe_info);
     if (!pipeline_) {
         ERR(LogGBufferPass, "Failed to create graphics pipeline");
         return;
@@ -357,6 +367,9 @@ std::optional<GBufferOutputHandles> GBufferPass::build(RDGBuilder& builder, RDGT
                 
                 // Update material data and bind textures
                 auto pbr_mat = std::dynamic_pointer_cast<PBRMaterial>(batch.material);
+                auto cull = batch.material ? batch.material->cull_mode() : CULL_MODE_BACK;
+                cmd->set_graphics_pipeline(cull == CULL_MODE_NONE ? double_sided_pipeline_ :
+                    cull == CULL_MODE_FRONT ? front_cull_pipeline_ : pipeline_);
                 if (material_buffer_ && pbr_mat) {
                     GBufferMaterialData mat_data;
                     mat_data.albedo = pbr_mat->get_diffuse();
@@ -472,6 +485,9 @@ std::optional<GBufferOutputHandles> GBufferPass::build(RDGBuilder& builder, RDGT
                 }
                 if (batch.texcoord_buffer) {
                     cmd->bind_vertex_buffer(batch.texcoord_buffer, 2, 0);
+                }
+                if (batch.tangent_buffer) {
+                    cmd->bind_vertex_buffer(batch.tangent_buffer, 3, 0);
                 }
                 
                 if (batch.index_buffer) {

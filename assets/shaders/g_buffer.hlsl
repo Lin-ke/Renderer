@@ -48,6 +48,7 @@ struct VSInput {
     float3 position : POSITION0;
     float3 normal : NORMAL0;
     float2 texcoord : TEXCOORD0;
+    float4 tangent : TANGENT0;
 };
 
 struct VSOutput {
@@ -55,6 +56,7 @@ struct VSOutput {
     float3 world_pos : POSITION0;
     float3 world_normal : NORMAL0;
     float2 texcoord : TEXCOORD0;
+    float4 world_tangent : TANGENT0;
 };
 
 VSOutput VSMain(VSInput input) {
@@ -69,8 +71,10 @@ VSOutput VSMain(VSInput input) {
     output.position = mul(proj, view_pos);
     
     // Transform normal to world space
-    float3 world_normal = mul((float3x3)inv_model, input.normal);
+    float3 world_normal = mul(transpose((float3x3)inv_model), input.normal);
     output.world_normal = normalize(world_normal);
+    output.world_tangent = float4(mul((float3x3)model, input.tangent.xyz),
+        input.tangent.w * (determinant((float3x3)model) < 0.0 ? -1.0 : 1.0));
     
     // Pass through texcoord
     output.texcoord = input.texcoord;
@@ -86,6 +90,8 @@ struct PSInput {
     float3 world_pos : POSITION0;
     float3 world_normal : NORMAL0;
     float2 texcoord : TEXCOORD0;
+    float4 world_tangent : TANGENT0;
+    bool front_face : SV_IsFrontFace;
 };
 
 struct PSOutput {
@@ -142,32 +148,19 @@ PSOutput PSMain(PSInput input) {
     }
     
     // Calculate normal
-    float3 N = normalize(input.world_normal);
+    float3 N = normalize(input.world_normal) * (input.front_face ? 1.0 : -1.0);
     if (use_normal_map > 0.5) {
-        // Sample normal map and decode from [0,1] to [-1,1]
-        float3 tangent_normal = normal_map.Sample(default_sampler, input.texcoord).xyz * 2.0 - 1.0;
-        
-        // Build tangent space basis
-        float3 up = abs(N.y) < 0.999 ? float3(0, 1, 0) : float3(1, 0, 0);
-        float3 T = normalize(cross(up, N));
-        float3 B = cross(N, T);
-        
-        // Transform from tangent space to world space
-        float3x3 TBN = float3x3(T, B, N);
-        N = normalize(mul(tangent_normal, TBN));
-    }
-    if (use_normal_map > 0.5) {
-        // Sample normal map and decode from [0,1] to [-1,1]
-        float3 tangent_normal = normal_map.Sample(default_sampler, input.texcoord).xyz * 2.0 - 1.0;
-        
-        // Build tangent space basis
-        float3 up = abs(N.y) < 0.999 ? float3(0, 1, 0) : float3(1, 0, 0);
-        float3 T = normalize(cross(up, N));
-        float3 B = cross(N, T);
-        
-        // Transform from tangent space to world space
-        float3x3 TBN = float3x3(T, B, N);
-        N = normalize(mul(tangent_normal, TBN));
+        // BC5 stores only XY; reconstruct the positive tangent-space Z.
+        float2 xy = normal_map.Sample(default_sampler, input.texcoord).xy * 2.0 - 1.0;
+        float3 tangent_normal = float3(xy, sqrt(saturate(1.0 - dot(xy, xy))));
+        float3 T = input.world_tangent.xyz - N * dot(N, input.world_tangent.xyz);
+        if (dot(T, T) < 1e-8) {
+            float3 up = abs(N.y) < 0.999 ? float3(0, 1, 0) : float3(1, 0, 0);
+            T = cross(up, N);
+        }
+        T = normalize(T);
+        float3 B = cross(N, T) * input.world_tangent.w;
+        N = normalize(tangent_normal.x * T + tangent_normal.y * B + tangent_normal.z * N);
     }
     
     // Pack normal to [0,1] range for storage

@@ -362,13 +362,15 @@ static std::optional<std::filesystem::path> safe_path_from_wstring(const std::ws
     try { return std::filesystem::path(wstr); } catch (...) { return std::nullopt; }
 }
 
-std::shared_ptr<Model> ModelImporter::import_model(const std::string& physical_path, const std::string& virtual_path, const ModelProcessSetting& settings) {
+std::shared_ptr<Model> ModelImporter::import_model(const std::string& physical_path, const std::string& virtual_path,
+    const ModelProcessSetting& settings, const ModelImportOptions& options) {
     PROFILE_SCOPE("ModelImporter::import_model");
     source_path_ = std::filesystem::path(physical_path);
     virtual_path_ = virtual_path;
     model_name_ = source_path_.stem().string();
     output_dir_ = source_path_.parent_path();
     settings_ = settings;
+    options_ = options;
     
     if (!EngineContext::asset()) {
         ERR(LogModelImporter, "AssetManager not initialized, cannot import model");
@@ -382,6 +384,8 @@ std::shared_ptr<Model> ModelImporter::import_model(const std::string& physical_p
     try {
         uint32_t process_steps = aiProcess_Triangulate | aiProcess_FixInfacingNormals;
         if (settings_.flip_uv) process_steps |= aiProcess_FlipUVs;
+        if (settings_.tangent_space) process_steps |= aiProcess_CalcTangentSpace;
+        if (options_.convert_to_left_handed) process_steps |= aiProcess_MakeLeftHanded | aiProcess_FlipWindingOrder;
         if (settings_.smooth_normal) {
             process_steps |= aiProcess_JoinIdenticalVertices | aiProcess_DropNormals | aiProcess_GenSmoothNormals;
         } else {
@@ -430,8 +434,8 @@ std::shared_ptr<Model> ModelImporter::import_model(const std::string& physical_p
             }
         }
         
-        std::vector<aiMesh*> process_meshes;
-        process_node(scene->mRootNode, scene, process_meshes);
+        std::vector<MeshInstance> process_meshes;
+        process_node(scene->mRootNode, scene, Mat4::Identity(), process_meshes);
         
         auto model = std::make_shared<Model>(physical_path, settings);
         std::string uid_seed = virtual_path.empty() ? physical_path : virtual_path;
@@ -439,12 +443,12 @@ std::shared_ptr<Model> ModelImporter::import_model(const std::string& physical_p
         
         // Process each mesh
         for (int i = 0; i < process_meshes.size(); i++) {
-            aiMesh* mesh = process_meshes[i];
+            aiMesh* mesh = process_meshes[i].mesh;
             std::string mesh_name_safe = safe_ai_string(mesh->mName);
             INFO(LogModelImporter, "[{}/{}] Processing mesh [{}]", i, scene->mNumMeshes, mesh_name_safe);
             
             std::shared_ptr<Material> material;
-            std::shared_ptr<Mesh> mesh_asset = process_mesh(mesh, scene, i, mtl_materials, mtl_name_to_index, mtl_settings, material);
+            std::shared_ptr<Mesh> mesh_asset = process_mesh(mesh, process_meshes[i].transform, scene, i, mtl_materials, mtl_name_to_index, mtl_settings, material);
             
             if (mesh_asset) {
                 model->add_slot(mesh_asset, material);
@@ -459,17 +463,26 @@ std::shared_ptr<Model> ModelImporter::import_model(const std::string& physical_p
     }
 }
 
-void ModelImporter::process_node(aiNode* node, const aiScene* scene, std::vector<aiMesh*>& process_meshes) {
+void ModelImporter::process_node(aiNode* node, const aiScene* scene, const Mat4& parent_transform,
+    std::vector<MeshInstance>& process_meshes) {
+    Mat4 local;
+    for (int row = 0; row < 4; ++row) {
+        for (int col = 0; col < 4; ++col) {
+            local.m[row][col] = node->mTransformation[col][row];
+        }
+    }
+    const Mat4 world = local * parent_transform;
     for (unsigned int i = 0; i < node->mNumMeshes; i++) {
-        process_meshes.push_back(scene->mMeshes[node->mMeshes[i]]);
+        process_meshes.push_back({scene->mMeshes[node->mMeshes[i]], world});
     }
     for (unsigned int i = 0; i < node->mNumChildren; i++) {
-        process_node(node->mChildren[i], scene, process_meshes);
+        process_node(node->mChildren[i], scene, world, process_meshes);
     }
 }
 
 std::shared_ptr<Mesh> ModelImporter::process_mesh(
     aiMesh* mesh, 
+    const Mat4& node_transform,
     const aiScene* scene, 
     int index,
     const std::vector<MtlMaterial>& mtl_materials,
@@ -498,18 +511,37 @@ std::shared_ptr<Mesh> ModelImporter::process_mesh(
     positions.reserve(mesh->mNumVertices);
     normals.reserve(mesh->mNumVertices);
     tex_coords.reserve(mesh->mNumVertices);
+
+    // Static geometry is flattened into model space. Skinned geometry keeps its
+    // local coordinates, which are paired with bone offset matrices.
+    const Mat4 transform = mesh->HasBones() ? Mat4::Identity() : node_transform;
+    const Mat4 normal_transform = transform.inverse().transpose();
+    const bool mirrored = DirectX::XMVectorGetX(DirectX::XMMatrixDeterminant(transform.load())) < 0.0f;
     
     for (unsigned int i = 0; i < mesh->mNumVertices; i++) {
-        positions.emplace_back(mesh->mVertices[i].x, mesh->mVertices[i].y, mesh->mVertices[i].z);
+        const auto& position = mesh->mVertices[i];
+        const Vec4 transformed_position = Vec4(position.x, position.y, position.z, 1.0f) * transform;
+        positions.emplace_back(transformed_position.x, transformed_position.y, transformed_position.z);
         
         if (mesh->HasNormals()) {
-            normals.emplace_back(mesh->mNormals[i].x, mesh->mNormals[i].y, mesh->mNormals[i].z);
+            const auto& n = mesh->mNormals[i];
+            const Vec4 transformed_normal = Vec4(n.x, n.y, n.z, 0.0f) * normal_transform;
+            normals.push_back(Vec3(transformed_normal.x, transformed_normal.y, transformed_normal.z).normalized());
         } else {
             normals.emplace_back(0.0f, 1.0f, 0.0f); // Default normal
         }
         
         if (mesh->HasTangentsAndBitangents()) {
-            tangents.emplace_back(mesh->mTangents[i].x, mesh->mTangents[i].y, mesh->mTangents[i].z, 1.0f);
+            const auto& t = mesh->mTangents[i];
+            const auto& b = mesh->mBitangents[i];
+            const Vec4 transformed_tangent = Vec4(t.x, t.y, t.z, 0.0f) * transform;
+            const Vec4 transformed_bitangent = Vec4(b.x, b.y, b.z, 0.0f) * transform;
+            const Vec3 normal = normals.back();
+            Vec3 tangent(transformed_tangent.x, transformed_tangent.y, transformed_tangent.z);
+            tangent = (tangent - normal * normal.dot(tangent)).normalized();
+            const Vec3 bitangent(transformed_bitangent.x, transformed_bitangent.y, transformed_bitangent.z);
+            const float sign = normal.cross(tangent).dot(bitangent) < 0.0f ? -1.0f : 1.0f;
+            tangents.emplace_back(tangent.x, tangent.y, tangent.z, sign);
         } else {
             tangents.emplace_back(1.0f, 0.0f, 0.0f, 1.0f); // Default tangent
         }
@@ -524,8 +556,9 @@ std::shared_ptr<Mesh> ModelImporter::process_mesh(
     // Extract indices
     for (unsigned int i = 0; i < mesh->mNumFaces; i++) {
         const aiFace& face = mesh->mFaces[i];
-        for (unsigned int j = 0; j < face.mNumIndices; j++) {
-            indices.push_back(face.mIndices[j]);
+        if (face.mNumIndices != 3) continue;
+        for (unsigned int j = 0; j < 3; j++) {
+            indices.push_back(face.mIndices[mirrored ? 2 - j : j]);
         }
     }
     
@@ -888,7 +921,6 @@ std::shared_ptr<Mesh> ModelImporter::process_mesh(
         // Use mesh's material index for consistent material caching
         int mat_index = (mesh->mMaterialIndex >= 0) ? static_cast<int>(mesh->mMaterialIndex) : index;
         out_material = get_or_create_material(mat_name_str, ai_mat, mtl_mat, mat_index, mat_type);
-        out_material = get_or_create_material(mat_name_str, ai_mat, mtl_mat, mat_index, mat_type);
     }
     
     return mesh_asset;
@@ -898,22 +930,32 @@ UID ModelImporter::generate_sub_asset_uid(const std::string& sub_name, const std
     std::string base_path = !virtual_path_.empty() ? virtual_path_ : source_path_.string();
     std::string mat_type_str = (settings_.material_type == ModelMaterialType::NPR) ? "npr" : "pbr";
     std::string key = base_path + "::" + sub_name + "::" + type_suffix + "::" + mat_type_str;
+    if (options_.convert_to_left_handed) key += "::lh";
+    if (options_.specular_map_is_arm) key += "::specular_arm";
     return UID::from_hash(key);
 }
 
 // Helper to load texture with error handling
 std::shared_ptr<Texture> ModelImporter::load_texture_safe(const std::string& path_str, const std::string& type_name, RHIFormat format) {
-    try {
-        std::filesystem::path tex_path = output_dir_ / path_str;
-        if (settings_.force_png_texture) {
-            tex_path.replace_extension(".png");
-        }
+    auto path = safe_path_from_string(path_str);
+    if (!path) return nullptr;
+    const std::filesystem::path candidates[] = {output_dir_ / *path, *path, output_dir_ / path->filename()};
+    for (auto tex_path : candidates) {
+        if (settings_.force_png_texture) tex_path.replace_extension(".png");
         std::error_code error;
-        if (std::filesystem::exists(tex_path, error)) {
-            return std::make_shared<Texture>(tex_path.string(), format);
+        if (!std::filesystem::is_regular_file(tex_path, error)) continue;
+        const auto canonical = std::filesystem::weakly_canonical(tex_path, error);
+        if (error) continue;
+        const std::string key = canonical.generic_string() + "::" + std::to_string(format);
+        if (auto it = texture_cache_.find(key); it != texture_cache_.end()) return it->second;
+        auto texture = std::make_shared<Texture>(canonical.string(), format);
+        if (!texture->texture_) {
+            WARN(LogModelImporter, "Failed to decode {} texture: {}", type_name, canonical.string());
+            return nullptr;
         }
-    } catch (const std::exception& e) {
-        ERR(LogModelImporter, "Failed to load {} texture '{}': {}", type_name, path_str, e.what());
+        texture->set_uid(UID::from_hash(key));
+        texture_cache_[key] = texture;
+        return texture;
     }
     return nullptr;
 }
@@ -1107,27 +1149,50 @@ std::shared_ptr<Material> ModelImporter::get_or_create_material(
                 }
             }
         }
-        // Fall back to FBX material data
-        else {
+        // Fall back per property, including when an MTL texture is missing.
+        {
             // Diffuse texture
-            if (auto tex = load_material_texture(ai_mat, aiTextureType_DIFFUSE)) {
-                pbr_mat->set_diffuse_texture(tex);
+            if (!pbr_mat->get_diffuse_texture()) {
+                auto tex = load_material_texture(ai_mat, aiTextureType_BASE_COLOR);
+                if (!tex) tex = load_material_texture(ai_mat, aiTextureType_DIFFUSE);
+                if (tex) pbr_mat->set_diffuse_texture(tex);
             }
             // Normal texture
-            if (auto tex = load_material_texture(ai_mat, aiTextureType_NORMALS, FORMAT_R8G8B8A8_UNORM)) {
-                pbr_mat->set_normal_texture(tex);
+            if (!pbr_mat->get_normal_texture()) {
+                if (auto tex = load_material_texture(ai_mat, aiTextureType_NORMALS, FORMAT_R8G8B8A8_UNORM)) {
+                    pbr_mat->set_normal_texture(tex);
+                }
             }
+            if (options_.specular_map_is_arm && !pbr_mat->get_arm_texture()) {
+                if (auto tex = load_material_texture(ai_mat, aiTextureType_SPECULAR, FORMAT_R8G8B8A8_UNORM)) {
+                    pbr_mat->set_arm_texture(tex);
+                    pbr_mat->set_roughness(1.0f);
+                    pbr_mat->set_metallic(1.0f);
+                }
+            }
+            if (!pbr_mat->get_emission_texture()) {
+                if (auto tex = load_material_texture(ai_mat, aiTextureType_EMISSIVE)) {
+                    pbr_mat->set_emission_texture(tex);
+                }
+            }
+            if (!mtl_mat) {
             // Roughness/Metallic from FBX properties
             float metallic = 0.0f, roughness = 0.5f;
             ai_mat->Get(AI_MATKEY_METALLIC_FACTOR, metallic);
             ai_mat->Get(AI_MATKEY_ROUGHNESS_FACTOR, roughness);
             if (roughness < 0.001f) roughness = 0.5f;
-            pbr_mat->set_metallic(metallic);
-            pbr_mat->set_roughness(roughness);
+            if (!pbr_mat->get_arm_texture()) {
+                pbr_mat->set_metallic(metallic);
+                pbr_mat->set_roughness(roughness);
+            }
             // Diffuse color
             aiColor4D base_color;
             if (AI_SUCCESS == ai_mat->Get(AI_MATKEY_COLOR_DIFFUSE, base_color)) {
                 pbr_mat->set_diffuse(Vec4(base_color.r, base_color.g, base_color.b, base_color.a));
+            }
+            aiColor3D emission(0.0f, 0.0f, 0.0f);
+            ai_mat->Get(AI_MATKEY_COLOR_EMISSIVE, emission);
+            pbr_mat->set_emission(Vec4(emission.r, emission.g, emission.b, 1.0f));
             }
         }
         
@@ -1142,6 +1207,10 @@ std::shared_ptr<Material> ModelImporter::get_or_create_material(
     }
     
     material->set_uid(mat_uid);
+    int two_sided = 0;
+    if (ai_mat->Get(AI_MATKEY_TWOSIDED, two_sided) == AI_SUCCESS && two_sided) {
+        material->set_cull_mode(CULL_MODE_NONE);
+    }
     material->mark_dirty();
     
     material_cache_[cache_key] = material;
@@ -1152,45 +1221,8 @@ std::shared_ptr<Texture> ModelImporter::load_material_texture(aiMaterial* mat, a
     for (unsigned int i = 0; i < mat->GetTextureCount(type); i++) {
         aiString str;
         mat->GetTexture(type, i, &str);
-        std::string texture_name = str.C_Str();
-        
-        // Check cache
-        auto cache_it = texture_cache_.find(texture_name);
-        if (cache_it != texture_cache_.end()) {
-            return cache_it->second;
-        }
-
-        std::filesystem::path found_path;
-        if (auto p = safe_path_from_string(texture_name)) {
-            // FBX 路径策略：准备多种可能的路径进行尝试
-            std::vector<std::filesystem::path> try_paths = {
-                *p,                              // 1. 尝试原始路径 (如果是相对路径或是恰好存在的绝对路径)
-                output_dir_ / *p,                // 2. 尝试相对于模型所在目录
-                output_dir_ / p->filename()      // 3. [FBX关键] 忽略原路径的目录，只用文件名在模型同级目录找
-            };
-
-            for (auto try_path : try_paths) {
-                // 补上缺失的 PNG 强制转换逻辑
-                if (settings_.force_png_texture) {
-                    try_path.replace_extension(".png");
-                }
-                
-                std::error_code error;
-                if (std::filesystem::exists(try_path, error)) {
-                    found_path = try_path;
-                    break; // 找到了就跳出
-                }
-            }
-        }
-
-        if (found_path.empty()) {
-            WARN(LogModelImporter, "Failed to find texture for: {}", texture_name);
-            continue; // 尝试下一个索引
-        }
-        
-        auto texture = std::make_shared<Texture>(found_path.string(), format);
-        texture_cache_[texture_name] = texture;
-        return texture;
+        if (auto texture = load_texture_safe(str.C_Str(), "material", format)) return texture;
+        WARN(LogModelImporter, "Failed to load texture: {}", str.C_Str());
     }
     return nullptr;
 }

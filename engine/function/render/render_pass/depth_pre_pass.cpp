@@ -3,6 +3,8 @@
 #include "engine/main/engine_context.h"
 #include "engine/core/log/Log.h"
 #include "engine/function/render/render_system/render_system.h"
+#include "engine/function/render/render_pass/mesh_pass.h"
+#include "engine/function/render/render_resource/material.h"
 
 #include <cstring>
 
@@ -191,6 +193,9 @@ void DepthPrePass::build(RDGBuilder& builder, RDGTextureHandle depth_target, con
 
         // Draw Batches
         for (const auto& batch : batches) {
+            // Alpha-tested materials write depth in their material pass so holes
+            // in foliage do not occlude the scene during this opaque prepass.
+            if (batch.material && !batch.material->use_for_depth_pass()) continue;
             // Update PerObject Buffer
             if (per_object_buffer_) {
                 PerObjectData obj_data;
