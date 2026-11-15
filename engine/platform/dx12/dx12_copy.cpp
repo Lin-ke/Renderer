@@ -12,7 +12,7 @@ ComPtr<ID3D12Resource> staging_buffer(DX12Backend& backend, uint64_t size, D3D12
     ComPtr<ID3D12Resource> resource;
     auto state = type == D3D12_HEAP_TYPE_READBACK ? D3D12_RESOURCE_STATE_COPY_DEST : D3D12_RESOURCE_STATE_GENERIC_READ;
     if (FAILED(backend.get_device()->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, state, nullptr, IID_PPV_ARGS(&resource))))
-        ERR(LogDX12Copy, "Cannot allocate texture transfer buffer");
+        ERR(LogDX12Copy, "Cannot allocate transfer buffer");
     return resource;
 }
 struct Footprints {
@@ -36,6 +36,33 @@ Footprints footprints(DX12Backend& backend, DX12Texture& texture, TextureSubreso
     return result;
 }
 }
+
+RHIBufferRef DX12Backend::create_static_buffer(const RHIBufferInfo& info, const void* data) {
+    if (!data || !info.size || !device_) return nullptr;
+    auto upload = staging_buffer(*this, info.size, D3D12_HEAP_TYPE_UPLOAD);
+    if (!upload) return nullptr;
+    void* mapped = nullptr;
+    const D3D12_RANGE read = {0, 0};
+    if (FAILED(upload->Map(0, &read, &mapped))) return nullptr;
+    std::memcpy(mapped, data, info.size);
+    upload->Unmap(0, nullptr);
+
+    auto local_info = info;
+    local_info.memory_usage = MEMORY_USAGE_GPU_ONLY;
+    local_info.creation_flag = BUFFER_CREATION_NONE;
+    auto buffer = create_buffer(local_info);
+    if (!buffer) return nullptr;
+
+    ensure_recording();
+    if (!is_recording()) return nullptr;
+    auto* destination = static_cast<DX12Buffer*>(buffer.get());
+    destination->transition(get_command_list(), D3D12_RESOURCE_STATE_COPY_DEST);
+    get_command_list()->CopyBufferRegion(destination->get_resource(), 0, upload.Get(), 0, info.size);
+    retain(buffer);
+    retain_upload(std::move(upload));
+    return buffer;
+}
+
 void DX12CommandContext::copy_buffer(RHIBufferRef src, uint64_t src_offset, RHIBufferRef dst, uint64_t dst_offset, uint64_t size) {
     auto backend = backend_.lock(); if (!backend || !src || !dst) return;
     if (src_offset > src->get_info().size || size > src->get_info().size - src_offset || dst_offset > dst->get_info().size || size > dst->get_info().size - dst_offset) return;

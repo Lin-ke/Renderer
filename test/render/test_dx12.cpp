@@ -9,6 +9,7 @@
 #include "engine/function/framework/entity.h"
 #include "engine/function/framework/component/camera_component.h"
 #include "engine/function/framework/component/transform_component.h"
+#include <array>
 #include <cstring>
 
 namespace {
@@ -34,6 +35,39 @@ RHICommandListRef make_commands(bool bypass) {
     auto pool = backend->create_command_pool({backend->get_queue({QUEUE_TYPE_GRAPHICS, 0})});
     return pool->create_command_list(bypass);
 }
+}
+
+TEST_CASE("DX12 upload buffer can publish a partial mapped write", "[rhi][dx12][buffer_range]") {
+    test_utils::TestContext::reset();
+    auto backend = EngineContext::rhi();
+    REQUIRE(backend->get_backend_info().type == BACKEND_DX12);
+
+    const std::array<uint32_t, 3> initial{11, 22, 33};
+    auto upload = backend->create_buffer({.size = sizeof(initial), .memory_usage = MEMORY_USAGE_CPU_TO_GPU});
+    auto readback = backend->create_buffer({.size = sizeof(initial), .memory_usage = MEMORY_USAGE_GPU_TO_CPU});
+    REQUIRE(upload);
+    REQUIRE(readback);
+
+    auto* mapped = static_cast<uint32_t*>(upload->map());
+    REQUIRE(mapped);
+    memcpy(mapped, initial.data(), sizeof(initial));
+    upload->unmap();
+
+    mapped = static_cast<uint32_t*>(upload->map());
+    REQUIRE(mapped);
+    mapped[1] = 42;
+    upload->unmap_written_range(sizeof(uint32_t), sizeof(uint32_t));
+
+    auto command = backend->get_immediate_command();
+    command->copy_buffer(upload, 0, readback, 0, sizeof(initial));
+    command->flush();
+    const auto* result = static_cast<const uint32_t*>(readback->map());
+    REQUIRE(result);
+    CHECK(result[0] == 11);
+    CHECK(result[1] == 42);
+    CHECK(result[2] == 33);
+    readback->unmap();
+    test_utils::TestContext::reset();
 }
 
 TEST_CASE("Root layouts merge stages and preserve register namespaces", "[rhi][dx12]") {
@@ -282,5 +316,33 @@ TEST_CASE("DX12 RDG storage buffers root constants and consecutive UAV writes", 
     for (uint32_t i = 0; i < 16; ++i) REQUIRE(result[i] == i*2+14);
     readback->unmap();
     REQUIRE_FALSE(backend->check_debug_messages("RDG storage buffers and constants"));
+    test_utils::TestContext::reset();
+}
+
+TEST_CASE("DX12 static geometry retains its staging data until submission", "[rhi][dx12][static_geometry]") {
+    test_utils::TestContext::reset();
+    auto backend = EngineContext::rhi();
+    backend->check_debug_messages();
+
+    std::array<uint32_t, 3> indices{1, 2, 3};
+    auto buffer = backend->create_static_buffer({.size = sizeof(indices), .stride = sizeof(uint32_t),
+        .memory_usage = MEMORY_USAGE_CPU_TO_GPU, .type = RESOURCE_TYPE_INDEX_BUFFER}, indices.data());
+    REQUIRE(buffer);
+    CHECK(buffer->get_info().memory_usage == MEMORY_USAGE_GPU_ONLY);
+    indices.fill(0);
+
+    auto readback = backend->create_buffer({.size = sizeof(indices), .memory_usage = MEMORY_USAGE_GPU_TO_CPU});
+    REQUIRE(readback);
+    auto command = backend->get_immediate_command();
+    command->copy_buffer(buffer, 0, readback, 0, sizeof(indices));
+    command->flush();
+    auto* copied = static_cast<const uint32_t*>(readback->map());
+    REQUIRE(copied);
+    CHECK(copied[0] == 1);
+    CHECK(copied[1] == 2);
+    CHECK(copied[2] == 3);
+    readback->unmap();
+    CHECK_FALSE(backend->check_debug_messages("static geometry upload"));
+
     test_utils::TestContext::reset();
 }

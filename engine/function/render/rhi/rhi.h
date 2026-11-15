@@ -65,6 +65,8 @@ public:
 
     // Buffers, Textures, Shaders, Acceleration Structures
     virtual RHIBufferRef create_buffer(const RHIBufferInfo& info) = 0;
+    // Copies the input bytes immediately and orders any GPU upload before subsequent commands.
+    virtual RHIBufferRef create_static_buffer(const RHIBufferInfo& info, const void* data);
 
     virtual RHITextureRef create_texture(const RHITextureInfo& info) = 0;
 

@@ -379,14 +379,7 @@ void SkyboxPass::build(RDGBuilder& builder, RDGTextureHandle color_target,
         
 
         
-        // Ensure cube texture is ready
-        if (!material->ensure_cube_texture_ready()) {
-            WARN(LogSkyboxPass, "Skybox {} cube texture not ready", skybox_index);
-            continue;
-        }
-        
-
-        
+        // Cubemaps are prepared before recording the frame.
         auto cube_texture = material->get_cube_texture();
         if (!cube_texture) {
             WARN(LogSkyboxPass, "Skybox {} cube_texture wrapper is null", skybox_index);

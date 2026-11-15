@@ -20,6 +20,14 @@ xmake run sun_temple "game/assets/sun_temple/source" --capture "build/test-resul
 WASD 移动，右键拖动转向，Space/Ctrl 升降，Ctrl+S 保存场景。
 `--frames N` 限制运行帧数，`--verbose` 输出完整导入日志。
 
+```powershell
+xmake f --mode=release
+xmake build sun_temple
+xmake run sun_temple "game/assets/sun_temple/source" --benchmark --frames 150
+```
+
+基准会跳过前 30 帧，输出平均帧时间、P95、录制与提交耗时、GPU Pass 耗时及可见网格批次数。加入 `--capture <png-path>` 可在隐藏窗口运行并保存第 3 帧，用于比较像素输出。
+
 ## 实现
 
 - 静态节点变换烘焙到 Mesh；法线使用逆转置，镜像节点修正绕序及切线符号。
@@ -28,12 +36,12 @@ WASD 移动，右键拖动转向，Space/Ctrl 升降，Ctrl+S 保存场景。
 - GBuffer 使用实际切线构建 TBN，重建 BC5 法线 Z；材质剔除模式支持双面植被。
 - 场景使用导出相机的位置与朝向，并配置方向光。当前照明没有完整复现原场景的环境光和反射效果。
 
-## 当前验证状态（阶段性提交）
+## 验证状态
 
 - Debug 目标曾成功构建，首次真实导入生成了 1,056 个 Mesh 的场景截图：`build/test-results/sun_temple_first.png`。
 - 首张截图能显示几何与材质，拱顶仍有条纹，需要继续定位深度问题。
 - 新增变换导入回归测试运行时出现 SIGSEGV，尚未定位。
-- 最后的天空盒、原生资源重载及 GPU 回读测试增量尚未完成验证；全量测试尚未通过。
+- Sun Temple 集成测试已通过，覆盖实际导入、原生资源重载和隐藏窗口截图。全量 Debug 测试仍有可在改动前复现的 DX12 诊断消息、像素断言和模型导入失败。
 
 ```powershell
 xmake build utest

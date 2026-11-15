@@ -86,6 +86,7 @@ public:
      * @param batches Output vector to fill with draw batches
      */
     void collect_draw_batches(std::vector<render::DrawBatch>& batches);
+    const std::vector<render::DrawBatch>& get_current_batches() const { return current_batches_; }
 
     /**
      * @brief Build RDG for rendering all collected batches
@@ -108,7 +109,7 @@ public:
     void cleanup_for_test();
 
 private:
-    void prepare_mesh_pass();
+    void collect_draw_batches(std::vector<render::DrawBatch>& batches, const Mat4* view_projection);
     std::vector<render::DrawBatch> current_batches_;
 
     std::shared_ptr<render::ForwardPass> forward_pass_;

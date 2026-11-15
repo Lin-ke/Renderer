@@ -143,7 +143,8 @@ public:
     
 private:
     // RDG methods
-    void build_and_execute_rdg(uint32_t frame_index, const RenderPacket& packet);
+    void build_and_execute_rdg(uint32_t frame_index, const RenderPacket& packet,
+                               const std::vector<SkyboxComponent*>& skyboxes);
     void build_fallback_rdg(RDGBuilder& builder);
     
     // RDG Visualization

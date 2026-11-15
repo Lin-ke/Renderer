@@ -157,7 +157,7 @@ void DX12GPUProfiler::collect_results() {
         uint64_t ts_begin = timestamps[i * 2];
         uint64_t ts_end = timestamps[i * 2 + 1];
         float elapsed_ms = 0.0f;
-        if (ts_end >= ts_begin) {
+        if (ts_begin != 0 && ts_end >= ts_begin) {
             elapsed_ms = static_cast<float>((static_cast<double>(ts_end - ts_begin) / frequency) * 1000.0);
         }
         results_.push_back({ fq.scopes[i].name, elapsed_ms });

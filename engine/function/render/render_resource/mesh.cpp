@@ -79,7 +79,7 @@ void Mesh::create_gpu_buffers() {
     }
 
     if (!position_.empty()) {
-        vertex_buffer_ = std::make_shared<VertexBuffer>();
+        vertex_buffer_ = std::make_shared<VertexBuffer>(/*static_storage=*/true);
         vertex_buffer_->set_position(position_);
         if (!normal_.empty()) {
             vertex_buffer_->set_normal(normal_);
@@ -102,7 +102,7 @@ void Mesh::create_gpu_buffers() {
     }
 
     if (!index_.empty()) {
-        index_buffer_ = std::make_shared<IndexBuffer>();
+        index_buffer_ = std::make_shared<IndexBuffer>(/*static_storage=*/true);
         index_buffer_->set_index(index_);
     }
 }

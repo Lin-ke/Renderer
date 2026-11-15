@@ -260,9 +260,12 @@ RHITextureRef DX12Swapchain::get_new_frame(RHIFenceRef fence, RHISemaphoreRef) {
 void DX12Swapchain::present(RHISemaphoreRef) {
     auto backend = backend_.lock();
     if (!backend || !swap_chain_) return;
-    backend->ensure_recording();
-    static_cast<DX12Texture*>(back_buffers_[current_index_].get())->transition(backend->get_command_list(), D3D12_RESOURCE_STATE_PRESENT);
-    backend->submit_and_wait();
+    auto* back_buffer = static_cast<DX12Texture*>(back_buffers_[current_index_].get());
+    if (back_buffer->get_subresource_state(0) != D3D12_RESOURCE_STATE_PRESENT) {
+        backend->ensure_recording();
+        back_buffer->transition(backend->get_command_list(), D3D12_RESOURCE_STATE_PRESENT);
+    }
+    if (backend->is_recording()) backend->submit_and_wait();
     check_hr(swap_chain_->Present(1, 0), "Present");
     current_index_ = swap_chain_->GetCurrentBackBufferIndex();
 }

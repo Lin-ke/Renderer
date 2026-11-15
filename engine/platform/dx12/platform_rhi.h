@@ -143,6 +143,7 @@ public:
     bool init() override final;
     void* map() override final;
     void unmap() override final;
+    void unmap_written_range(uint64_t offset, uint64_t size) override final;
     std::vector<uint8_t> snapshot_data() const override { return cpu_shadow_; }
     void complete_readback(std::vector<uint8_t> data) { cpu_shadow_ = std::move(data); }
     void destroy() override final;
@@ -484,6 +485,7 @@ public:
     RHICommandContextRef create_command_context(RHICommandPoolRef pool) override final;
 
     RHIBufferRef create_buffer(const RHIBufferInfo& info) override final;
+    RHIBufferRef create_static_buffer(const RHIBufferInfo& info, const void* data) override final;
     RHITextureRef create_texture(const RHITextureInfo& info) override final;
     RHITextureViewRef create_texture_view(const RHITextureViewInfo& info) override final;
     RHISamplerRef create_sampler(const RHISamplerInfo& info) override final;
@@ -517,6 +519,7 @@ public:
     ID3D12GraphicsCommandList* get_command_list() const { return command_list_.Get(); }
 
     void ensure_recording();
+    bool is_recording() const { return is_recording_; }
     void submit_and_wait();
 
     DX12DescriptorAllocator& get_rtv_allocator() { return rtv_allocator_; }

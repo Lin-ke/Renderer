@@ -17,28 +17,27 @@ RHIBackendRef global_rhi_backend() {
     return EngineContext::rhi();
 }
 
-VertexBuffer::VertexBuffer() {
-}
-
 VertexBuffer::~VertexBuffer() {
 }
 
 void VertexBuffer::set_buffer_data(void* data, uint32_t size, RHIBufferRef& buffer, uint32_t& id, uint32_t slot) {
     assert(size > 0 && "VertexBuffer::set_buffer_data: size must be greater than 0");
     assert(data != nullptr && "VertexBuffer::set_buffer_data: data cannot be null");
-    if (!buffer || buffer->get_info().size < size) {
+    if (static_storage_ || !buffer || buffer->get_info().size < size) {
         RHIBufferInfo info = {};
         info.size = size;
         info.stride = (size > 0 && vertex_num_ > 0) ? (size / vertex_num_) : 0;
         info.memory_usage = MEMORY_USAGE_CPU_TO_GPU;
         info.type = RESOURCE_TYPE_VERTEX_BUFFER;
         info.creation_flag = BUFFER_CREATION_PERSISTENT_MAP;
-        buffer = EngineContext::rhi()->create_buffer(info);
+        auto backend = EngineContext::rhi();
+        buffer = static_storage_ ? backend->create_static_buffer(info, data) : backend->create_buffer(info);
         if (!buffer) {
             ERR(LogBuffer, "Failed to create buffer for vertex data");
             return;
         }
     }
+    if (static_storage_) return;
 
     void* mapped = buffer->map();
     if (!mapped) {
@@ -87,19 +86,21 @@ void IndexBuffer::set_index(const std::vector<uint32_t>& index) {
     uint32_t size = index.size() * sizeof(uint32_t);
 
     assert(size > 0 && "IndexBuffer::set_index: index array cannot be empty");
-    if (!buffer_ || buffer_->get_info().size < size) {
+    if (static_storage_ || !buffer_ || buffer_->get_info().size < size) {
         RHIBufferInfo info = {};
         info.size = size;
         info.stride = sizeof(uint32_t);
         info.memory_usage = MEMORY_USAGE_CPU_TO_GPU;
         info.type = RESOURCE_TYPE_INDEX_BUFFER;
         info.creation_flag = BUFFER_CREATION_PERSISTENT_MAP;
-        buffer_ = EngineContext::rhi()->create_buffer(info);
+        auto backend = EngineContext::rhi();
+        buffer_ = static_storage_ ? backend->create_static_buffer(info, index.data()) : backend->create_buffer(info);
         if (!buffer_) {
             ERR(LogBuffer, "Failed to create buffer for index data");
             return;
         }
     }
+    if (static_storage_) return;
 
     void* mapped = buffer_->map();
     if (!mapped) {

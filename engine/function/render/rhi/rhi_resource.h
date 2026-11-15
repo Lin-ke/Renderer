@@ -100,6 +100,8 @@ public:
 
     virtual void* map() = 0;
     virtual void unmap() = 0;
+    // The caller changed only this byte range of the mapped buffer.
+    virtual void unmap_written_range(uint64_t, uint64_t) { unmap(); }
     virtual std::vector<uint8_t> snapshot_data() const { return {}; }
 
     inline const RHIBufferInfo& get_info() const { return info_; }

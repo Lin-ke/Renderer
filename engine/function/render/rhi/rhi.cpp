@@ -4,6 +4,7 @@
 #include "engine/platform/dx11/platform_rhi.h"
 #include "engine/platform/dx12/platform_rhi.h"
 #include <algorithm>
+#include <cstring>
 
 RHIBackendRef RHIBackend::backend_ = nullptr;
 
@@ -64,6 +65,19 @@ RHIBackendRef RHIBackend::init(const RHIBackendInfo& info) {
         }
     }
     return backend_;
+}
+
+RHIBufferRef RHIBackend::create_static_buffer(const RHIBufferInfo& info, const void* data) {
+    if (!data || !info.size) return nullptr;
+    auto upload_info = info;
+    upload_info.memory_usage = MEMORY_USAGE_CPU_TO_GPU;
+    auto buffer = create_buffer(upload_info);
+    if (!buffer) return nullptr;
+    auto* mapped = buffer->map();
+    if (!mapped) return nullptr;
+    std::memcpy(mapped, data, info.size);
+    buffer->unmap();
+    return buffer;
 }
 
 void RHIBackend::tick() {

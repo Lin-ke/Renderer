@@ -117,7 +117,9 @@ void RenderSystem::init(void *window_handle) {
 void RenderSystem::init_base_resource() {
 	RHIBackendInfo info = {};
 	info.type = BACKEND_DX12;
+#if defined(_DEBUG_)
 	info.enable_debug = true;
+#endif
 	backend_ = RHIBackend::init(info);
 
 	if (!backend_) {
@@ -300,7 +302,8 @@ void RenderSystem::init_passes() {
 
 
 
-void RenderSystem::build_and_execute_rdg(uint32_t frame_index, const RenderPacket &packet) {
+void RenderSystem::build_and_execute_rdg(uint32_t frame_index, const RenderPacket &packet,
+                                       const std::vector<SkyboxComponent *> &skyboxes) {
 	// Create command list from command context
 	CommandListInfo cmd_info;
 	cmd_info.pool = pool_;
@@ -332,9 +335,7 @@ void RenderSystem::build_and_execute_rdg(uint32_t frame_index, const RenderPacke
 											.import(depth_texture_, RESOURCE_STATE_DEPTH_STENCIL_ATTACHMENT)
 											.finish();
 
-	// Collect draw batches
-	std::vector<render::DrawBatch> batches;
-	mesh_manager_->collect_draw_batches(batches);
+	const auto &batches = mesh_manager_->get_current_batches();
 
 	// Get camera data early (needed for both batches and skybox)
 	CameraComponent *camera = packet.active_camera;
@@ -410,19 +411,10 @@ void RenderSystem::build_and_execute_rdg(uint32_t frame_index, const RenderPacke
 	}
 
 	// Build skybox pass (renders after opaque objects)
-	if (enable_skybox_pass_ && skybox_pass_ && skybox_pass_->is_ready() && packet.active_scene) {
+	if (!skyboxes.empty()) {
 		PROFILE_SCOPE("RenderSystem_SkyboxPass");
-		
-		// Collect skybox components from scene
-		std::vector<SkyboxComponent*> skyboxes = 
-			packet.active_scene->get_components<SkyboxComponent>();
-		
-		if (!skyboxes.empty()) {
-			skybox_pass_->build(rdg_builder, color_target, depth_target,
-				camera->get_view_matrix(),
-				camera->get_projection_matrix(),
-				skyboxes);
-		}
+		skybox_pass_->build(rdg_builder, color_target, depth_target,
+				camera->get_view_matrix(), camera->get_projection_matrix(), skyboxes);
 	}
 
 	// Build editor UI pass (renders on top of everything)
@@ -542,7 +534,7 @@ void RenderSystem::build_and_execute_rdg(uint32_t frame_index, const RenderPacke
 	}
 
 	// Capture RDG info for visualization
-	capture_rdg_info(rdg_builder);
+	if (show_ui_ && show_rdg_visualizer_) capture_rdg_info(rdg_builder);
 
 	// Execute the RDG
 	rdg_builder.execute();
@@ -720,6 +712,17 @@ bool RenderSystem::tick(const RenderPacket &packet) {
 		ImGuizmo::BeginFrame();
 	}
 
+	std::vector<SkyboxComponent *> skyboxes;
+	if (enable_skybox_pass_ && skybox_pass_ && skybox_pass_->is_ready() && packet.active_scene &&
+			(packet.active_camera || mesh_manager_->get_active_camera())) {
+		skyboxes = packet.active_scene->get_components<SkyboxComponent>();
+		// Panorama conversion submits commands using the shared DX12 command list.
+		std::erase_if(skyboxes, [](SkyboxComponent *skybox) {
+			auto material = skybox->get_material();
+			return !material || !material->ensure_cube_texture_ready();
+		});
+	}
+
 	command->begin_command();
 	{
 		PROFILE_SCOPE("RenderSystem_SceneRender");
@@ -733,13 +736,13 @@ bool RenderSystem::tick(const RenderPacket &packet) {
 		command->gpu_timestamp_begin_frame();
 
 		// Use RDG-based rendering
-		build_and_execute_rdg(frame_index, packet);
+		build_and_execute_rdg(frame_index, packet, skyboxes);
 
 		// End GPU timestamp frame
 		command->gpu_timestamp_end_frame();
 
 		// Depth visualization
-		if (enable_depth_visualize_ && depth_visualize_initialized_ && depth_visualize_pass_ && depth_visualize_texture_view_) {
+		if (show_ui_ && enable_depth_visualize_ && depth_visualize_initialized_ && depth_visualize_pass_ && depth_visualize_texture_view_) {
 			PROFILE_SCOPE("RenderSystem_DepthVisualize");
 			CameraComponent *camera = packet.active_camera;
 			if (!camera && mesh_manager_) {
@@ -761,15 +764,25 @@ bool RenderSystem::tick(const RenderPacket &packet) {
 		}
 
 		command->end_render_pass();
+		if (swapchain_texture) {
+			command->texture_barrier({swapchain_texture, RESOURCE_STATE_COLOR_ATTACHMENT, RESOURCE_STATE_PRESENT});
+		}
 	}
 	command->end_command();
 
-	command->execute(resource.fence, resource.start_semaphore, resource.finish_semaphore);
+	{
+		PROFILE_SCOPE("RenderSystem_Submit");
+		command->execute(resource.fence, resource.start_semaphore, resource.finish_semaphore);
+	}
 	last_rendered_texture_ = swapchain_texture;
 
-	swapchain_->present(resource.finish_semaphore);
+	{
+		PROFILE_SCOPE("RenderSystem_Present");
+		swapchain_->present(resource.finish_semaphore);
+	}
 
 	if (backend_) {
+		PROFILE_SCOPE("RenderSystem_ResourceTick");
 		backend_->tick();
 	}
 

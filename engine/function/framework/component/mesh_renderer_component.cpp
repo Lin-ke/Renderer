@@ -5,6 +5,8 @@
 #include "engine/main/engine_context.h"
 #include "engine/function/render/render_resource/render_resource_manager.h"
 #include "engine/core/log/Log.h"
+#include <cmath>
+#include <optional>
 
 DEFINE_LOG_TAG(LogMeshRenderer, "MeshRenderer");
 
@@ -133,14 +135,41 @@ MaterialRef MeshRendererComponent::get_material(uint32_t index) const {
     return nullptr;
 }
 
-void MeshRendererComponent::collect_draw_batch(std::vector<render::DrawBatch>& batches) {
+namespace {
+Frustum local_frustum(const Mat4& local_to_clip) {
+    const Vec4 x = local_to_clip.col(0);
+    const Vec4 y = local_to_clip.col(1);
+    const Vec4 z = local_to_clip.col(2);
+    const Vec4 w = local_to_clip.col(3);
+    // D3D clip space uses -w <= x,y <= w and 0 <= z <= w.
+    return {{w + x, w - x, w + y, w - y, z, w - z}};
+}
+
+bool outside_frustum(const BoundingBox& box, const Frustum& frustum) {
+    for (const Vec4& plane : frustum.planes) {
+        const Vec4 corner(plane.x >= 0 ? box.max.x : box.min.x,
+                          plane.y >= 0 ? box.max.y : box.min.y,
+                          plane.z >= 0 ? box.max.z : box.min.z, 1.0f);
+        const Vec4 products = plane * corner;
+        const float magnitude = std::abs(products.x) + std::abs(products.y) + std::abs(products.z) + std::abs(products.w);
+        if (products.dot(Vec4::Ones()) < -1e-5f * magnitude) return true;
+    }
+    return false;
+}
+} // namespace
+
+void MeshRendererComponent::collect_draw_batch(std::vector<render::DrawBatch>& batches, const Mat4* view_projection) {
     if (!model_ || !get_owner()) return;
     auto transform = get_owner()->get_component<TransformComponent>();
     if (!transform) return;
-    Mat4 model_mat = transform->get_world_matrix();
+    const Mat4 model_mat = transform->get_world_matrix();
+    const Mat4 inv_model = model_mat.inverse();
+    std::optional<Frustum> frustum;
+    if (view_projection) frustum = local_frustum(model_mat * *view_projection);
     for (uint32_t i = 0; i < model_->get_submesh_count(); i++) {
         auto mesh = model_->get_mesh(i);
         if (!mesh) continue;
+        if (frustum && outside_frustum(mesh->get_bounding_box(), *frustum)) continue;
         render::DrawBatch batch;
         batch.object_id = (i < object_ids_.size()) ? object_ids_[i] : 0;
         auto vb = mesh->get_vertex_buffer();
@@ -156,7 +185,7 @@ void MeshRendererComponent::collect_draw_batch(std::vector<render::DrawBatch>& b
             batch.index_count = ib->index_num();
         }
         batch.model_matrix = model_mat;
-        batch.inv_model_matrix = model_mat.inverse();
+        batch.inv_model_matrix = inv_model;
         if (i < materials_.size() && materials_[i]) {
             batch.material = materials_[i];
         } else if (model_->get_material(i)) {

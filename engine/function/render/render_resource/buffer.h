@@ -14,7 +14,8 @@ RHIBackendRef global_rhi_backend();
 
 class VertexBuffer {
 public:
-    VertexBuffer();
+    VertexBuffer() = default;
+    explicit VertexBuffer(bool static_storage) : static_storage_(static_storage) {}
     ~VertexBuffer();
 
     void set_position(const std::vector<Vec3>& position);
@@ -51,12 +52,14 @@ private:
     void set_buffer_data(void* data, uint32_t size, RHIBufferRef& buffer, uint32_t& id, uint32_t slot);
 
     uint32_t vertex_num_ = 0;
+    bool static_storage_ = false;
 };
 using VertexBufferRef = std::shared_ptr<VertexBuffer>;
 
 class IndexBuffer {
 public:
     IndexBuffer() = default;
+    explicit IndexBuffer(bool static_storage) : static_storage_(static_storage) {}
     ~IndexBuffer();
 
     void set_index(const std::vector<uint32_t>& index);
@@ -70,6 +73,7 @@ public:
 
 private:
     uint32_t index_num_ = 0;
+    bool static_storage_ = false;
 };
 using IndexBufferRef = std::shared_ptr<IndexBuffer>;
 

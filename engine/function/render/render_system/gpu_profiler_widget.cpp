@@ -3,6 +3,7 @@
 
 #include <imgui.h>
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 
 bool GPUProfilerWidget::show_window_ = true;
@@ -47,9 +48,6 @@ void GPUProfilerWidget::draw_window(GPUProfiler& profiler, bool* open) {
         return;
     }
 
-    // Find min/max range for display
-    float min_ms = 0.0f;
-    float max_ms = total_ms;
 
     // Header: total GPU frame time
     ImGui::Text("GPU frame time: %.3f ms", total_ms);
@@ -67,8 +65,9 @@ void GPUProfilerWidget::draw_window(GPUProfiler& profiler, bool* open) {
     // --- Stacked horizontal bar chart ---
     const float bar_height = 24.0f;
     const float bar_width = ImGui::GetContentRegionAvail().x;
-    const float scale_ms = 10.0f; // Scale: 10ms = full width (adjustable)
-    float effective_scale = std::max(total_ms, scale_ms);
+    constexpr float min_scale_ms = 10.0f;
+    constexpr int tick_count = 10;
+    const float scale_ms = std::isfinite(total_ms) ? std::max(total_ms, min_scale_ms) : min_scale_ms;
 
     // Draw two rows of bars like the reference image
     ImVec2 bar_start = ImGui::GetCursorScreenPos();
@@ -83,7 +82,9 @@ void GPUProfilerWidget::draw_window(GPUProfiler& profiler, bool* open) {
     // Draw each pass as a colored segment
     float x_offset = 0.0f;
     for (size_t i = 0; i < results.size(); ++i) {
-        float w = (results[i].time_ms / effective_scale) * bar_width;
+        const float time_ms = results[i].time_ms;
+        if (!std::isfinite(time_ms) || time_ms < 0.0f) continue;
+        float w = std::min(time_ms / scale_ms, 1.0f) * bar_width;
         if (w < 1.0f) w = 1.0f;
 
         ImVec4 col = kPassColors[i % kColorCount];
@@ -99,33 +100,25 @@ void GPUProfilerWidget::draw_window(GPUProfiler& profiler, bool* open) {
         x_offset += w;
     }
 
-    // Draw time scale ticks
-    for (int ms_tick = 1; ms_tick <= (int)effective_scale; ++ms_tick) {
-        float tick_x = bar_start.x + (ms_tick / effective_scale) * bar_width;
+    const float label_y = bar_start.y + bar_height + 4.0f;
+    for (int tick = 0; tick <= tick_count; ++tick) {
+        const float fraction = static_cast<float>(tick) / tick_count;
+        const float tick_x = bar_start.x + fraction * bar_width;
         draw_list->AddLine(
             ImVec2(tick_x, bar_start.y + bar_height - 4),
             ImVec2(tick_x, bar_start.y + bar_height),
             IM_COL32(200, 200, 200, 120));
-    }
-
-    ImGui::Dummy(ImVec2(bar_width, bar_height + 2));
-
-    // --- Scale axis labels ---
-    {
-        char buf[32];
-        for (int ms_tick = 0; ms_tick <= (int)effective_scale; ms_tick += std::max(1, (int)(effective_scale / 10))) {
-            float tick_x = (ms_tick / effective_scale) * bar_width;
-            snprintf(buf, sizeof(buf), "%d", ms_tick);
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + tick_x);
-            ImGui::TextDisabled("%s", buf);
-            ImGui::SameLine();
+        if (tick % 2 == 0) {
+            char label[32];
+            snprintf(label, sizeof(label), "%.3g", fraction * scale_ms);
+            const float width = ImGui::CalcTextSize(label).x;
+            const float left = std::clamp(tick_x - width * 0.5f, bar_start.x,
+                                          bar_start.x + std::max(0.0f, bar_width - width));
+            draw_list->AddText(ImVec2(left, label_y), ImGui::GetColorU32(ImGuiCol_TextDisabled), label);
         }
-        ImGui::NewLine();
-        float center_x = bar_width * 0.45f;
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + center_x);
-        ImGui::TextDisabled("ms");
     }
 
+    ImGui::Dummy(ImVec2(bar_width, bar_height + 4.0f + ImGui::GetTextLineHeight()));
     ImGui::Separator();
 
     // --- Legend (color boxes + names + times) ---

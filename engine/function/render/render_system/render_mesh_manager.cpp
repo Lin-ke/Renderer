@@ -66,7 +66,12 @@ void RenderMeshManager::tick() {
         active_camera_->update_camera_info();
     }
     
-    prepare_mesh_pass();
+    if (active_camera_) {
+        const auto view_projection = active_camera_->get_view_matrix() * active_camera_->get_projection_matrix();
+        collect_draw_batches(current_batches_, &view_projection);
+    } else {
+        collect_draw_batches(current_batches_);
+    }
 }
 
 void RenderMeshManager::register_mesh_renderer(MeshRendererComponent* component) {
@@ -98,12 +103,11 @@ void RenderMeshManager::set_wireframe(bool enable) {
     }
 }
 
-void RenderMeshManager::prepare_mesh_pass() {
-    current_batches_.clear();
-    collect_draw_batches(current_batches_);
+void RenderMeshManager::collect_draw_batches(std::vector<render::DrawBatch>& batches) {
+    collect_draw_batches(batches, nullptr);
 }
 
-void RenderMeshManager::collect_draw_batches(std::vector<render::DrawBatch>& batches) {
+void RenderMeshManager::collect_draw_batches(std::vector<render::DrawBatch>& batches, const Mat4* view_projection) {
     batches.clear();
     
     auto* world = EngineContext::world();
@@ -111,7 +115,7 @@ void RenderMeshManager::collect_draw_batches(std::vector<render::DrawBatch>& bat
         auto world_renderers = world->get_mesh_renderers();
         for (auto* renderer : world_renderers) {
             if (renderer) {
-                renderer->collect_draw_batch(batches);
+                renderer->collect_draw_batch(batches, view_projection);
             }
         }
     }
@@ -130,7 +134,7 @@ void RenderMeshManager::collect_draw_batches(std::vector<render::DrawBatch>& bat
         }
         
         if (!already_added) {
-            renderer->collect_draw_batch(batches);
+            renderer->collect_draw_batch(batches, view_projection);
         }
     }
 }

@@ -20,8 +20,9 @@ public:
     void set_fov(float fovy) { this->fovy_ = fovy; }
     void set_near(float near_plane) { this->near_ = near_plane; }
     void set_far(float far_plane) { this->far_ = far_plane; }
-    void set_external_control(bool v) { external_control_ = v; }
+    void set_external_control(bool enabled);
     bool is_external_control() const { return external_control_; }
+    void set_input_smoothing(float seconds);
 
     inline Vec3 get_position() const { return position_; }
     inline Vec3 get_front() const { return front_; }
@@ -72,6 +73,9 @@ private:
     CameraInfo camera_info_;
     bool move_ = false;
     bool external_control_ = false;
+    float input_smoothing_seconds_ = 0.0f;
+    Vec3 input_velocity_ = Vec3::Zero();
+    Vec3 pending_rotation_ = Vec3::Zero();
 
     void input_move(float delta_time);
     void update_matrix();

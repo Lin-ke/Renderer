@@ -170,10 +170,12 @@ void RenderResourceManager::set_object_info(const ObjectInfo& object_info, uint3
     
     uint32_t frame_index = EngineContext::current_frame_index() % FRAMES_IN_FLIGHT;
     if (per_frame_resources_[frame_index]->object_buffer_rhi) {
-        void* mapped = per_frame_resources_[frame_index]->object_buffer_rhi->map();
+        auto& buffer = per_frame_resources_[frame_index]->object_buffer_rhi;
+        void* mapped = buffer->map();
         if (mapped) {
-            memcpy((uint8_t*)mapped + object_id * sizeof(ObjectInfo), &object_info, sizeof(ObjectInfo));
-            per_frame_resources_[frame_index]->object_buffer_rhi->unmap();
+            const auto offset = object_id * sizeof(ObjectInfo);
+            memcpy(static_cast<uint8_t*>(mapped) + offset, &object_info, sizeof(ObjectInfo));
+            buffer->unmap_written_range(offset, sizeof(ObjectInfo));
         }
     }
 }

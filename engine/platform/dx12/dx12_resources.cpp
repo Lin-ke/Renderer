@@ -48,6 +48,15 @@ void DX12Buffer::unmap() {
     else if (cpu_shadow_.empty()) { D3D12_RANGE written = {0, 0}; resource_->Unmap(0, &written); }
     active_map_ptr_ = nullptr;
 }
+void DX12Buffer::unmap_written_range(uint64_t offset, uint64_t size) {
+    if (!active_map_ptr_) return;
+    if (heap_type_ != D3D12_HEAP_TYPE_UPLOAD || offset > info_.size || size > info_.size - offset) {
+        unmap();
+        return;
+    }
+    memcpy(persistent_mapped_ptr_ + offset, cpu_shadow_.data() + offset, size_t(size));
+    active_map_ptr_ = nullptr;
+}
 void DX12Buffer::destroy() {
     if (resource_ && persistent_mapped_ptr_) resource_->Unmap(0, nullptr);
     persistent_mapped_ptr_ = nullptr; active_map_ptr_ = nullptr; resource_.Reset();
