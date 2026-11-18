@@ -1,5 +1,6 @@
 #pragma once
 
+#include "profile_session.h"
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -26,6 +27,9 @@ struct CpuProfileScope {
     uint64_t    thread_id;      // owning thread
     uint64_t    start_ticks;    // QPC start
     uint64_t    end_ticks;      // QPC end
+
+    uint64_t capture_start = 0, capture_generation = 0;
+    ProfileContext capture_context;
 
     float duration_ms(uint64_t freq) const {
         return freq > 0
@@ -83,6 +87,7 @@ struct CpuProfileThreadBuffer {
     // Open-scope stack (indices into scopes[])
     uint32_t open_stack[MAX_STACK];
     uint32_t open_count = 0;
+    uint32_t skipped_depth = 0;
 
     void advance_frame(uint64_t timestamp) {
         for (uint32_t i = 0; i < open_count; ++i) {
@@ -95,7 +100,7 @@ struct CpuProfileThreadBuffer {
     }
 
     uint32_t begin_scope(const char* n, const char* f, uint32_t ln, uint64_t ts) {
-        if (scope_count >= MAX_SCOPES) return UINT32_MAX;
+        if (scope_count >= MAX_SCOPES || open_count >= MAX_STACK || skipped_depth) { ++skipped_depth; return UINT32_MAX; }
         uint32_t idx = scope_count++;
         auto& s       = scopes[idx];
         s.name        = n;
@@ -105,6 +110,9 @@ struct CpuProfileThreadBuffer {
         s.thread_id   = thread_id;
         s.start_ticks = ts;
         s.end_ticks   = ts;
+        s.capture_start = ts;
+        s.capture_generation = ProfileSession::instance().generation();
+        s.capture_context = ProfileSession::context();
         if (open_count < MAX_STACK) {
             open_stack[open_count++] = idx;
         }
@@ -113,9 +121,12 @@ struct CpuProfileThreadBuffer {
     }
 
     void end_scope(uint64_t ts) {
+        if (skipped_depth) { --skipped_depth; return; }
         if (open_count == 0) return;
         --open_count;
-        scopes[open_stack[open_count]].end_ticks = ts;
+        auto& scope = scopes[open_stack[open_count]];
+        scope.end_ticks = ts;
+        ProfileSession::instance().record(scope.name, scope.capture_start, ts, scope.capture_context, scope.capture_generation);
         if (current_depth > 0) --current_depth;
     }
 };

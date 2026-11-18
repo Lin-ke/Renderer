@@ -4,6 +4,7 @@
 #include "engine/function/render/rhi/rhi_resource.h"
 #include "engine/function/render/rhi/rhi_structs.h"
 
+#include "rhi_memory.h"
 #include <array>
 #include <memory>
 #include <string>
@@ -38,6 +39,11 @@ public:
     static RHIBackendRef get() { return backend_; }
     
     static void reset_backend() { backend_.reset(); }
+
+    // Device-only access. Callers publish the returned value as an immutable snapshot.
+    virtual RHIMemorySnapshot get_memory_snapshot() { return {}; }
+    virtual void set_memory_cached(RHIResourceRef, bool) {}
+    virtual uint64_t memory_id(RHIResourceRef) const { return 0; }
 
     virtual void tick(); // Update resource counters, clean up
 

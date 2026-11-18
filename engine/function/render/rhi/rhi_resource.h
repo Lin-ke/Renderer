@@ -304,6 +304,7 @@ public:
     virtual bool init() { return true; }
 
     virtual void wait() = 0;
+    virtual bool is_complete() const = 0;
 };
 
 class RHISemaphore : public RHIResource {

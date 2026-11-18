@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+#include <span>
 #include <string>
 #include <filesystem>
 #include <vector>
@@ -19,6 +21,20 @@ class RDGBuilder;
 struct CpuProfileFrame;
 
 namespace test_utils {
+
+// expected(x, y) returns RGBA. Compare every pixel, report one functional result.
+template<class Expected>
+bool image_matches(std::span<const uint8_t> pixels, uint32_t width, Expected expected, int tolerance = 0) {
+    if (!width || pixels.empty() || pixels.size() % (size_t(width) * 4)) return false;
+    for (size_t index = 0; index < pixels.size() / 4; ++index) {
+        const auto color = expected(uint32_t(index % width), uint32_t(index / width));
+        for (size_t channel = 0; channel < 4; ++channel) {
+            const int delta = int(pixels[index * 4 + channel]) - int(color[channel]);
+            if (delta < -tolerance || delta > tolerance) return false;
+        }
+    }
+    return true;
+}
 
 /**
  * @brief Export CpuProfiler frames to Chrome Tracing JSON format.

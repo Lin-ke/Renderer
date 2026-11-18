@@ -1,4 +1,5 @@
 #include "rhi.h"
+#include "engine/core/utils/profile_probe.h"
 #include <algorithm>
 
 DEFINE_LOG_TAG(LogBindings, "RHIBindings");
@@ -108,6 +109,7 @@ RHIDescriptorSet& RHIDescriptorSet::write_sampler(uint32_t binding, RHISamplerRe
 }
 
 RHIDescriptorSetRef RHIDescriptorSet::snapshot() const {
+    ProfileProbe probe("RHI_DescriptorSnapshot");
     auto copy = std::make_shared<RHIDescriptorSet>(root_signature_, set_);
     copy->descriptors_ = descriptors_;
     for (auto& descriptor : copy->descriptors_)

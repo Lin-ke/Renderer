@@ -169,3 +169,9 @@ asset->is_dirty();
 asset->mark_dirty();
 asset->is_initialized();
 ```
+
+## Compact math loading
+
+Native binary math-vector arrays retain the existing compact-string archive format, but load through a buffered reader and `from_chars` numeric conversion. JSON and existing asset files remain compatible. Changes to this binary representation must update the matching reader in `math_reflect.h`.
+
+The Sun Temple loading optimization, compatibility checks and measured results are recorded in [load_optimization](../doc/optimization/load_optimization/README.md).

@@ -5,6 +5,7 @@
 #include "engine/function/asset/asset_manager.h"
 #include "engine/main/engine_context.h"
 #include "engine/core/utils/profiler.h"
+#include "engine/core/utils/profile_probe.h"
 
 #include <algorithm>
 #include <cereal/archives/binary.hpp>
@@ -57,6 +58,8 @@ template <typename T, typename Func>
 static auto with_asset_read(const fs::path &path, Func &&func)
 		-> std::invoke_result_t<Func, T &&> {
 	using ResultT = std::invoke_result_t<Func, T &&>;
+    ProfileProbe read_probe(std::is_same_v<T, AssetFile> ? "AssetReadPayload" :
+        std::is_same_v<T, AssetHeader> ? "AssetReadDependencies" : "AssetReadUID", UINT64_MAX);
 
 	if (std::ifstream ifs(path, std::ios::binary); !ifs.is_open()) {
 		ERR(LogAsset, "Failed to open file: {}", path.string());
@@ -231,7 +234,10 @@ std::vector<std::shared_future<AssetRef>> AssetManager::enqueue_load_task(UID ui
 	// Resolve Dependencies
 	std::vector<UID> load_order;
 	std::unordered_set<UID> visited;
-	collect_dependencies_recursive(uid, load_order, visited); // include self
+	{
+		ProfileProbe probe("AssetResolveDependencies", UINT64_MAX);
+		collect_dependencies_recursive(uid, load_order, visited); // include self
+	}
 
 	// A pool worker must be able to finish its reads even when other workers are waiting.
 	auto *pool = EngineContext::get_thread_role() == EngineContext::ThreadRole::Worker
@@ -344,8 +350,11 @@ AssetRef AssetManager::load_asset_blocking(UID uid) {
 	}
 
 	auto futures = enqueue_load_task(uid);
-	for (auto &fut : futures) {
-		fut.wait();
+	{
+		ProfileProbe probe("AssetWaitReads", UINT64_MAX);
+		for (auto &fut : futures) {
+			fut.wait();
+		}
 	}
 	for (auto &fut : futures) {
 		auto asset = fut.get();
@@ -367,6 +376,7 @@ AssetRef AssetManager::load_asset_blocking(UID uid) {
 }
 
 void AssetManager::initialize_loaded_asset(const AssetRef &asset) {
+    ProfileProbe probe("AssetInitialize", UINT64_MAX);
 	if (asset->is_initialized()) {
 		return;
 	}

@@ -4,7 +4,24 @@
 
 在线程化帧循环里，Game Thread 在更新场景后生成 `RenderPacket`。Render Thread 对快照剔除、组批和构图，再运行 `compile()`。编译会记录保留 Pass 的顺序以及资源的首次和末次使用。Device Thread 从 swapchain 获取本帧纹理，绑定图中用规格声明的 `BackBuffer`，通过 `execute_compiled()` 录制已有计划，并提交和 Present。`RDGPassContext::frame_slot` 标识 Device Thread 取得的帧资源槽。
 
-`game` 和 `sun_temple` 默认走这条路径。`EngineContext::render_frame()` 入队后返回，满队列提供背压。截图和退出会等待已入队帧处理完毕。单线程模式可以用同样的快照、构图和执行入口同步运行。
+`game` 和 `sun_temple` 默认走这条路径。`EngineContext::render_frame()` 入队后返回，满队列提供背压。Device 异步提交帧，复用帧资源前等待对应 GPU fence。`EngineContext::wait_for_render()`、截图和退出等待 CPU 队列与 GPU 都完成，并收集末尾 GPU 查询。单线程模式使用同样的快照、构图和执行入口；直接调用 `RenderSystem::tick()` 或 `execute_frame()` 后需要 GPU 结果时，也须显式等待或调用截图入口。
+
+## Bloom 构图示例
+
+`render::BloomPass` 在初始化时创建持久的 Shader、Pipeline、RootSignature 和 Sampler。Render Thread 调用 `build()` 声明三张半分辨率 RGBA16F 纹理，以及 `BloomBright → BloomBlurX → BloomBlurY → BloomComposite` 四个 Pass。回调按值持有 Pipeline、参数和 Sampler，实际纹理、视图和 DescriptorSet 在 Device Thread 执行时由 RDG 准备。
+
+```cpp
+auto scene_color = graph.create_texture("SceneColor").extent({width, height, 1})
+    .format(FORMAT_R8G8B8A8_UNORM).allow_render_target().finish();
+// 场景 Pass 向 scene_color 写入，并声明自己的资源访问。
+if (!bloom.build(graph, scene_color, back_buffer, {width, height}, settings)) return false;
+if (!graph.compile()) return false;
+// 将图交给 Device Thread，绑定实际 back_buffer 后调用 execute_compiled()。
+```
+
+`BloomSettings` 随 `RenderPacket` 拷贝。当前光照输出已经经过 tone mapping 和 gamma，Bloom 将输入近似转换回线性空间后提取亮部、模糊并叠加，再编码回 gamma；threshold 在该线性空间比较。合成完成后才绘制 UI。开启 Bloom 时，场景写入同格式的暂态 `SceneColor`，`BackBuffer` 保持为最终输出；自定义场景 Pass 应写入 `graph.get_texture("SceneColor")`。
+
+`[bloom]` 测试覆盖两条线程上的构图和录制、延迟绑定外部输出、参数快照、Pass 对象提前释放、奇数尺寸和 1×1 输入，以及高阈值、零强度和亮部扩散的像素验证。
 
 ## 依赖与执行顺序
 
@@ -71,4 +88,8 @@ if (graph.execute()) {
 
 `get_compile_info()` 保留执行名称列表和剔除名称列表，执行后仍可查看。`get_execution_passes()` 仅在编译后、执行清空图之前有效。Graphviz 导出会标出执行序号及被剔除的 Pass；编辑器图视图按实际执行顺序显示活跃 Pass。
 
-构建和验证：`xmake build -a`、`xmake run utest "[rdg_compile]"`、`xmake run utest`。测试保持隐藏窗口运行，覆盖乱序创建、覆盖写入、LOAD、资源别名、子资源/Buffer 范围、显式依赖、循环、无分配剔除，以及 DX12 输出像素和导出生命周期。
+构建和验证：`xmake build -a`、`xmake run utest "[rdg_compile]"`、`xmake run utest`。测试保持隐藏窗口运行，通过乱序 copy 链、外部资源延迟绑定、资源导出和实际 GPU 像素验证依赖与生命周期；不再单独测试编译器中间容器状态。
+
+## Profile 数据
+
+启用 `ProfileSession` 时，Device 执行保存带 `frame_id` 的图快照，包含编译依赖、访问、剔除和 lifetime，并在实际 resolve 时补充物理 `allocation_id`。GPU Timestamp 的 `pass_id` 与该图一致；Profiler 消费值快照。详见 [profile.md](profile.md)。

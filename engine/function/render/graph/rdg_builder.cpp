@@ -10,6 +10,7 @@
 #include "engine/function/render/rhi/rhi_structs.h"
 #include "engine/function/render/rhi/rhi_resource.h"
 
+#include "engine/core/utils/profiler.h"
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -145,7 +146,12 @@ bool RDGBuilder::execute_compiled(RHICommandListRef command, uint32_t frame_slot
             return false;
         }
     }
+    begin_profile();
     for (auto& pass : execution_passes_) {
+        auto profile_context = ProfileSession::context();
+        profile_context.pass_id = pass->ID();
+        ProfileContextScope profile_scope(profile_context);
+        PROFILE_SCOPE("RDGPass");
         if (!pass) continue;
         if (pass->is_culled_) {
             continue;
@@ -173,8 +179,10 @@ bool RDGBuilder::execute_compiled(RHICommandListRef command, uint32_t frame_slot
     for (auto& [id, output] : extracted_buffers_)
         *output = resolve(static_cast<RDGBufferNode*>(graph_->GetNode(id)));
     extracted_textures_.clear(); extracted_buffers_.clear();
+    end_profile();
     execution_passes_.clear(); resource_keys_.clear(); resource_lifetimes_.clear(); texture_usages_.clear(); buffer_usages_.clear();
     passes_.clear();
+    compiled_dependencies_.clear();
     graph_ = std::make_shared<DependencyGraph::DependencyGraph>();
     black_board_.clear();
     compiled_ = false;
@@ -576,6 +584,7 @@ RHITextureRef RDGBuilder::resolve(RDGTextureNodeRef texture_node) {
             EngineContext::rhi()->set_name(texture_node->texture_, texture_node->name());
         }
     }
+    profile_resource(texture_node, texture_node->texture_);
     return texture_node->texture_;
 }
 
@@ -601,6 +610,7 @@ RHIBufferRef RDGBuilder::resolve(RDGBufferNodeRef buffer_node) {
             EngineContext::rhi()->set_name(buffer_node->buffer_, buffer_node->name());
         }
     }
+    profile_resource(buffer_node, buffer_node->buffer_);
     return buffer_node->buffer_;
 }
 

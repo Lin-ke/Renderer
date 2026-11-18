@@ -57,6 +57,8 @@ RHIBackendRef RHIBackend::init(const RHIBackendInfo& info) {
         if (info.type == BACKEND_DX12) {
             backend_ = std::make_shared<DX12Backend>(info);
             if (!backend_->is_valid()) { backend_.reset(); return nullptr; }
+            auto* device = static_cast<DX12Backend*>(backend_.get());
+            device->get_dynamic_ring_buffer().init(*device, 64ull * 1024 * 1024);
         } else {
             backend_ = std::make_shared<DummyRHIBackend>(info);
         }

@@ -299,6 +299,9 @@ void RenderSystem::init_passes() {
 	editor_ui_pass_ = std::make_shared<render::EditorUIPass>();
 	editor_ui_pass_->init();
 
+    bloom_pass_ = std::make_shared<render::BloomPass>();
+    bloom_pass_->init();
+
 	if (editor_ui_pass_->is_ready()) {
 		INFO(LogRenderSystem, "EditorUIPass initialized successfully");
 	}
@@ -339,6 +342,11 @@ std::shared_ptr<ImDrawData> RenderSystem::build_editor_ui(Scene* scene, CameraCo
 	ImGui::Checkbox("NPR Pass", &enable_npr_pass_);
 	ImGui::Checkbox("Skybox Pass", &enable_skybox_pass_);
 	ImGui::Checkbox("Depth Visualize", &enable_depth_visualize_);
+    ImGui::Checkbox("Bloom", &bloom_settings_.enabled);
+    if (bloom_settings_.enabled) {
+        ImGui::SliderFloat("Bloom Threshold", &bloom_settings_.threshold, 0.0f, 1.0f);
+        ImGui::SliderFloat("Bloom Intensity", &bloom_settings_.intensity, 0.0f, 2.0f);
+    }
 
 	if (gizmo_manager_) {
 		gizmo_manager_->draw_controls();
@@ -445,9 +453,13 @@ std::shared_ptr<ImDrawData> RenderSystem::build_editor_ui(Scene* scene, CameraCo
 }
 
 RenderPacket RenderSystem::make_render_packet(Scene* scene, CameraComponent* camera, uint64_t frame_id) {
+    auto context = ProfileSession::context(); context.frame_id = frame_id;
+    ProfileContextScope scope(context);
     PROFILE_FUNCTION();
     RenderPacket packet;
     packet.frame_id = frame_id;
+    packet.profile_operation_id = ProfileSession::context().operation_id;
+    packet.profile_generation = ProfileSession::instance().generation();
     if (!camera && scene) {
         auto cameras = scene->get_components<CameraComponent>();
         if (!cameras.empty()) camera = cameras.front();
@@ -466,6 +478,7 @@ RenderPacket RenderSystem::make_render_packet(Scene* scene, CameraComponent* cam
     packet.wireframe = wireframe_mode_;
     packet.visualize_depth = show_ui_ && enable_depth_visualize_;
     packet.visualize_graph = show_ui_ && show_rdg_visualizer_;
+    packet.bloom = bloom_settings_;
 
     if (mesh_manager_) {
         mesh_manager_->collect_draw_batches(scene, packet.instances);
@@ -529,13 +542,19 @@ RenderPacket RenderSystem::make_render_packet(Scene* scene, CameraComponent* cam
 }
 
 std::optional<RenderSystem::CompiledFrame> RenderSystem::build_frame(const RenderPacket& packet) {
+    ProfileContextScope scope({packet.frame_id, packet.profile_operation_id});
     PROFILE_FUNCTION();
     if (!swapchain_ || !depth_texture_) return std::nullopt;
 
     auto graph = std::make_unique<RDGBuilder>();
     auto& rdg = *graph;
     const Extent2D extent{back_buffer_info_.extent.width, back_buffer_info_.extent.height};
-    const auto color = rdg.create_texture("BackBuffer").import(back_buffer_info_, RESOURCE_STATE_PRESENT).finish();
+    const auto back_buffer = rdg.create_texture("BackBuffer").import(back_buffer_info_, RESOURCE_STATE_PRESENT).finish();
+    auto color = back_buffer;
+    if (packet.bloom.enabled) {
+        color = rdg.create_texture("SceneColor").extent(back_buffer_info_.extent)
+            .format(back_buffer_info_.format).allow_render_target().finish();
+    }
     const auto depth = rdg.create_texture("Depth").import(depth_texture_, RESOURCE_STATE_DEPTH_STENCIL_ATTACHMENT).finish();
     rdg.create_render_pass("ClearPass")
         .color(0, color, ATTACHMENT_LOAD_OP_CLEAR, ATTACHMENT_STORE_OP_STORE, Color4{0.0f, 0.0f, 0.0f, 1.0f})
@@ -563,12 +582,15 @@ std::optional<RenderSystem::CompiledFrame> RenderSystem::build_frame(const Rende
         }
         if (!packet.skyboxes.empty()) skybox_pass_->build(rdg, color, depth, camera.view, camera.projection, packet.skyboxes);
     }
-    if (packet.ui && editor_ui_pass_) editor_ui_pass_->build(rdg, color, extent, packet.ui);
+    if (packet.bloom.enabled && !bloom_pass_->build(rdg, color, back_buffer, extent, packet.bloom)) {
+        return std::nullopt;
+    }
+    if (packet.ui && editor_ui_pass_) editor_ui_pass_->build(rdg, back_buffer, extent, packet.ui);
 
     if (!rdg.compile()) return std::nullopt;
     if (packet.visualize_graph) capture_rdg_info(rdg);
-    return CompiledFrame{std::move(graph), color, packet.visualize_depth ? packet.camera : std::nullopt,
-        packet.frame_id, mesh_manager_->get_current_batches().size()};
+    return CompiledFrame{std::move(graph), back_buffer, packet.visualize_depth ? packet.camera : std::nullopt,
+        packet.frame_id, mesh_manager_->get_current_batches().size(), packet.profile_operation_id, packet.profile_generation};
 }
 
 void RenderSystem::capture_rdg_info(RDGBuilder &builder) {
@@ -713,10 +735,18 @@ bool RenderSystem::tick(const RenderPacket& packet) {
 }
 
 bool RenderSystem::execute_frame(CompiledFrame frame) {
+    ProfileContextScope profile_scope({frame.frame_id, frame.profile_operation_id});
+    if (frame.profile_queued_at) ProfileSession::instance().record("DeviceQueue", frame.profile_queued_at,
+        CpuProfiler::get_timestamp(), ProfileSession::context(), frame.profile_generation);
     PROFILE_FUNCTION();
+    const auto device_start = CpuProfiler::get_timestamp();
     const uint32_t frame_slot = next_frame_slot_;
     auto& resource = per_frame_common_resources_[frame_slot];
-    resource.fence->wait();
+    {
+        PROFILE_SCOPE("RenderSystem_FrameReuseWait");
+        resource.fence->wait();
+    }
+    collect_completed_frames();
     auto back_buffer = swapchain_->get_new_frame(nullptr, resource.start_semaphore);
     if (!frame.graph->bind_external_texture(frame.back_buffer, back_buffer)) {
         ERR(LogRenderSystem, "Failed to bind the back buffer for frame {}", frame.frame_id);
@@ -726,16 +756,11 @@ bool RenderSystem::execute_frame(CompiledFrame frame) {
     auto& command = resource.command;
     auto command_list = std::make_shared<RHICommandList>(CommandListInfo{pool_, command, true});
     command->begin_command();
-    if (gpu_profiler_) {
-        std::scoped_lock lock(Window::imgui_mutex());
-        gpu_profiler_->collect_results();
-    }
     bool recorded;
     {
         PROFILE_SCOPE("RenderSystem_SceneRender");
         command->gpu_timestamp_begin_frame();
         recorded = frame.graph->execute_compiled(command_list, frame_slot);
-        command->gpu_timestamp_end_frame();
     }
 
     if (recorded && frame.depth_visualization_camera && depth_visualize_initialized_ &&
@@ -747,6 +772,7 @@ bool RenderSystem::execute_frame(CompiledFrame frame) {
     }
     command->end_render_pass();
     command->texture_barrier({back_buffer, RESOURCE_STATE_COLOR_ATTACHMENT, RESOURCE_STATE_PRESENT});
+    command->gpu_timestamp_end_frame();
     command->end_command();
     {
         PROFILE_SCOPE("RenderSystem_Submit");
@@ -764,11 +790,41 @@ bool RenderSystem::execute_frame(CompiledFrame frame) {
         backend_->tick();
     }
     next_frame_slot_ = (frame_slot + 1) % FRAMES_IN_FLIGHT;
-    {
-        std::scoped_lock lock(frame_stats_mutex_);
-        frame_stats_ = {frame.visible_batches, gpu_profiler_ ? gpu_profiler_->get_total_frame_time_ms() : 0.0f};
-    }
+    pending_gpu_frames_.push_back({{frame.visible_batches, 0, frame.frame_id, 0,
+        float(double(CpuProfiler::get_timestamp() - device_start) * 1000.0 / CpuProfiler::get_cpu_frequency())},
+        resource.fence, frame.profile_generation});
+    collect_completed_frames();
     return true;
+}
+
+void RenderSystem::collect_completed_frames() {
+    while (!pending_gpu_frames_.empty() && pending_gpu_frames_.front().fence->is_complete()) {
+        auto pending = std::move(pending_gpu_frames_.front());
+        pending_gpu_frames_.pop_front();
+        if (gpu_profiler_) {
+            std::scoped_lock lock(Window::imgui_mutex());
+            gpu_profiler_->collect_results();
+            pending.stats.gpu_ms = gpu_profiler_->get_total_frame_time_ms();
+        }
+        pending.stats.completed_ticks = CpuProfiler::get_timestamp();
+        std::scoped_lock lock(frame_stats_mutex_);
+        frame_stats_ = pending.stats;
+        if (pending.profile_generation && pending.profile_generation == ProfileSession::instance().generation())
+            profile_frame_stats_.push_back(frame_stats_);
+    }
+}
+
+void RenderSystem::wait_for_gpu() {
+    if (!backend_ || !backend_->is_valid() || !queue_) return;
+    queue_->wait_idle();
+    collect_completed_frames();
+}
+
+std::vector<RenderSystem::FrameStats> RenderSystem::take_profile_frame_stats() {
+    std::scoped_lock lock(frame_stats_mutex_);
+    std::vector<FrameStats> result;
+    result.swap(profile_frame_stats_);
+    return result;
 }
 
 RenderSystem::FrameStats RenderSystem::get_frame_stats() const {
@@ -820,8 +876,10 @@ void RenderSystem::clear_custom_ui_callbacks() {
 }
 
 void RenderSystem::cleanup_for_test() {
+    wait_for_gpu();
     clear_custom_rdg_build_func();
     last_rendered_texture_.reset();
+    bloom_settings_ = {};
 	// WARN(LogRenderSystem, "cleanup_for_test() called, backend_={}", (void*)backend_.get());
 	
 	// Clear custom UI callbacks
@@ -838,13 +896,6 @@ void RenderSystem::cleanup_for_test() {
 		return;
 	}
 	
-	// Wait for GPU to complete all pending work
-	for (auto &resource : per_frame_common_resources_) {
-		if (resource.fence) {
-			resource.fence->wait();
-		}
-	}
-	
 	// Cleanup mesh manager state (keeps passes initialized)
 	if (mesh_manager_) {
 		mesh_manager_->cleanup_for_test();
@@ -853,22 +904,11 @@ void RenderSystem::cleanup_for_test() {
 	// Reset selected entity
 	selected_entity_ = nullptr;
 	
-	// Wait for any pending GPU operations
-	// Backend validity already checked above, but double-check for safety
-	// Flush any pending GPU work
-	auto temp_pool = backend_->create_command_pool({queue_});
-	auto temp_cmd = backend_->create_command_context(temp_pool);
-	temp_cmd->begin_command();
-	temp_cmd->end_command();
-	auto temp_fence = backend_->create_fence(false);
-	if (temp_fence) {
-		temp_cmd->execute(temp_fence, nullptr, nullptr);
-		temp_fence->wait();
-	}
 }
 
 void RenderSystem::destroy() {
 	WARN(LogRenderSystem, "RenderSystem::destroy() called! backend_={}", (void*)backend_.get());
+	wait_for_gpu();
 	
 	// Destroy GPU profiler before backend
 	if (gpu_profiler_) {
@@ -897,6 +937,7 @@ void RenderSystem::destroy() {
 	}
 	
 	// Clear passes
+    bloom_pass_.reset();
 	editor_ui_pass_.reset();
 	skybox_pass_.reset();
 	depth_prepass_.reset();

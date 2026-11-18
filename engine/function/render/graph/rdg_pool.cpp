@@ -15,6 +15,7 @@ RDGBufferPool::PooledBuffer RDGBufferPool::allocate(const RHIBufferInfo& info) {
             ret = *iter;
             buffers.erase(iter);
             pooled_size_--;
+            EngineContext::rhi()->set_memory_cached(ret.buffer, false);
             return ret;
         }
     }
@@ -26,6 +27,7 @@ RDGBufferPool::PooledBuffer RDGBufferPool::allocate(const RHIBufferInfo& info) {
 }
 
 void RDGBufferPool::release(const RDGBufferPool::PooledBuffer& pooled_buffer) {
+    EngineContext::rhi()->set_memory_cached(pooled_buffer.buffer, true);
     pooled_buffers_[pooled_buffer.buffer->get_info()].push_back(pooled_buffer);
     pooled_size_++;
 }
@@ -41,6 +43,7 @@ RDGTexturePool::PooledTexture RDGTexturePool::allocate(const RHITextureInfo& inf
         ret = *iter;
         textures.erase(iter);
         pooled_size_--;
+        EngineContext::rhi()->set_memory_cached(ret.texture, false);
         return ret;
     }
 
@@ -54,6 +57,7 @@ RDGTexturePool::PooledTexture RDGTexturePool::allocate(const RHITextureInfo& inf
 }
 
 void RDGTexturePool::release(const RDGTexturePool::PooledTexture& pooled_texture) {
+    EngineContext::rhi()->set_memory_cached(pooled_texture.texture, true);
     pooled_textures_[pooled_texture.texture->get_info()].push_back(pooled_texture);
     pooled_size_++;
 }
@@ -109,4 +113,17 @@ void RDGDescriptorSetPool::release(const RDGDescriptorSetPool::PooledDescriptor&
                                    const RHIRootSignatureRef& root_signature, uint32_t set) {
     pooled_descriptors_[{root_signature->get_info(), set}].push_back(pooled_descriptor);
     pooled_size_++;
+}
+
+void RDGBufferPool::clear() {
+    auto backend = EngineContext::rhi();
+    if (backend) for (auto& [key, entries] : pooled_buffers_)
+        for (auto& entry : entries) backend->set_memory_cached(entry.buffer, false);
+    pooled_buffers_.clear(); pooled_size_ = 0;
+}
+void RDGTexturePool::clear() {
+    auto backend = EngineContext::rhi();
+    if (backend) for (auto& [key, entries] : pooled_textures_)
+        for (auto& entry : entries) backend->set_memory_cached(entry.texture, false);
+    pooled_textures_.clear(); pooled_size_ = 0;
 }

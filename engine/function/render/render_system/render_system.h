@@ -14,13 +14,16 @@
 #include "engine/function/render/render_pass/skybox_pass.h"
 #include "engine/function/render/render_pass/editor_ui_pass.h"
 #include "engine/function/render/render_pass/deferred_lighting_pass.h"
+#include "engine/function/render/render_pass/bloom_pass.h"
 // #include "engine/function/render/render_system/render_surface_cache_manager.h"
 #include <imgui.h>
 
 // Forward declarations
 class RDGBuilder;
+#include "engine/core/utils/profile_session.h"
 #include <array>
 #include <memory>
+#include <deque>
 
 //####TODO####: Move to config
 static const Extent2D WINDOW_EXTENT = { 1280, 720 };
@@ -46,6 +49,7 @@ struct RenderLights {
 // Game-thread snapshot consumed by the render thread.
 struct RenderPacket {
     uint64_t frame_id = 0;
+    uint64_t profile_operation_id = 0, profile_generation = 0, profile_queued_at = 0;
     std::optional<RenderCamera> camera;
     std::vector<render::DrawBatch> instances;
     RenderLights lights;
@@ -57,6 +61,7 @@ struct RenderPacket {
     bool wireframe = false;
     bool visualize_depth = false;
     bool visualize_graph = false;
+    render::BloomSettings bloom;
 };
 
 struct DefaultRenderResource{
@@ -82,11 +87,15 @@ public:
         std::optional<RenderCamera> depth_visualization_camera;
         uint64_t frame_id;
         size_t visible_batches;
+        uint64_t profile_operation_id = 0, profile_generation = 0, profile_queued_at = 0;
     };
 
     struct FrameStats {
         size_t visible_batches = 0;
         float gpu_ms = 0.0f;
+        uint64_t frame_id = UINT64_MAX;
+        uint64_t completed_ticks = 0;
+        float device_ms = 0;
     };
 
     RenderPacket make_render_packet(Scene* scene, CameraComponent* camera, uint64_t frame_id);
@@ -94,6 +103,8 @@ public:
     bool execute_frame(CompiledFrame frame);
     bool tick(const RenderPacket& packet);
     FrameStats get_frame_stats() const;
+    std::vector<FrameStats> take_profile_frame_stats();
+    void wait_for_gpu();
     // Capture the completed frame, even after the swapchain has advanced.
     bool capture_frame(std::vector<uint8_t>& rgba, Extent2D& extent);
     void set_show_ui(bool show) { show_ui_ = show; }
@@ -177,6 +188,7 @@ private:
     
     std::shared_ptr<ImDrawData> build_editor_ui(Scene* scene, CameraComponent* camera);
     bool capture_completed_frame(std::vector<uint8_t>& rgba, Extent2D& extent);
+    void collect_completed_frames();
 
 public:
     // Entity selection for gizmo
@@ -195,6 +207,7 @@ public:
     bool enable_npr_pass_ = true;
     bool enable_skybox_pass_ = true;
     bool enable_depth_visualize_ = true;
+    render::BloomSettings bloom_settings_;
 
     // DependencyGraphRef get_rdg_dependency_graph() { return rdg_dependency_graph_; } //####TODO####
 
@@ -213,6 +226,13 @@ private:
     uint32_t next_frame_slot_ = 0;
     mutable std::mutex frame_stats_mutex_;
     FrameStats frame_stats_;
+    std::vector<FrameStats> profile_frame_stats_;
+    struct PendingFrame {
+        FrameStats stats;
+        RHIFenceRef fence;
+        uint64_t profile_generation = 0;
+    };
+    std::deque<PendingFrame> pending_gpu_frames_;
     RHITextureRef depth_texture_;
     RHITextureViewRef depth_texture_view_;
 
@@ -267,6 +287,7 @@ public:
     std::shared_ptr<render::ForwardPass> forward_pass_;
     std::shared_ptr<render::DepthPrePass> depth_prepass_;
     std::shared_ptr<render::EditorUIPass> editor_ui_pass_;
+    std::shared_ptr<render::BloomPass> bloom_pass_;
     
     // Depth buffer visualization
     RHITextureRef depth_visualize_texture_;

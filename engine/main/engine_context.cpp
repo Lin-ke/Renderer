@@ -88,6 +88,10 @@ bool EngineContext::render_frame() {
     auto* context = instance_.get();
     if (!context || !context->render_system_) return false;
     auto* scene = context->world_ ? context->world_->get_active_scene() : nullptr;
+    const uint64_t frame_id = context->next_frame_id_;
+    auto profile_context = ProfileSession::context(); profile_context.frame_id = frame_id;
+    ProfileContextScope profile_scope(profile_context);
+    PROFILE_SCOPE("ExtractAndEnqueue");
     auto packet = context->render_system_->make_render_packet(scene, nullptr, context->next_frame_id_++);
     context->current_frame_index_ = static_cast<uint32_t>(context->next_frame_id_ % FRAMES_IN_FLIGHT);
     if (!context->render_thread_) {
@@ -95,6 +99,7 @@ bool EngineContext::render_frame() {
     }
 
     std::unique_lock lock(context->pipeline_mutex_);
+    const auto wait_start = CpuProfiler::get_timestamp();
     while (context->pending_frames_ >= FRAMES_IN_FLIGHT && !context->render_failed_) {
         context->pipeline_cv_.wait_for(lock, std::chrono::milliseconds(1));
         lock.unlock();
@@ -102,6 +107,9 @@ bool EngineContext::render_frame() {
         lock.lock();
     }
     if (context->render_failed_) return false;
+    const auto enqueued = CpuProfiler::get_timestamp();
+    ProfileSession::instance().record("FrameBackpressure", wait_start, enqueued, profile_context, packet.profile_generation);
+    packet.profile_queued_at = enqueued;
     context->render_queue_.push(std::move(packet));
     ++context->pending_frames_;
     lock.unlock();
@@ -119,7 +127,10 @@ bool EngineContext::wait_for_render() {
         if (get_thread_role() == ThreadRole::MainGame) dispatch_sent_window_messages();
         lock.lock();
     }
-    return !context->render_failed_;
+    const bool success = !context->render_failed_;
+    lock.unlock();
+    run_device_task([context] { context->render_system_->wait_for_gpu(); });
+    return success;
 }
 
 void EngineContext::run_device_task(std::function<void()> task) {
@@ -129,7 +140,12 @@ void EngineContext::run_device_task(std::function<void()> task) {
         return;
     }
 
-    auto pending = std::make_shared<std::packaged_task<void()>>(std::move(task));
+    const auto profile_context = ProfileSession::context();
+    auto pending = std::make_shared<std::packaged_task<void()>>([profile_context, task = std::move(task)] {
+        ProfileContextScope scope(profile_context);
+        PROFILE_SCOPE("DeviceTask");
+        task();
+    });
     auto completed = pending->get_future();
     {
         std::scoped_lock lock(context->pipeline_mutex_);
@@ -137,6 +153,7 @@ void EngineContext::run_device_task(std::function<void()> task) {
     }
     context->pipeline_cv_.notify_all();
 
+    PROFILE_SCOPE("WaitDeviceTask");
     if (get_thread_role() == ThreadRole::MainGame) {
         while (completed.wait_for(std::chrono::milliseconds(1)) != std::future_status::ready) {
             dispatch_sent_window_messages();
@@ -168,6 +185,9 @@ void EngineContext::render_loop() {
             packet = std::move(render_queue_.front());
             render_queue_.pop();
         }
+        ProfileContextScope scope({packet.frame_id, packet.profile_operation_id});
+        if (packet.profile_queued_at) ProfileSession::instance().record("RenderQueue", packet.profile_queued_at,
+            CpuProfiler::get_timestamp(), ProfileSession::context(), packet.profile_generation);
         auto frame = render_system_->build_frame(packet);
         if (!frame) {
             complete_render_frame(false);
@@ -178,6 +198,7 @@ void EngineContext::render_loop() {
 }
 
 void EngineContext::submit_frame(RenderSystem::CompiledFrame frame) {
+    frame.profile_queued_at = CpuProfiler::get_timestamp();
     auto compiled = std::make_shared<RenderSystem::CompiledFrame>(std::move(frame));
     {
         std::scoped_lock lock(pipeline_mutex_);

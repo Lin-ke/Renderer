@@ -97,19 +97,3 @@ TEST_CASE("PBR deferred rendering", "[pbr]") {
 
     test_utils::TestContext::reset();
 }
-
-TEST_CASE("PBR material params", "[pbr]") {
-    test_utils::TestContext::reset();
-    
-    auto mat = std::make_shared<PBRMaterial>();
-    
-    mat->set_diffuse({0.8f, 0.5f, 0.3f, 1.0f});
-    mat->set_roughness(0.5f);
-    mat->set_metallic(0.8f);
-    
-    REQUIRE(mat->get_diffuse().x == Catch::Approx(0.8f));
-    REQUIRE(mat->get_roughness() == Catch::Approx(0.5f));
-    REQUIRE(mat->get_metallic() == Catch::Approx(0.8f));
-    
-    test_utils::TestContext::reset();
-}

@@ -94,6 +94,7 @@ CpuProfileThreadBuffer* CpuProfiler::get_thread_buffer() {
 // Thread registration
 // ============================================================================
 void CpuProfiler::register_thread(const char* name) {
+    ProfileSession::instance().name_thread(name ? name : "");
     uint64_t tid = get_current_thread_id();
     std::lock_guard<std::mutex> lock(thread_mutex_);
     thread_names_[tid] = name ? name : "";

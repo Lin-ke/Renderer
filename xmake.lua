@@ -31,7 +31,7 @@ target("engine")
 
     add_packages("imgui", "imguizmo", "stb", "assimp", "cereal", "glog", "stduuid", {public = true} )
     add_packages("directxtex", "zstd")
-    add_syslinks("d3d12", "dxgi", "dxguid", "D3DCompiler", "d2d1", "dwrite", "winmm", "user32", "gdi32", "ole32")
+    add_syslinks("d3d12", "dxgi", "dxguid", "D3DCompiler", "d2d1", "dwrite", "winmm", "user32", "gdi32", "ole32", "psapi")
 
     -- Compile shaders before building the engine
     -- before_build(function (target)

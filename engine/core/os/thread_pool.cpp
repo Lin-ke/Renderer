@@ -8,6 +8,7 @@ ThreadPool::ThreadPool(size_t thread_count) {
     for (size_t i = 0; i < thread_count; ++i) {
         workers_.emplace_back([this]() {
             EngineContext::set_thread_role(EngineContext::ThreadRole::Worker);
+            ProfileSession::instance().name_thread("Worker");
             while (true) {
                 std::function<void()> task;
                 {

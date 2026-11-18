@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-基于C++20的实时渲染引擎，DirectX 11后端，ECS架构，支持反射和资源管理。
+基于C++20的实时渲染引擎，DirectX 12 后端，ECS架构，支持反射和资源管理。
 
 ---
 
@@ -14,8 +14,8 @@ engine/
 ├── function/        # 功能模块
 │   ├── asset/       # 资源管理（UID-based）
 │   ├── framework/   # ECS框架
-│   └── render/      # 渲染系统（RDG->RHI->DX11）
-└── platform/dx11/   # DX11 RHI实现
+│   └── render/      # 渲染系统（RDG->RHI->DX12）
+└── platform/dx12/   # DX12 RHI实现
 ```
 
 ---
@@ -138,11 +138,11 @@ CEREAL_REGISTER_POLYMORPHIC_RELATION(Component, MyComponent)
 
 ### Render Architecture
 
-三层架构：**RDG -> RHI -> DX11**
+三层架构：**RDG -> RHI -> DX12**
 
 - **RDG**: Render Dependency Graph，管理Pass依赖和资源生命周期
-- **RHI**: Render Hardware Interface，抽象渲染API（DX11/Vulkan）
-- **DX11**: 平台具体实现
+- **RHI**: Render Hardware Interface，抽象渲染 API
+- **DX12**: 平台具体实现
 
 ```cpp
 // RDG层
@@ -202,7 +202,7 @@ RHIGraphicsPipelineRef pipeline = backend->create_graphics_pipeline(info);
 
 ## Docs
 DX12 后端、DescriptorSet 绑定、隐藏窗口截图测试：`docs/dx12.md`。
-当前默认后端为 DX12。Shader 资源必须通过 RootSignature 布局和 DescriptorSet 绑定，不能恢复逐槽位的 CommandList 资源绑定 API。测试使用隐藏窗口，通过截图和像素验证输出。
+渲染后端为 DX12。Shader 资源必须通过 RootSignature 布局和 DescriptorSet 绑定，不能恢复逐槽位的 CommandList 资源绑定 API。测试使用隐藏窗口，通过截图和像素验证输出。
 RDG 编译、拓扑排序、剔除、显式依赖与资源提取：`docs/rdg.md`。图外副作用必须用 `never_cull()` 标记，资源访问必须声明，不能依赖 Pass 创建顺序代替数据依赖。
 Test格式（写Test前必看）
 Asset 系统（写Asset前必看）

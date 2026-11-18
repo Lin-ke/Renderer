@@ -27,15 +27,6 @@ D3D12_RESOURCE_DESC buffer_desc(uint64_t size) {
     desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
     return desc;
 }
-ComPtr<ID3D12Resource> make_buffer(ID3D12Device* device, uint64_t size, D3D12_HEAP_TYPE heap_type) {
-    ComPtr<ID3D12Resource> resource;
-    D3D12_HEAP_PROPERTIES heap = {};
-    heap.Type = heap_type;
-    auto desc = buffer_desc(size);
-    auto state = heap_type == D3D12_HEAP_TYPE_READBACK ? D3D12_RESOURCE_STATE_COPY_DEST : D3D12_RESOURCE_STATE_GENERIC_READ;
-    check_hr(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, state, nullptr, IID_PPV_ARGS(&resource)), "Create buffer");
-    return resource;
-}
 D3D12_COMPARISON_FUNC compare_func(CompareFunction func) {
     constexpr D3D12_COMPARISON_FUNC values[] = {D3D12_COMPARISON_FUNC_LESS, D3D12_COMPARISON_FUNC_LESS_EQUAL,
         D3D12_COMPARISON_FUNC_GREATER, D3D12_COMPARISON_FUNC_GREATER_EQUAL, D3D12_COMPARISON_FUNC_EQUAL,
@@ -64,42 +55,53 @@ void DX12DescriptorAllocator::init(ID3D12Device* device, D3D12_DESCRIPTOR_HEAP_T
     if (!check_hr(device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&heap_)), "Create descriptor heap")) return;
     descriptor_size_ = device->GetDescriptorHandleIncrementSize(type);
     max_descriptors_ = count;
+    allocation_limit_ = count;
     shader_visible_ = visible;
     cpu_start_ = heap_->GetCPUDescriptorHandleForHeapStart();
     if (visible) gpu_start_ = heap_->GetGPUDescriptorHandleForHeapStart();
 }
-void DX12DescriptorAllocator::destroy() { heap_.Reset(); free_list_.clear(); current_offset_ = 0; }
+void DX12DescriptorAllocator::destroy() { std::scoped_lock lock(mutex_); heap_.Reset(); free_list_.clear(); current_offset_ = 0; }
 uint32_t DX12DescriptorAllocator::allocate(uint32_t count) {
+    std::scoped_lock lock(mutex_);
     if (count == 1 && !free_list_.empty()) { auto index = free_list_.back(); free_list_.pop_back(); return index; }
-    if (count > max_descriptors_ - current_offset_) { ERR(LogDX12, "Descriptor heap exhausted ({} requested)", count); return UINT32_MAX; }
+    if (count > allocation_limit_ - current_offset_) { ERR(LogDX12, "Descriptor heap exhausted ({} requested)", count); return UINT32_MAX; }
     uint32_t index = current_offset_;
     current_offset_ += count;
     return index;
 }
-void DX12DescriptorAllocator::free(uint32_t index) { if (index != UINT32_MAX) free_list_.push_back(index); }
-void DX12DescriptorAllocator::reset(uint32_t offset) { current_offset_ = offset; free_list_.clear(); }
+void DX12DescriptorAllocator::free(uint32_t index) { std::scoped_lock lock(mutex_); if (index != UINT32_MAX) free_list_.push_back(index); }
+void DX12DescriptorAllocator::reset(uint32_t offset, uint32_t limit) {
+    std::scoped_lock lock(mutex_);
+    current_offset_ = offset; allocation_limit_ = std::min(limit, max_descriptors_); free_list_.clear();
+}
 D3D12_CPU_DESCRIPTOR_HANDLE DX12DescriptorAllocator::get_cpu_handle(uint32_t index) const { return {cpu_start_.ptr + SIZE_T(index) * descriptor_size_}; }
 D3D12_GPU_DESCRIPTOR_HANDLE DX12DescriptorAllocator::get_gpu_handle(uint32_t index) const { return {gpu_start_.ptr + UINT64(index) * descriptor_size_}; }
 
-void DX12DynamicRingBuffer::init(ID3D12Device* device, uint64_t capacity) {
+void DX12DynamicRingBuffer::init(DX12Backend& backend, uint64_t capacity) {
     capacity_ = capacity;
-    buffer_ = make_buffer(device, capacity, D3D12_HEAP_TYPE_UPLOAD);
+    allocation_limit_ = capacity;
+    D3D12_HEAP_PROPERTIES heap = {}; heap.Type = D3D12_HEAP_TYPE_UPLOAD;
+    buffer_ = backend.allocate_memory(heap, buffer_desc(capacity), D3D12_RESOURCE_STATE_GENERIC_READ, "Upload");
     if (buffer_) {
         D3D12_RANGE range = {0, 0};
         buffer_->Map(0, &range, reinterpret_cast<void**>(&mapped_ptr_));
         gpu_base_ = buffer_->GetGPUVirtualAddress();
     }
 }
-void DX12DynamicRingBuffer::destroy() { if (mapped_ptr_) buffer_->Unmap(0, nullptr); mapped_ptr_ = nullptr; buffer_.Reset(); }
+void DX12DynamicRingBuffer::destroy() { std::scoped_lock lock(mutex_); if (mapped_ptr_) buffer_->Unmap(0, nullptr); mapped_ptr_ = nullptr; buffer_.Reset(); }
 bool DX12DynamicRingBuffer::allocate(uint64_t size, uint64_t alignment, void** cpu, D3D12_GPU_VIRTUAL_ADDRESS* gpu) {
+    std::scoped_lock lock(mutex_);
     uint64_t offset = align_up(head_, alignment);
-    if (!mapped_ptr_ || offset > capacity_ || size > capacity_ - offset) return false;
+    if (!mapped_ptr_ || offset > allocation_limit_ || size > allocation_limit_ - offset) return false;
     *cpu = mapped_ptr_ + offset;
     *gpu = gpu_base_ + offset;
     head_ = offset + size;
     return true;
 }
-void DX12DynamicRingBuffer::reset() { head_ = 0; }
+void DX12DynamicRingBuffer::reset(uint64_t offset, uint64_t limit) {
+    std::scoped_lock lock(mutex_);
+    head_ = offset; allocation_limit_ = std::min(limit, capacity_);
+}
 
 DX12Backend::DX12Backend(const RHIBackendInfo& info) : RHIBackend(info) {
     if (info.enable_debug) {
@@ -121,9 +123,6 @@ DX12Backend::DX12Backend(const RHIBackendInfo& info) : RHIBackend(info) {
     D3D12_COMMAND_QUEUE_DESC queue = {};
     queue.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
     if (!check_hr(device_->CreateCommandQueue(&queue, IID_PPV_ARGS(&command_queue_)), "Create command queue")) return;
-    if (!check_hr(device_->CreateCommandAllocator(queue.Type, IID_PPV_ARGS(&command_allocator_)), "Create command allocator")) return;
-    if (!check_hr(device_->CreateCommandList(0, queue.Type, command_allocator_.Get(), nullptr, IID_PPV_ARGS(&command_list_)), "Create command list")) return;
-    command_list_->Close();
     device_->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&internal_fence_));
     internal_fence_event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     rtv_allocator_.init(device_.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 32768, false);
@@ -133,43 +132,105 @@ DX12Backend::DX12Backend(const RHIBackendInfo& info) : RHIBackend(info) {
     gpu_srv_uav_heap_.init(device_.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 262144, true);
     gpu_sampler_heap_.init(device_.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, 2048, true);
     gpu_srv_uav_heap_.reset(GPU_SRV_UAV_RESERVED_COUNT);
-    dynamic_ring_buffer_.init(device_.Get(), 64ull * 1024 * 1024);
     create_default_descriptors();
     create_mipmap_pipelines();
 }
 DX12Backend::~DX12Backend() { destroy(); }
-void DX12Backend::ensure_recording() {
-    if (is_recording_ || !device_) return;
-    if (!check_hr(command_allocator_->Reset(), "Reset command allocator")) return;
-    if (!check_hr(command_list_->Reset(command_allocator_.Get(), nullptr), "Reset command list")) return;
-    ID3D12DescriptorHeap* heaps[] = {gpu_srv_uav_heap_.get_heap(), gpu_sampler_heap_.get_heap()};
-    command_list_->SetDescriptorHeaps(2, heaps);
-    is_recording_ = true;
+DX12CommandContext* DX12Backend::get_immediate_context() {
+    auto immediate = std::static_pointer_cast<DX12CommandContextImmediate>(get_immediate_command());
+    return immediate ? immediate->get_context() : nullptr;
 }
-void DX12Backend::submit_and_wait() {
+DX12CommandContext* DX12Backend::peek_immediate_context() const {
+    return immediate_command_ ? static_cast<DX12CommandContextImmediate*>(immediate_command_.get())->peek_context() : nullptr;
+}
+void DX12Backend::submit_and_wait(DX12CommandContext* context) {
+    submit(context, true);
+}
+void DX12Backend::wait_for_fence(uint64_t value) {
+    if (internal_fence_ && value && internal_fence_->GetCompletedValue() < value &&
+        check_hr(internal_fence_->SetEventOnCompletion(value, internal_fence_event_), "Set completion event"))
+        WaitForSingleObject(internal_fence_event_, INFINITE);
+}
+void DX12Backend::collect_submissions() {
+    std::scoped_lock lock(submission_mutex_);
+    const auto completed = internal_fence_->GetCompletedValue();
+    while (!completions_.empty() && completions_.front().fence <= completed) {
+        auto completion = std::move(completions_.front());
+        completions_.pop_front();
+        for (auto& callback : completion.callbacks) callback();
+    }
+    std::array<Submission*, FRAMES_IN_FLIGHT> ordered;
+    for (size_t i = 0; i < submissions_.size(); ++i) ordered[i] = &submissions_[i];
+    std::sort(ordered.begin(), ordered.end(), [](const auto* a, const auto* b) { return a->fence < b->fence; });
+    for (auto* pointer : ordered) {
+        auto& batch = *pointer;
+        if (!batch.sealed || batch.fence > completed) continue;
+        batch.resources.clear();
+        batch.uploads.clear();
+    }
+    collect_memory();
+}
+void DX12Backend::prepare_submission() {
+    std::scoped_lock lock(submission_mutex_);
+    if (submission_active_) return;
+    auto& batch = submissions_[submission_slot_];
+    wait_for_fence(batch.fence);
+    collect_submissions();
+    const auto descriptors = (gpu_srv_uav_heap_.get_max_descriptors() - GPU_SRV_UAV_RESERVED_COUNT) / FRAMES_IN_FLIGHT;
+    const auto samplers = gpu_sampler_heap_.get_max_descriptors() / FRAMES_IN_FLIGHT;
+    const auto upload_bytes = (64ull * 1024 * 1024 / FRAMES_IN_FLIGHT) & ~255ull;
+    gpu_srv_uav_heap_.reset(GPU_SRV_UAV_RESERVED_COUNT + submission_slot_ * descriptors,
+        GPU_SRV_UAV_RESERVED_COUNT + (submission_slot_ + 1) * descriptors);
+    gpu_sampler_heap_.reset(submission_slot_ * samplers, (submission_slot_ + 1) * samplers);
+    dynamic_ring_buffer_.reset(submission_slot_ * upload_bytes, (submission_slot_ + 1) * upload_bytes);
+    sampler_tables_.clear();
+    resource_tables_.clear();
+    batch.sealed = false;
+    submission_active_ = true;
+}
+void DX12Backend::end_context(DX12CommandContext* context) {
+    std::scoped_lock lock(submission_mutex_);
+    std::erase(recording_contexts_, context);
+}
+void DX12Backend::submit(DX12CommandContext* context, bool wait) {
+    std::scoped_lock lock(submission_mutex_);
     if (!command_queue_) return;
-    if (is_recording_) {
-        if (!check_hr(command_list_->Close(), "Close command list")) return;
-        ID3D12CommandList* lists[] = {command_list_.Get()};
-        command_queue_->ExecuteCommandLists(1, lists);
-        is_recording_ = false;
+    prepare_submission();
+    std::vector<ID3D12CommandList*> lists;
+    std::vector<DX12CommandContext*> contexts;
+    if (immediate_command_) {
+        auto* immediate_ctx = static_cast<DX12CommandContextImmediate*>(immediate_command_.get())->peek_context();
+        if (immediate_ctx && immediate_ctx->is_recording() && immediate_ctx->close_command_list()) {
+            lists.push_back(immediate_ctx->get_command_list());
+            contexts.push_back(immediate_ctx);
+        }
+    }
+    if (context && context->is_recording() && context->close_command_list()) {
+        lists.push_back(context->get_command_list());
+        contexts.push_back(context);
+    }
+    if (!lists.empty()) {
+        command_queue_->ExecuteCommandLists(UINT(lists.size()), lists.data());
     }
     ++internal_fence_value_;
     if (!check_hr(command_queue_->Signal(internal_fence_.Get(), internal_fence_value_), "Signal queue fence")) return;
-    if (internal_fence_->GetCompletedValue() < internal_fence_value_) {
-        internal_fence_->SetEventOnCompletion(internal_fence_value_, internal_fence_event_);
-        WaitForSingleObject(internal_fence_event_, INFINITE);
+    auto& batch = submissions_[submission_slot_];
+    batch.fence = internal_fence_value_;
+    for (auto* submitted : contexts) {
+        submitted->set_submission_fence(internal_fence_value_);
+        auto callbacks = submitted->take_callbacks();
+        if (!callbacks.empty()) completions_.push_back({internal_fence_value_, std::move(callbacks)});
+        retain(submitted->shared_from_this());
     }
-    for (auto& callback : completion_callbacks_) callback();
-    completion_callbacks_.clear();
-    retained_resources_.clear();
-    retained_uploads_.clear();
-    gpu_srv_uav_heap_.reset(GPU_SRV_UAV_RESERVED_COUNT);
-    gpu_sampler_heap_.reset();
-    sampler_tables_.clear();
-    dynamic_ring_buffer_.reset();
+    if (recording_contexts_.empty()) {
+        batch.sealed = true;
+        submission_active_ = false;
+        submission_slot_ = (submission_slot_ + 1) % FRAMES_IN_FLIGHT;
+    }
+    if (wait) wait_for_fence(internal_fence_value_);
+    collect_submissions();
 }
-void DX12Backend::tick() { RHIBackend::tick(); }
+void DX12Backend::tick() { collect_submissions(); RHIBackend::tick(); }
 void DX12Backend::destroy() {
     if (!device_) return;
     submit_and_wait();
@@ -180,9 +241,10 @@ void DX12Backend::destroy() {
     dynamic_ring_buffer_.destroy();
     rtv_allocator_.destroy(); dsv_allocator_.destroy(); cpu_srv_uav_allocator_.destroy(); cpu_sampler_allocator_.destroy();
     gpu_srv_uav_heap_.destroy(); gpu_sampler_heap_.destroy();
-    command_list_.Reset(); command_allocator_.Reset(); command_queue_.Reset(); internal_fence_.Reset(); info_queue_.Reset();
+    command_queue_.Reset(); internal_fence_.Reset(); info_queue_.Reset();
     if (internal_fence_event_) CloseHandle(internal_fence_event_);
     internal_fence_event_ = nullptr;
+    collect_memory();
     device_.Reset();
 }
 bool DX12Backend::check_debug_messages(const char* tag) {
@@ -207,6 +269,8 @@ void DX12Backend::set_name(RHIResourceRef resource, const std::string& name) {
     resource->set_name(name);
     if (resource->get_type() == RHI_BUFFER || resource->get_type() == RHI_TEXTURE) {
         auto* native = static_cast<ID3D12Resource*>(resource->raw_handle());
+        auto allocation = memory_allocations_.find(memory_id(resource));
+        if (allocation != memory_allocations_.end()) allocation->second.name = name;
         if (native) native->SetName(std::wstring(name.begin(), name.end()).c_str());
     }
 }
@@ -222,7 +286,11 @@ DX12Surface::DX12Surface(HWND hwnd) : hwnd_(hwnd) {
 }
 RHISurfaceRef DX12Backend::create_surface(void* hwnd) { return std::make_shared<DX12Surface>(static_cast<HWND>(hwnd)); }
 RHICommandPoolRef DX12Backend::create_command_pool(const RHICommandPoolInfo& info) { return std::make_shared<DX12CommandPool>(info); }
-RHICommandContextRef DX12Backend::create_command_context(RHICommandPoolRef pool) { return std::make_shared<DX12CommandContext>(pool, shared_from_this()); }
+RHICommandContextRef DX12Backend::create_command_context(RHICommandPoolRef pool) {
+    auto context = std::make_shared<DX12CommandContext>(pool, shared_from_this());
+    if (!context->init()) return nullptr;
+    return context;
+}
 
 DX12Swapchain::DX12Swapchain(const RHISwapchainInfo& info, std::shared_ptr<DX12Backend> backend) : RHISwapchain(info), backend_(backend) {
     DXGI_SWAP_CHAIN_DESC1 desc = {};
@@ -262,10 +330,13 @@ void DX12Swapchain::present(RHISemaphoreRef) {
     if (!backend || !swap_chain_) return;
     auto* back_buffer = static_cast<DX12Texture*>(back_buffers_[current_index_].get());
     if (back_buffer->get_subresource_state(0) != D3D12_RESOURCE_STATE_PRESENT) {
-        backend->ensure_recording();
-        back_buffer->transition(backend->get_command_list(), D3D12_RESOURCE_STATE_PRESENT);
+        auto* immediate_ctx = backend->get_immediate_context();
+        if (auto* cmd = immediate_ctx ? immediate_ctx->ensure_recording() : nullptr) {
+            back_buffer->transition(cmd, D3D12_RESOURCE_STATE_PRESENT);
+        }
     }
-    if (backend->is_recording()) backend->submit_and_wait();
+    if (auto* immediate_ctx = backend->peek_immediate_context(); immediate_ctx && immediate_ctx->is_recording())
+        backend->submit(immediate_ctx);
     check_hr(swap_chain_->Present(1, 0), "Present");
     current_index_ = swap_chain_->GetCurrentBackBufferIndex();
 }

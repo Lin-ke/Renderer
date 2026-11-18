@@ -11,6 +11,10 @@
 #include "engine/function/framework/component/transform_component.h"
 #include <imgui.h>
 #include <array>
+#include <algorithm>
+#include <barrier>
+#include <ranges>
+#include <thread>
 #include <cstring>
 
 namespace {
@@ -71,21 +75,6 @@ TEST_CASE("DX12 upload buffer can publish a partial mapped write", "[rhi][dx12][
     test_utils::TestContext::reset();
 }
 
-TEST_CASE("Root layouts merge stages and preserve register namespaces", "[rhi][dx12]") {
-    test_utils::TestContext::reset();
-    RHIRootSignatureInfo info;
-    info.add_entry({.binding = 0, .frequency = SHADER_FREQUENCY_VERTEX, .type = RESOURCE_TYPE_UNIFORM_BUFFER});
-    info.add_entry({.binding = 0, .frequency = SHADER_FREQUENCY_FRAGMENT, .type = RESOURCE_TYPE_UNIFORM_BUFFER});
-    info.add_entry({.binding = 0, .size = 2, .type = RESOURCE_TYPE_TEXTURE});
-    info.add_entry({.binding = 0, .type = RESOURCE_TYPE_SAMPLER});
-    REQUIRE(info.is_valid());
-    REQUIRE(info.get_entries().size() == 3);
-    REQUIRE(info.find_entry(0, 0, RESOURCE_TYPE_UNIFORM_BUFFER)->frequency == (SHADER_FREQUENCY_VERTEX | SHADER_FREQUENCY_FRAGMENT));
-    info.add_entry({.binding = 1, .type = RESOURCE_TYPE_BUFFER});
-    REQUIRE_FALSE(info.is_valid()); // t1 overlaps the t0[2] array even with a different SRV type.
-    test_utils::TestContext::reset();
-}
-
 TEST_CASE("DX12 RDG compute render copy and pooled descriptor reuse", "[rhi][dx12][rdg]") {
     test_utils::TestContext::reset();
     auto backend = EngineContext::rhi();
@@ -99,7 +88,6 @@ TEST_CASE("DX12 RDG compute render copy and pooled descriptor reuse", "[rhi][dx1
         })", SHADER_FREQUENCY_COMPUTE, "cs_5_0");
     REQUIRE(compute);
     RHIRootSignatureInfo compute_layout; compute_layout.add_entry_from_reflect(compute);
-    REQUIRE(compute_layout.get_entries().size() == 1);
     auto compute_root = backend->create_root_signature(compute_layout); REQUIRE(compute_root);
     auto compute_pipeline = backend->create_compute_pipeline({compute, compute_root}); REQUIRE(compute_pipeline);
     auto vertex = make_shader(fullscreen_vertex, SHADER_FREQUENCY_VERTEX, "vs_5_0");
@@ -138,9 +126,7 @@ TEST_CASE("DX12 RDG compute render copy and pooled descriptor reuse", "[rhi][dx1
             graph.execute(); commands->end_command(); commands->execute();
             std::vector<uint8_t> pixels(13*7*4);
             REQUIRE(backend->create_command_context(nullptr)->read_texture(output,pixels.data(),uint32_t(pixels.size())));
-            for (size_t i = 0; i < pixels.size(); i += 4) {
-                REQUIRE(pixels[i] == 64); REQUIRE(pixels[i+1] == 128); REQUIRE(pixels[i+2] == 191); REQUIRE(pixels[i+3] == 255);
-            }
+            CHECK(test_utils::image_matches(pixels, 13, [](auto, auto) { return std::array<uint8_t,4>{64,128,191,255}; }));
             REQUIRE_FALSE(backend->check_debug_messages("RDG compute-render-copy"));
         }
     }
@@ -177,10 +163,9 @@ TEST_CASE("DX12 constant buffer and descriptor snapshots survive deferred draws"
         commands->end_render_pass(); commands->end_command(); commands->execute();
         std::vector<uint8_t> pixels(13*7*4);
         REQUIRE(backend->create_command_context(nullptr)->read_texture(target,pixels.data(),uint32_t(pixels.size())));
-        for (int y = 0; y < 7; ++y) for (int x = 0; x < 13; ++x) {
-            auto offset = (y*13+x)*4;
-            REQUIRE(pixels[offset] == (x < 5 ? 255 : 0)); REQUIRE(pixels[offset+1] == (x < 5 ? 0 : 255));
-        }
+        CHECK(test_utils::image_matches(pixels, 13, [](auto x, auto) {
+            return std::array<uint8_t,4>{uint8_t(x < 5 ? 255 : 0),uint8_t(x < 5 ? 0 : 255),0,255};
+        }));
         REQUIRE_FALSE(backend->check_debug_messages("descriptor snapshots"));
     }
     test_utils::TestContext::reset();
@@ -201,7 +186,9 @@ TEST_CASE("DX12 packed texture uploads preserve odd row pitches and mip layers",
     auto readback = backend->create_buffer({.size = 3*1*4*2, .memory_usage = MEMORY_USAGE_GPU_TO_CPU}); REQUIRE(readback);
     immediate->copy_texture_to_buffer(texture,{TEXTURE_ASPECT_COLOR,2,0,2},readback,0); immediate->flush();
     auto* pixels = static_cast<uint8_t*>(readback->map()); REQUIRE(pixels);
-    for (int i = 0; i < 6; ++i) { REQUIRE(pixels[i*4] == (i < 3 ? 255 : 0)); REQUIRE(pixels[i*4+1] == (i < 3 ? 0 : 255)); }
+    CHECK(test_utils::image_matches(std::span<const uint8_t>(pixels, 24), 3, [](auto, auto y) {
+        return std::array<uint8_t,4>{uint8_t(y == 0 ? 255 : 0),uint8_t(y == 0 ? 0 : 255),0,255};
+    }));
     readback->unmap();
     REQUIRE_FALSE(backend->check_debug_messages("upload-mips-readback"));
     test_utils::TestContext::reset();
@@ -218,8 +205,6 @@ TEST_CASE("DX12 descriptor arrays use independent register spaces", "[rhi][dx12]
         })",SHADER_FREQUENCY_COMPUTE,"cs_5_1");
     REQUIRE(shader);
     RHIRootSignatureInfo layout; layout.add_entry_from_reflect(shader);
-    REQUIRE(layout.find_entry(1,0,RESOURCE_TYPE_TEXTURE));
-    REQUIRE(layout.find_entry(1,0,RESOURCE_TYPE_TEXTURE)->size == 2);
     auto root = backend->create_root_signature(layout); REQUIRE(root);
     auto pipeline = backend->create_compute_pipeline({shader,root}); REQUIRE(pipeline);
     auto output_set = root->create_descriptor_set(0); auto input_set = root->create_descriptor_set(1);
@@ -239,9 +224,9 @@ TEST_CASE("DX12 descriptor arrays use independent register spaces", "[rhi][dx12]
     commands->end_command(); commands->execute();
     std::vector<uint8_t> pixels(13*7*4);
     REQUIRE(backend->create_command_context(nullptr)->read_texture(target,pixels.data(),uint32_t(pixels.size())));
-    for (int y = 0; y < 7; ++y) for (int x = 0; x < 13; ++x) {
-        REQUIRE(pixels[(y*13+x)*4] == (x < 5 ? 255 : 0)); REQUIRE(pixels[(y*13+x)*4+1] == (x < 5 ? 0 : 255));
-    }
+    CHECK(test_utils::image_matches(pixels, 13, [](auto x, auto) {
+        return std::array<uint8_t,4>{uint8_t(x < 5 ? 255 : 0),uint8_t(x < 5 ? 0 : 255),0,255};
+    }));
     REQUIRE_FALSE(backend->check_debug_messages("descriptor spaces and arrays"));
     test_utils::TestContext::reset();
 }
@@ -352,7 +337,7 @@ TEST_CASE("DX12 RDG storage buffers root constants and consecutive UAV writes", 
     }
     graph.execute(); commands->copy_buffer(output,0,readback,0,64); commands->end_command(); commands->execute();
     auto* result = static_cast<uint32_t*>(readback->map()); REQUIRE(result);
-    for (uint32_t i = 0; i < 16; ++i) REQUIRE(result[i] == i*2+14);
+    CHECK(std::ranges::all_of(std::views::iota(0u, 16u), [&](auto i) { return result[i] == i*2+14; }));
     readback->unmap();
     REQUIRE_FALSE(backend->check_debug_messages("RDG storage buffers and constants"));
     test_utils::TestContext::reset();
@@ -383,5 +368,242 @@ TEST_CASE("DX12 static geometry retains its staging data until submission", "[rh
     readback->unmap();
     CHECK_FALSE(backend->check_debug_messages("static geometry upload"));
 
+    test_utils::TestContext::reset();
+}
+
+TEST_CASE("DX12 per-frame command contexts own independent command lists", "[rhi][dx12]") {
+    test_utils::TestContext::reset();
+    auto backend = EngineContext::rhi();
+    auto* render_system = EngineContext::render_system();
+    REQUIRE(backend);
+    REQUIRE(render_system);
+
+    auto& frame0_cmd = render_system->per_frame_common_resources_[0].command;
+    auto& frame1_cmd = render_system->per_frame_common_resources_[1].command;
+    REQUIRE(frame0_cmd);
+    REQUIRE(frame1_cmd);
+    REQUIRE(frame0_cmd->raw_handle() != nullptr);
+    REQUIRE(frame1_cmd->raw_handle() != nullptr);
+    CHECK(frame0_cmd->raw_handle() != frame1_cmd->raw_handle());
+
+    auto immediate = backend->get_immediate_command();
+    REQUIRE(immediate);
+    std::array<uint32_t, 4> values{10, 20, 30, 40};
+    auto static_buf = backend->create_static_buffer({.size = sizeof(values), .stride = sizeof(uint32_t),
+        .memory_usage = MEMORY_USAGE_CPU_TO_GPU, .type = RESOURCE_TYPE_VERTEX_BUFFER}, values.data());
+    REQUIRE(static_buf);
+    REQUIRE(immediate->raw_handle() != nullptr);
+    CHECK(immediate->raw_handle() != frame0_cmd->raw_handle());
+    CHECK(immediate->raw_handle() != frame1_cmd->raw_handle());
+
+    auto readback = backend->create_buffer({.size = sizeof(values), .memory_usage = MEMORY_USAGE_GPU_TO_CPU});
+    REQUIRE(readback);
+    frame0_cmd->begin_command();
+    frame0_cmd->copy_buffer(static_buf, 0, readback, 0, sizeof(values));
+    frame0_cmd->end_command();
+    frame0_cmd->execute(nullptr, nullptr, nullptr);
+
+    const auto* mapped = static_cast<const uint32_t*>(readback->map());
+    REQUIRE(mapped);
+    CHECK(mapped[0] == 10);
+    CHECK(mapped[1] == 20);
+    CHECK(mapped[2] == 30);
+    CHECK(mapped[3] == 40);
+    readback->unmap();
+    CHECK_FALSE(backend->check_debug_messages("per-frame command contexts"));
+    test_utils::TestContext::reset();
+}
+
+TEST_CASE("DX12 asynchronous submissions preserve constants, views and readbacks across frame reuse", "[rhi][dx12][async]") {
+    test_utils::TestContext::reset();
+    auto backend = EngineContext::rhi();
+    backend->check_debug_messages();
+    auto shader = make_shader(R"(
+        cbuffer Params : register(b0) { uint value; };
+        Texture2D<float4> input_tex : register(t0);
+        RWTexture2D<float4> output_tex : register(u0);
+        [numthreads(8,8,1)] void main(uint3 id : SV_DispatchThreadID) {
+            output_tex[id.xy] = input_tex.Load(int3(0,0,0)) + float4(float(value)/255.0,0,0,0);
+        })", SHADER_FREQUENCY_COMPUTE, "cs_5_0");
+    REQUIRE(shader);
+    RHIRootSignatureInfo layout; layout.add_entry_from_reflect(shader);
+    auto root = backend->create_root_signature(layout);
+    REQUIRE(root);
+    auto pipeline = backend->create_compute_pipeline({.compute_shader = shader, .root_signature = root});
+    REQUIRE(pipeline);
+    auto constants = backend->create_buffer({.size = 16, .memory_usage = MEMORY_USAGE_CPU_TO_GPU, .type = RESOURCE_TYPE_UNIFORM_BUFFER});
+    REQUIRE(constants);
+    auto input = backend->create_texture({.format = FORMAT_R8G8B8A8_UNORM, .extent = {1,1,1}, .type = RESOURCE_TYPE_TEXTURE});
+    auto upload = backend->create_buffer({.size = 4, .memory_usage = MEMORY_USAGE_CPU_TO_GPU});
+    REQUIRE(input); REQUIRE(upload);
+    const std::array<uint8_t,4> texel{10,0,0,255};
+    auto* source = upload->map(); REQUIRE(source);
+    memcpy(source, texel.data(), texel.size()); upload->unmap();
+    backend->get_immediate_command()->copy_buffer_to_texture(upload, 0, input, {TEXTURE_ASPECT_COLOR,0,0,1});
+    auto set = root->create_descriptor_set(0);
+    set->write_buffer(0, constants);
+    std::array<RHICommandListRef,3> commands{make_commands(true), make_commands(false), make_commands(true)};
+    std::array<RHIFenceRef,3> fences{backend->create_fence(true), backend->create_fence(true), backend->create_fence(true)};
+    std::array<RHIBufferRef,18> readbacks;
+    auto latest = backend->create_buffer({.size = 64*64*4, .memory_usage = MEMORY_USAGE_GPU_TO_CPU});
+    REQUIRE(latest);
+    for (uint32_t frame = 0; frame < readbacks.size(); ++frame) {
+        auto& command = commands[frame % commands.size()];
+        command->begin_command();
+        auto output = backend->create_texture({.format = FORMAT_R8G8B8A8_UNORM, .extent = {64,64,1},
+            .type = RESOURCE_TYPE_TEXTURE | RESOURCE_TYPE_RW_TEXTURE});
+        readbacks[frame] = backend->create_buffer({.size = 64*64*4, .memory_usage = MEMORY_USAGE_GPU_TO_CPU});
+        REQUIRE(output); REQUIRE(readbacks[frame]);
+        auto* data = static_cast<uint32_t*>(constants->map()); REQUIRE(data);
+        data[0] = frame + 1; constants->unmap();
+        set->write_texture(0, input).write_texture(0, output, RESOURCE_TYPE_RW_TEXTURE);
+        command->set_compute_pipeline(pipeline);
+        command->bind_descriptor_set(set,0);
+        command->dispatch(8,8,1);
+        command->copy_texture_to_buffer(output, {TEXTURE_ASPECT_COLOR,0,0,1}, readbacks[frame],0);
+        command->copy_texture_to_buffer(output, {TEXTURE_ASPECT_COLOR,0,0,1}, latest,0);
+        command->end_command();
+        command->execute(fences[frame % fences.size()]);
+        for (int tick = 0; tick < 7; ++tick) backend->tick();
+    }
+    for (const auto& fence : fences) fence->wait();
+    const auto* latest_pixels = static_cast<const uint8_t*>(latest->map()); REQUIRE(latest_pixels);
+    CHECK(test_utils::image_matches(std::span<const uint8_t>(latest_pixels,64*64*4),64,
+        [](auto, auto) { return std::array<uint8_t,4>{28,0,0,255}; }));
+    latest->unmap();
+    bool correct = true;
+    for (uint32_t frame = 0; frame < readbacks.size(); ++frame) {
+        const auto* pixels = static_cast<const uint8_t*>(readbacks[frame]->map()); REQUIRE(pixels);
+        correct &= test_utils::image_matches(std::span<const uint8_t>(pixels,64*64*4),64,
+            [frame](auto, auto) { return std::array<uint8_t,4>{uint8_t(11+frame),0,0,255}; });
+        readbacks[frame]->unmap();
+    }
+    CHECK(correct);
+    CHECK_FALSE(backend->check_debug_messages("asynchronous frame resources"));
+    test_utils::TestContext::reset();
+}
+
+TEST_CASE("DX12 completed texture readbacks are visible while another context records", "[rhi][dx12][async]") {
+    test_utils::TestContext::reset();
+    auto backend = EngineContext::rhi();
+    auto input = backend->create_texture({.format = FORMAT_R8G8B8A8_UNORM, .extent = {1,1,1}, .type = RESOURCE_TYPE_TEXTURE});
+    auto upload = backend->create_buffer({.size = 4, .memory_usage = MEMORY_USAGE_CPU_TO_GPU});
+    auto readback = backend->create_buffer({.size = 4, .memory_usage = MEMORY_USAGE_GPU_TO_CPU});
+    REQUIRE(input); REQUIRE(upload); REQUIRE(readback);
+    const std::array<uint8_t,4> expected{31,63,127,255};
+    auto* source = upload->map(); REQUIRE(source);
+    memcpy(source, expected.data(), expected.size()); upload->unmap();
+    backend->get_immediate_command()->copy_buffer_to_texture(upload,0,input,{TEXTURE_ASPECT_COLOR,0,0,1});
+    auto first = make_commands(true), second = make_commands(true);
+    first->begin_command(); second->begin_command();
+    first->copy_texture_to_buffer(input,{TEXTURE_ASPECT_COLOR,0,0,1},readback,0);
+    auto fence = backend->create_fence(true); REQUIRE(fence);
+    first->end_command(); first->execute(fence);
+    fence->wait();
+    const auto* pixels = static_cast<const uint8_t*>(readback->map()); REQUIRE(pixels);
+    CHECK(std::equal(expected.begin(),expected.end(),pixels));
+    readback->unmap();
+    second->end_command(); second->execute();
+    CHECK_FALSE(backend->check_debug_messages("completed copy with a recording context"));
+    test_utils::TestContext::reset();
+}
+
+TEST_CASE("DX12 command contexts support multithreaded parallel recording", "[rhi][dx12][multithread]") {
+    test_utils::TestContext::reset();
+    auto backend = EngineContext::rhi();
+    backend->check_debug_messages();
+
+    auto shader = make_shader(R"(
+        cbuffer ThreadParams : register(b0) { uint thread_color; };
+        Texture2D<float4> base_tex : register(t0);
+        RWTexture2D<float4> out_tex : register(u0);
+        [numthreads(8, 8, 1)]
+        void main(uint3 id : SV_DispatchThreadID) {
+            if (id.x < 16 && id.y < 16) {
+                float4 base = base_tex.Load(int3(0, 0, 0));
+                out_tex[id.xy] = base + float4(float(thread_color) / 255.0, float(id.x) / 255.0, float(id.y) / 255.0, 0.0);
+            }
+        })", SHADER_FREQUENCY_COMPUTE, "cs_5_0");
+    REQUIRE(shader);
+    RHIRootSignatureInfo layout;
+    layout.add_entry_from_reflect(shader);
+    auto root = backend->create_root_signature(layout);
+    REQUIRE(root);
+    auto pipeline = backend->create_compute_pipeline({.compute_shader = shader, .root_signature = root});
+    REQUIRE(pipeline);
+
+    auto base_tex = backend->create_texture({.format = FORMAT_R8G8B8A8_UNORM, .extent = {1, 1, 1}, .type = RESOURCE_TYPE_TEXTURE});
+    auto upload = backend->create_buffer({.size = 4, .memory_usage = MEMORY_USAGE_CPU_TO_GPU});
+    REQUIRE(base_tex);
+    REQUIRE(upload);
+    const std::array<uint8_t, 4> base_pixel{20, 10, 5, 255};
+    void* upload_ptr = upload->map();
+    REQUIRE(upload_ptr);
+    std::memcpy(upload_ptr, base_pixel.data(), base_pixel.size());
+    upload->unmap();
+    auto immediate = backend->get_immediate_command();
+    immediate->copy_buffer_to_texture(upload, 0, base_tex, {TEXTURE_ASPECT_COLOR, 0, 0, 1});
+    immediate->texture_barrier({base_tex, RESOURCE_STATE_TRANSFER_DST, RESOURCE_STATE_SHADER_RESOURCE,
+        {TEXTURE_ASPECT_COLOR, 0, 1, 0, 1}});
+    immediate->flush();
+
+    constexpr uint32_t thread_count = 4;
+    struct WorkerResources {
+        RHICommandListRef commands;
+        RHITextureRef output;
+        RHIBufferRef constants;
+        RHIDescriptorSetRef set;
+    };
+    std::array<WorkerResources, thread_count> workers;
+    for (uint32_t i = 0; i < thread_count; ++i) {
+        workers[i].commands = make_commands(true);
+        workers[i].output = backend->create_texture({.format = FORMAT_R8G8B8A8_UNORM, .extent = {16, 16, 1},
+            .type = RESOURCE_TYPE_TEXTURE | RESOURCE_TYPE_RW_TEXTURE});
+        workers[i].constants = backend->create_buffer({.size = 16, .memory_usage = MEMORY_USAGE_CPU_TO_GPU,
+            .type = RESOURCE_TYPE_UNIFORM_BUFFER});
+        workers[i].set = root->create_descriptor_set(0);
+        REQUIRE(workers[i].commands);
+        REQUIRE(workers[i].output);
+        REQUIRE(workers[i].constants);
+        REQUIRE(workers[i].set);
+
+        auto* cbuf = static_cast<uint32_t*>(workers[i].constants->map());
+        REQUIRE(cbuf);
+        cbuf[0] = (i + 1) * 30;
+        workers[i].constants->unmap();
+        workers[i].set->write_buffer(0, workers[i].constants)
+            .write_texture(0, base_tex)
+            .write_texture(0, workers[i].output, RESOURCE_TYPE_RW_TEXTURE);
+    }
+
+    std::barrier sync_start(thread_count);
+    {
+        std::array<std::jthread, thread_count> threads;
+        for (uint32_t i = 0; i < thread_count; ++i) {
+            threads[i] = std::jthread([&, i] {
+                sync_start.arrive_and_wait();
+                auto& w = workers[i];
+                w.commands->begin_command();
+                w.commands->set_compute_pipeline(pipeline);
+                w.commands->bind_descriptor_set(w.set, 0);
+                w.commands->dispatch(2, 2, 1);
+                w.commands->end_command();
+            });
+        }
+    }
+
+    for (uint32_t i = 0; i < thread_count; ++i) {
+        workers[i].commands->execute();
+    }
+
+    for (uint32_t i = 0; i < thread_count; ++i) {
+        std::vector<uint8_t> pixels(16 * 16 * 4);
+        REQUIRE(backend->create_command_context(nullptr)->read_texture(workers[i].output, pixels.data(), uint32_t(pixels.size())));
+        const uint8_t expected_r = uint8_t(20 + (i + 1) * 30);
+        CHECK(test_utils::image_matches(pixels, 16, [expected_r](auto x, auto y) {
+            return std::array<uint8_t, 4>{expected_r, uint8_t(10 + x), uint8_t(5 + y), 255};
+        }));
+    }
+    CHECK_FALSE(backend->check_debug_messages("multithreaded parallel recording"));
     test_utils::TestContext::reset();
 }

@@ -37,10 +37,7 @@ public:
 
     inline uint32_t pooled_size() { return pooled_size_; }
     inline uint32_t allocated_size() { return allocated_size_; }
-    void clear() {
-        pooled_buffers_.clear();
-        pooled_size_ = 0;
-    }
+    void clear();
 
     static std::shared_ptr<RDGBufferPool> get() {
         static std::shared_ptr<RDGBufferPool> pool;
@@ -78,10 +75,7 @@ public:
 
     inline uint32_t pooled_size() { return pooled_size_; }
     inline uint32_t allocated_size() { return allocated_size_; }
-    void clear() {
-        pooled_textures_.clear();
-        pooled_size_ = 0;
-    }
+    void clear();
 
     static std::shared_ptr<RDGTexturePool> get() {
         static std::shared_ptr<RDGTexturePool> pool;

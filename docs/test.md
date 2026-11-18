@@ -1,155 +1,30 @@
-# 测试编写范式 (Testing Paradigm)
+# 功能测试约定
 
-本文档定义了项目测试编写的标准范式。所有测试应遵循这些约定以保证一致性、独立性和可维护性�?
+测试以真实功能输出为单位：资源导入和保存重载、场景/Prefab 持久化、任务执行、GPU 计算/绘制/拷贝及截图、Profile 报告导出。删除只检查数学计算、getter/setter、内部容器内容或编译器中间状态的独立逻辑测试。
 
----
+## 生命周期
 
-## 1. 测试生命周期管理 (TestContext)
+Catch2 的 `test_main.cpp` 统一初始化并关闭隐藏窗口引擎。具体 `TEST_CASE` 不重复初始化引擎，开头和结尾调用 `test_utils::TestContext::reset()`。全局夹具使用 SingleThread；实际 Game/Render/Device 队列通过 Sun Temple 有限帧样例验证，Bloom 也有实际线程构图/录制与像素回读测试。
 
-我们的测试环境基�?`Catch2` 框架。为了避免频繁地完整重启引擎带来的巨大开销，我们使用了全局 `TestContext` 结合局部的 `reset`�?
+临时资源放在进程专属的 `build/test-work` 项目，通过 `/Game` 访问；退出时清理。截图、Profile 报告等可查看结果放在 `build/test-results`。测试不改写仓库资源。
 
-### 1.1 全局 Engine 生命周期
-`test_main.cpp` 中负责全局�?Engine 初始化和关闭�?*不要在具体的 `TEST_CASE` 中初始化引擎**�?
+## 断言
 
-```cpp
-// �?test_main.cpp 中自动执�?
-test_utils::TestContext::init_engine();
-int result = Catch::Session().run(argc, argv);
-test_utils::TestContext::shutdown_engine();
-```
+保留运行所需的关键前置条件和最终功能结果。`REQUIRE` 用于失败后无法继续的条件，`CHECK` 用于输出验证，浮点比较用 `Catch::Approx`。
 
-### 1.2 `TEST_CASE` 级生命周�?
-每个 `TEST_CASE` 的开头和结尾必须调用 `test_utils::TestContext::reset()`，以确保测试间的隔离状态（清除活跃场景、清空渲染批次等）�?
+像素和 Buffer 仍验证全部数据，但先聚合比较结果，再执行一次断言，不在每个像素/元素上调用断言。RGBA 图像可使用 `test_utils::image_matches(pixels, width, expected)`，expected(x,y) 返回四通道预期值，可传通道容差。大型场景验证截图、亮度和色彩分布，不依赖 UI 亮度或内部实现顺序。
 
-```cpp
-TEST_CASE("Example Test", "[tag]") {
-    test_utils::TestContext::reset(); // 1. 重置上一个测试可能残留的状�?
-    
-    // 临时资源直接使用 /Game，测试进程负责挂载临时项目。
-    
-    // 3. 执行测试逻辑
-    REQUIRE(EngineContext::rhi() != nullptr);
-    
-    test_utils::TestContext::reset(); // 4. 最终清�?
-}
-```
+不要断言固定的 Pass 创建顺序、内部池对象数量、资源字段的重复 getter/setter 结果。依赖排序和资源复用通过真正执行 compute/render/copy 并回读输出验证。失败时保存图像和必要上下文，方便定位。
 
----
+## 运行
 
-## 2. 实用测试工具 (`test_utils`)
-
-`test_utils.h` 提供了大量的辅助工具类和函数来简化测试编写�?
-
-### 2.1 临时资产
-
-每次测试运行在 `build/test-work` 下创建临时项目，并将其挂载为 `/Game`。测试退出时清理该项目。截图和分析文件保存在 `build/test-results`。
-
-### 2.2 场景加载 (`SceneLoader`)
-用于一键式处理场景的虚拟路径解析、UID查找、加载、以及组件初始化�?
-
-```cpp
-auto result = test_utils::SceneLoader::load("/Game/scene.asset", true);
-REQUIRE(result.is_valid());
-REQUIRE(result.scene != nullptr);
-REQUIRE(result.camera != nullptr);
-```
-
-### 2.3 渲染测试框架 (`RenderTestApp`)
-当你需要执行真实的 GPU 绘制并获取截图（或验证渲染流程）时，使用 `RenderTestApp`�?
-
-```cpp
-test_utils::RenderTestApp::Config config;
-config.scene_path = "/Game/test_scene.asset";
-config.max_frames = 60;
-config.capture_frame = 30; // 捕获�?0帧作为截图验�?
-config.create_scene_func = custom_scene_setup;
-
-std::vector<uint8_t> screenshot_data;
-int frames_rendered = 0;
-bool success = test_utils::RenderTestApp::run(config, screenshot_data, &frames_rendered);
-
-REQUIRE(success);
-// 验证图像亮度
-float brightness = test_utils::calculate_average_brightness(screenshot_data);
-REQUIRE(brightness > 10.0f);
-```
-
----
-
-## 3. 测试文件组织与标�?
-
-测试文件应当保持**单一职责**，并通过 Catch2 �?Tag 系统进行归类�?
-
-### 目录结构参�?
-```
-test/
-├── test_main.cpp              # Catch2 Session 入口，管理引擎全局启停
-├── test_utils.h/.cpp          # 测试核心基建（TestContext, SceneLoader 等）
-├── render/
-�?  ├── test_basic.cpp         # 基础绘制测试 [draw]
-�?  ├── test_pbr.cpp           # PBR渲染测试 [draw][advanced]
-�?  ├── test_rdg.cpp           # RDG 框架测试 [rdg]
-�?  └── test_rdg_builder.cpp
-├── render_resource/
-�?  └── test_render_resources.cpp # 纹理/材质/Buffer等资源测�?[render_resource]
-└── test_scene_core.cpp        # 场景和组件系�?[scene]
-```
-
-### 常用标签体系
-- `[render_resource]`：渲染资�?(Texture/Buffer/Shader) 相关
-- `[draw]`：各类绘制测�?
-- `[scene]`：场景系统、实体和组件测试
-- `[core]`：底层基础设施如日志、线程池
-- `[reflection]`：反射系统测�?
-- `[rdg]`：渲染依赖图 (Render Dependency Graph) 测试
-
----
-
-## 4. 断言与最佳实�?
-
-### 4.1 断言选择
-- 使用 `REQUIRE(expr)` 作为关键断言，失败会立即终止当前测试�?
-- 使用 `CHECK(expr)` 进行非关键验证，允许继续执行收集更多错误信息�?
-- 浮点数对比必须使�?`Catch::Approx`�?
-  ```cpp
-  REQUIRE(value == Catch::Approx(1.0f).margin(0.001));
-  ```
-
-### 4.2 SECTION 的使�?
-在同一�?`TEST_CASE` 中使�?`SECTION` 可以重用公共�?Setup 代码�?*注意：每次运�?`SECTION` 时，它外部的 `TEST_CASE` 代码都会从头执行一次�?*
-
-```cpp
-TEST_CASE("Buffer Tests", "[render_resource]") {
-    test_utils::TestContext::reset();
-    auto buffer = create_shared_buffer(); // 每个 SECTION 都会创建一个新 Buffer
-    
-    SECTION("Vertex Buffer") {
-        // ...
-    }
-    SECTION("Index Buffer") {
-        // ...
-    }
-    test_utils::TestContext::reset();
-}
-```
-
-### 4.3 避免反模�?
-- �?忘记在测试末尾调�?`TestContext::reset()`�?
-- �?�?`SECTION` 之间共享可变状态�?
-- �?编写没有验证逻辑的空测试（如仅仅检查非空而不验证行为）�?
-- 临时资产应写入测试项目，避免写入源码目录。
-
----
-
-## 5. 运行测试
-
-```bash
-# 运行所有测�?
+```powershell
+xmake build utest
 xmake run utest
-
-# 运行特定标签（例如仅运行 RDG 测试�?
-xmake run utest "[rdg]"
-
-# 运行特定名称的测�?
-xmake run utest "Test Case Name"
+xmake run utest "[bloom]"
+xmake run utest "[profile]"
 ```
+
+常用标签为 `[render]`、`[rhi][dx12]`、`[rdg]`、`[render_resource]`、`[scene]`、`[prefab]`、`[profile]`。Sun Temple 导入用例默认隐藏，按 [sun_temple.md](sun_temple.md) 显式运行。
+
+渲染测试通过 `RenderTestApp` 或 RHI/RDG 执行真实命令，使用隐藏窗口，截图检查最终输出；具体接口见 [dx12.md](dx12.md) 和 [rdg.md](rdg.md)。性能数据采用 [profile.md](profile.md) 的会话报告，不写固定耗时断言。

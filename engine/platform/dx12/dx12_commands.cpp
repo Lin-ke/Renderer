@@ -1,8 +1,10 @@
 #include "platform_rhi.h"
+#include "engine/core/utils/profile_probe.h"
 #include <imgui.h>
 #include <imgui_impl_dx12.h>
 #include <algorithm>
 #include <cstring>
+#include <span>
 
 DEFINE_LOG_TAG(LogDX12Commands, "DX12Commands");
 
@@ -95,36 +97,119 @@ bool DX12ComputePipeline::init() {
 void DX12ComputePipeline::destroy() { pso_.Reset(); }
 
 DX12CommandContext::DX12CommandContext(RHICommandPoolRef pool, std::shared_ptr<DX12Backend> backend) : RHICommandContext(pool), backend_(backend) {}
+DX12CommandContext::~DX12CommandContext() { destroy(); }
+bool DX12CommandContext::init() {
+    auto backend = backend_.lock();
+    if (!backend || !backend->get_device()) return false;
+    if (FAILED(backend->get_device()->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&command_allocator_)))) {
+        ERR(LogDX12Commands, "Create command allocator failed");
+        return false;
+    }
+    if (FAILED(backend->get_device()->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, command_allocator_.Get(), nullptr, IID_PPV_ARGS(&command_list_)))) {
+        ERR(LogDX12Commands, "Create command list failed");
+        return false;
+    }
+    command_list_->Close();
+    is_recording_ = false;
+    return true;
+}
+void DX12CommandContext::destroy() {
+    if (auto backend = backend_.lock()) {
+        backend->wait_for_fence(submission_fence_);
+        backend->end_context(this);
+    }
+    if (is_recording_ && command_list_) {
+        command_list_->Close();
+        is_recording_ = false;
+    }
+    command_list_.Reset();
+    command_allocator_.Reset();
+}
+ID3D12GraphicsCommandList* DX12CommandContext::ensure_recording() {
+    if (is_recording_) return command_list_.Get();
+    auto backend = backend_.lock();
+    if (!backend || !command_allocator_ || !command_list_) return nullptr;
+    backend->wait_for_fence(submission_fence_);
+    backend->prepare_submission();
+    if (FAILED(command_allocator_->Reset())) {
+        ERR(LogDX12Commands, "Reset command allocator failed");
+        return nullptr;
+    }
+    if (FAILED(command_list_->Reset(command_allocator_.Get(), nullptr))) {
+        ERR(LogDX12Commands, "Reset command list failed");
+        return nullptr;
+    }
+    ID3D12DescriptorHeap* heaps[] = {backend->get_gpu_srv_uav_heap().get_heap(), backend->get_gpu_sampler_heap().get_heap()};
+    command_list_->SetDescriptorHeaps(2, heaps);
+    is_recording_ = true;
+    backend->begin_context(this);
+    return command_list_.Get();
+}
+bool DX12CommandContext::close_command_list() {
+    if (!is_recording_ || !command_list_) return false;
+    is_recording_ = false;
+    if (auto backend = backend_.lock()) backend->end_context(this);
+    if (FAILED(command_list_->Close())) {
+        ERR(LogDX12Commands, "Close command list failed");
+        return false;
+    }
+    return true;
+}
 void DX12CommandContext::begin_command() {
-    if (auto backend = backend_.lock()) backend->ensure_recording();
+    ensure_recording();
+    if (gpu_profiler_) static_cast<DX12GPUProfiler*>(gpu_profiler_)->set_command_list(command_list_.Get());
     current_graphics_pipeline_ = nullptr; current_compute_pipeline_ = nullptr; bound_sets_ = {}; vertex_streams_ = {};
 }
 void DX12CommandContext::end_command() {}
 void DX12CommandContext::execute(RHIFenceRef fence, RHISemaphoreRef, RHISemaphoreRef) {
     if (auto backend = backend_.lock()) {
-        backend->submit_and_wait();
+        backend->submit(this, !fence);
         if (fence) static_cast<DX12Fence*>(fence.get())->signal(backend->get_command_queue());
     }
 }
+void DX12CommandContext::gpu_timestamp_begin_frame() {
+    if (gpu_profiler_) {
+        ensure_recording();
+        static_cast<DX12GPUProfiler*>(gpu_profiler_)->set_command_list(command_list_.Get());
+    }
+    RHICommandContext::gpu_timestamp_begin_frame();
+}
+void DX12CommandContext::gpu_timestamp_end_frame() {
+    if (gpu_profiler_) static_cast<DX12GPUProfiler*>(gpu_profiler_)->set_command_list(command_list_.Get());
+    RHICommandContext::gpu_timestamp_end_frame();
+}
+void DX12CommandContext::gpu_timestamp_begin(const std::string& name) {
+    if (gpu_profiler_) {
+        ensure_recording();
+        static_cast<DX12GPUProfiler*>(gpu_profiler_)->set_command_list(command_list_.Get());
+    }
+    RHICommandContext::gpu_timestamp_begin(name);
+}
+void DX12CommandContext::gpu_timestamp_end() {
+    if (gpu_profiler_) static_cast<DX12GPUProfiler*>(gpu_profiler_)->set_command_list(command_list_.Get());
+    RHICommandContext::gpu_timestamp_end();
+}
 void DX12CommandContext::texture_barrier(const RHITextureBarrier& barrier) {
     auto backend = backend_.lock(); if (!backend || !barrier.texture) return;
-    backend->ensure_recording(); backend->retain(barrier.texture);
+    auto* command = ensure_recording(); if (!command) return;
+    backend->retain(barrier.texture);
     auto range = barrier.subresource;
-    static_cast<DX12Texture*>(barrier.texture.get())->transition(backend->get_command_list(), DX12Backend::to_d3d12_resource_state(barrier.dst_state),
+    static_cast<DX12Texture*>(barrier.texture.get())->transition(command, DX12Backend::to_d3d12_resource_state(barrier.dst_state),
         range.base_mip_level, range.level_count, range.base_array_layer, range.layer_count);
 }
 void DX12CommandContext::buffer_barrier(const RHIBufferBarrier& barrier) {
     auto backend = backend_.lock(); if (!backend || !barrier.buffer) return;
-    backend->ensure_recording(); backend->retain(barrier.buffer);
-    static_cast<DX12Buffer*>(barrier.buffer.get())->transition(backend->get_command_list(), DX12Backend::to_d3d12_resource_state(barrier.dst_state));
+    auto* command = ensure_recording(); if (!command) return;
+    backend->retain(barrier.buffer);
+    static_cast<DX12Buffer*>(barrier.buffer.get())->transition(command, DX12Backend::to_d3d12_resource_state(barrier.dst_state));
 }
 void DX12CommandContext::begin_render_pass(RHIRenderPassRef pass) {
     auto backend = backend_.lock(); if (!backend || !pass) return;
-    backend->ensure_recording(); backend->retain(pass);
+    auto* command = ensure_recording(); if (!command) return;
+    backend->retain(pass);
     current_render_pass_ = static_cast<DX12RenderPass*>(pass.get());
     current_depth_texture_ = nullptr; current_depth_read_only_ = false;
     const auto& info = pass->get_info();
-    auto* command = backend->get_command_list();
     D3D12_CPU_DESCRIPTOR_HANDLE targets[MAX_RENDER_TARGETS] = {};
     uint32_t count = 0;
     for (uint32_t i = 0; i < MAX_RENDER_TARGETS; ++i) {
@@ -154,17 +239,17 @@ void DX12CommandContext::begin_render_pass(RHIRenderPassRef pass) {
     set_viewport({0, 0}, {info.extent.width, info.extent.height}); set_scissor({0, 0}, {info.extent.width, info.extent.height});
 }
 void DX12CommandContext::end_render_pass() {
-    if (auto backend = backend_.lock()) backend->get_command_list()->OMSetRenderTargets(0, nullptr, FALSE, nullptr);
+    if (is_recording_ && command_list_) command_list_->OMSetRenderTargets(0, nullptr, FALSE, nullptr);
     current_render_pass_ = nullptr; current_depth_texture_ = nullptr; current_depth_read_only_ = false;
 }
 void DX12CommandContext::set_viewport(Offset2D min, Offset2D max) {
-    auto backend = backend_.lock(); if (!backend) return;
+    auto* command = ensure_recording(); if (!command) return;
     D3D12_VIEWPORT viewport = {float(min.x), float(min.y), float(max.x - min.x), float(max.y - min.y), 0, 1};
-    backend->get_command_list()->RSSetViewports(1, &viewport);
+    command->RSSetViewports(1, &viewport);
 }
 void DX12CommandContext::set_scissor(Offset2D min, Offset2D max) {
-    auto backend = backend_.lock(); if (!backend) return;
-    D3D12_RECT rect = {LONG(min.x), LONG(min.y), LONG(max.x), LONG(max.y)}; backend->get_command_list()->RSSetScissorRects(1, &rect);
+    auto* command = ensure_recording(); if (!command) return;
+    D3D12_RECT rect = {LONG(min.x), LONG(min.y), LONG(max.x), LONG(max.y)}; command->RSSetScissorRects(1, &rect);
 }
 void DX12CommandContext::set_depth_bias(float constant, float slope, float clamp) {
     if (constant != 0 || slope != 0 || clamp != 0) WARN(LogDX12Commands, "Depth bias must be set in the DX12 pipeline rasterizer state");
@@ -172,31 +257,33 @@ void DX12CommandContext::set_depth_bias(float constant, float slope, float clamp
 void DX12CommandContext::set_line_width(float width) { if (width != 1) WARN(LogDX12Commands, "DX12 supports line width 1 only"); }
 void DX12CommandContext::set_graphics_pipeline(RHIGraphicsPipelineRef pipeline) {
     auto backend = backend_.lock(); if (!backend || !pipeline) return;
-    backend->ensure_recording(); backend->retain(pipeline);
+    auto* command = ensure_recording(); if (!command) return;
+    backend->retain(pipeline);
     current_graphics_pipeline_ = static_cast<DX12GraphicsPipeline*>(pipeline.get()); current_compute_pipeline_ = nullptr;
-    auto* command = backend->get_command_list();
     command->SetPipelineState(current_graphics_pipeline_->get_pso());
     command->SetGraphicsRootSignature(static_cast<DX12RootSignature*>(pipeline->get_info().root_signature.get())->get_signature());
     command->IASetPrimitiveTopology(current_graphics_pipeline_->get_topology());
 }
 void DX12CommandContext::set_compute_pipeline(RHIComputePipelineRef pipeline) {
     auto backend = backend_.lock(); if (!backend || !pipeline) return;
-    backend->ensure_recording(); backend->retain(pipeline);
+    auto* command = ensure_recording(); if (!command) return;
+    backend->retain(pipeline);
     current_compute_pipeline_ = static_cast<DX12ComputePipeline*>(pipeline.get()); current_graphics_pipeline_ = nullptr;
-    backend->get_command_list()->SetPipelineState(current_compute_pipeline_->get_pso());
-    backend->get_command_list()->SetComputeRootSignature(static_cast<DX12RootSignature*>(pipeline->get_info().root_signature.get())->get_signature());
+    command->SetPipelineState(current_compute_pipeline_->get_pso());
+    command->SetComputeRootSignature(static_cast<DX12RootSignature*>(pipeline->get_info().root_signature.get())->get_signature());
 }
 void DX12CommandContext::set_ray_tracing_pipeline(RHIRayTracingPipelineRef) { ERR(LogDX12Commands, "DXR is unsupported"); }
 void DX12CommandContext::push_constants(void* data, uint16_t size, ShaderFrequency frequency) {
     auto backend = backend_.lock();
     if (!backend || !data || !size || size % 4 || (!current_graphics_pipeline_ && !current_compute_pipeline_)) return;
+    auto* command = ensure_recording(); if (!command) return;
     auto root = current_compute_pipeline_ ? current_compute_pipeline_->get_info().root_signature : current_graphics_pipeline_->get_info().root_signature;
     const auto& constants = root->get_info().get_push_constants();
     for (uint32_t i = 0; i < constants.size(); ++i) {
         if ((constants[i].frequency & frequency) && size <= constants[i].size) {
             uint32_t parameter = uint32_t(root->get_info().get_entries().size()) + i;
-            if (current_compute_pipeline_) backend->get_command_list()->SetComputeRoot32BitConstants(parameter, size / 4, data, 0);
-            else backend->get_command_list()->SetGraphicsRoot32BitConstants(parameter, size / 4, data, 0);
+            if (current_compute_pipeline_) command->SetComputeRoot32BitConstants(parameter, size / 4, data, 0);
+            else command->SetGraphicsRoot32BitConstants(parameter, size / 4, data, 0);
             return;
         }
     }
@@ -205,18 +292,47 @@ void DX12CommandContext::push_constants(void* data, uint16_t size, ShaderFrequen
 void DX12CommandContext::bind_descriptor_set(RHIDescriptorSetRef set, uint32_t index) {
     if (!set || index >= MAX_DESCRIPTOR_SETS || index != set->get_set()) { ERR(LogDX12Commands, "Invalid descriptor set index"); return; }
     bound_sets_[index] = set->snapshot();
+    if (auto backend = backend_.lock()) backend->retain(bound_sets_[index]);
 }
 bool DX12CommandContext::flush_bindings(bool compute) {
+    ProfileProbe probe("DX12_FlushBindings");
     auto backend = backend_.lock(); if (!backend) return false;
+    auto* command = ensure_recording(); if (!command) return false;
     auto root = compute ? current_compute_pipeline_->get_info().root_signature : current_graphics_pipeline_->get_info().root_signature;
-    auto* device = backend->get_device(); auto* command = backend->get_command_list();
+    auto* device = backend->get_device();
     const auto& entries = root->get_info().get_entries();
     for (uint32_t parameter = 0; parameter < entries.size(); ++parameter) {
         const auto& entry = entries[parameter];
         const auto& set = bound_sets_[entry.set];
-        if (set && set->get_root_signature()->get_info().get_entries() != entries) { ERR(LogDX12Commands, "Descriptor layout does not match pipeline"); return false; }
+        if (set && set->get_root_signature() != root && set->get_root_signature()->get_info().get_entries() != entries) { ERR(LogDX12Commands, "Descriptor layout does not match pipeline"); return false; }
         bool sampler = entry.type == RESOURCE_TYPE_SAMPLER;
         auto& heap = sampler ? backend->get_gpu_sampler_heap() : backend->get_gpu_srv_uav_heap();
+        if (entry.size == 1 && (sampler || entry.type == RESOURCE_TYPE_TEXTURE ||
+            entry.type == RESOURCE_TYPE_TEXTURE_CUBE || entry.type == RESOURCE_TYPE_RW_TEXTURE)) {
+            const RHIDescriptorUpdateInfo* descriptor = nullptr;
+            if (set) for (const auto& candidate : set->get_descriptors())
+                if (candidate.binding == entry.binding && candidate.index == 0 &&
+                    (candidate.resource_type == entry.type || (entry.type == RESOURCE_TYPE_TEXTURE_CUBE &&
+                        candidate.resource_type == RESOURCE_TYPE_TEXTURE))) { descriptor = &candidate; break; }
+            D3D12_CPU_DESCRIPTOR_HANDLE source{};
+            if (sampler) source = descriptor && descriptor->sampler ?
+                static_cast<DX12Sampler*>(descriptor->sampler.get())->get_handle() : backend->get_default_sampler();
+            else if (descriptor && descriptor->texture_view) {
+                auto* view = static_cast<DX12TextureView*>(descriptor->texture_view.get());
+                auto* texture = view->get_dx12_texture(); const auto& range = view->get_info().subresource;
+                auto state = is_uav(entry.type) ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS :
+                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+                if (texture == current_depth_texture_ && current_depth_read_only_) state |= D3D12_RESOURCE_STATE_DEPTH_READ;
+                texture->transition(command, state, range.base_mip_level, range.level_count, range.base_array_layer, range.layer_count);
+                source = is_uav(entry.type) ? view->get_uav() : view->get_srv();
+            } else source = is_uav(entry.type) ? backend->get_null_uav_2d() :
+                (entry.type == RESOURCE_TYPE_TEXTURE_CUBE ? backend->get_null_srv_cube() : backend->get_null_srv_2d());
+            const auto table = sampler ? backend->sampler_table(source) : backend->resource_table(source);
+            if (table == UINT32_MAX) return false;
+            if (compute) command->SetComputeRootDescriptorTable(parameter, heap.get_gpu_handle(table));
+            else command->SetGraphicsRootDescriptorTable(parameter, heap.get_gpu_handle(table));
+            continue;
+        }
         D3D12_CPU_DESCRIPTOR_HANDLE sampler_source = backend->get_default_sampler();
         if (sampler && entry.size == 1 && set) for (const auto& descriptor : set->get_descriptors())
             if (descriptor.binding == entry.binding && descriptor.resource_type == RESOURCE_TYPE_SAMPLER && descriptor.sampler)
@@ -233,8 +349,9 @@ bool DX12CommandContext::flush_bindings(bool compute) {
             if (sampler) source = descriptor && descriptor->sampler ? static_cast<DX12Sampler*>(descriptor->sampler.get())->get_handle() : backend->get_default_sampler();
             else if (entry.type == RESOURCE_TYPE_UNIFORM_BUFFER) {
                 if (descriptor && descriptor->buffer) {
-                    auto bytes = descriptor->constant_data;
-                    if (bytes.empty()) bytes = descriptor->buffer->snapshot_data();
+                    std::vector<uint8_t> fallback;
+                    std::span<const uint8_t> bytes = descriptor->constant_data;
+                    if (bytes.empty()) { fallback = descriptor->buffer->snapshot_data(); bytes = fallback; }
                     uint64_t offset = descriptor->buffer_offset;
                     uint64_t size = descriptor->buffer_range ? descriptor->buffer_range : descriptor->buffer->get_info().size - offset;
                     D3D12_GPU_VIRTUAL_ADDRESS address = 0; void* cpu = nullptr;
@@ -292,21 +409,20 @@ bool DX12CommandContext::flush_bindings(bool compute) {
         }
         if (compute) command->SetComputeRootDescriptorTable(parameter, heap.get_gpu_handle(start));
         else command->SetGraphicsRootDescriptorTable(parameter, heap.get_gpu_handle(start));
-        if (set) backend->retain(set);
     }
     return true;
 }
 bool DX12CommandContext::flush_graphics_bindings() {
     if (!flush_bindings(false)) return false;
-    auto backend = backend_.lock();
+    auto* command = ensure_recording(); if (!command) return false;
     const auto& strides = current_graphics_pipeline_->get_vertex_strides();
     for (uint32_t i = 0; i < vertex_streams_.size(); ++i) {
         auto& binding = vertex_streams_[i]; if (!binding.active) continue;
         auto* buffer = binding.buffer;
-        buffer->transition(backend->get_command_list(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+        buffer->transition(command, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
         D3D12_VERTEX_BUFFER_VIEW view = {buffer->get_current_gpu_address() + binding.offset, UINT(buffer->get_info().size - binding.offset),
             buffer->get_info().stride ? buffer->get_info().stride : (i < strides.size() ? strides[i] : 0)};
-        backend->get_command_list()->IASetVertexBuffers(i, 1, &view);
+        command->IASetVertexBuffers(i, 1, &view);
     }
     return true;
 }
@@ -317,33 +433,33 @@ void DX12CommandContext::bind_vertex_buffer(RHIBufferRef buffer, uint32_t stream
 }
 void DX12CommandContext::bind_index_buffer(RHIBufferRef buffer, uint32_t offset) {
     auto backend = backend_.lock(); if (!backend || !buffer) return;
+    auto* command = ensure_recording(); if (!command) return;
     backend->retain(buffer); auto* native = static_cast<DX12Buffer*>(buffer.get());
-    native->transition(backend->get_command_list(), D3D12_RESOURCE_STATE_INDEX_BUFFER);
+    native->transition(command, D3D12_RESOURCE_STATE_INDEX_BUFFER);
     D3D12_INDEX_BUFFER_VIEW view = {native->get_current_gpu_address() + offset, UINT(buffer->get_info().size - offset),
         buffer->get_info().stride == 2 ? DXGI_FORMAT_R16_UINT : DXGI_FORMAT_R32_UINT};
-    backend->get_command_list()->IASetIndexBuffer(&view);
+    command->IASetIndexBuffer(&view);
 }
 void DX12CommandContext::draw(uint32_t vertices, uint32_t instances, uint32_t first_vertex, uint32_t first_instance) {
     if (!current_graphics_pipeline_) return;
     if (!flush_graphics_bindings()) return;
-    backend_.lock()->get_command_list()->DrawInstanced(vertices, instances, first_vertex, first_instance);
+    command_list_->DrawInstanced(vertices, instances, first_vertex, first_instance);
 }
 void DX12CommandContext::draw_indexed(uint32_t indices, uint32_t instances, uint32_t first_index, uint32_t offset, uint32_t first_instance) {
     if (!current_graphics_pipeline_) return;
     if (!flush_graphics_bindings()) return;
-    backend_.lock()->get_command_list()->DrawIndexedInstanced(indices, instances, first_index, INT(offset), first_instance);
+    command_list_->DrawIndexedInstanced(indices, instances, first_index, INT(offset), first_instance);
 }
 void DX12CommandContext::dispatch(uint32_t x, uint32_t y, uint32_t z) {
     if (!current_compute_pipeline_) return;
     if (!flush_compute_bindings()) return;
-    backend_.lock()->get_command_list()->Dispatch(x, y, z);
+    command_list_->Dispatch(x, y, z);
 }
 void DX12CommandContext::trace_rays(uint32_t, uint32_t, uint32_t) { ERR(LogDX12Commands, "DXR is unsupported"); }
 void DX12CommandContext::push_event(const std::string& name, Color3) {
-    auto backend = backend_.lock(); if (!backend) return;
-    backend->get_command_list()->BeginEvent(0, name.data(), UINT(name.size()));
+    if (auto* command = ensure_recording()) command->BeginEvent(0, name.data(), UINT(name.size()));
 }
-void DX12CommandContext::pop_event() { if (auto backend = backend_.lock()) backend->get_command_list()->EndEvent(); }
+void DX12CommandContext::pop_event() { if (auto* command = ensure_recording()) command->EndEvent(); }
 
 DX12Fence::DX12Fence(bool signaled, std::shared_ptr<DX12Backend> backend) : signaled_(signaled), backend_(backend) {}
 DX12Fence::~DX12Fence() { destroy(); }
@@ -356,6 +472,9 @@ void DX12Fence::signal(ID3D12CommandQueue* queue) { queue->Signal(fence_.Get(), 
 void DX12Fence::wait() {
     if (!fence_ || !current_value_ || fence_->GetCompletedValue() >= current_value_) return;
     if (SUCCEEDED(fence_->SetEventOnCompletion(current_value_, event_))) WaitForSingleObject(event_, INFINITE);
+}
+bool DX12Fence::is_complete() const {
+    return !fence_ || fence_->GetCompletedValue() >= current_value_;
 }
 void DX12Fence::destroy() { wait(); fence_.Reset(); if (event_) CloseHandle(event_); event_ = nullptr; }
 RHIFenceRef DX12Backend::create_fence(bool signaled) {

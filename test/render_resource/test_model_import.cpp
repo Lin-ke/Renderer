@@ -28,12 +28,7 @@ TEST_CASE("DDS decoding preserves BC1 color and BC5 channels", "[render_resource
     REQUIRE(color);
     CHECK(color->width == 4);
     CHECK(color->height == 4);
-    for (size_t i = 0; i < color->pixels.size(); i += 4) {
-        CHECK(color->pixels[i] == 255);
-        CHECK(color->pixels[i + 1] == 0);
-        CHECK(color->pixels[i + 2] == 0);
-        CHECK(color->pixels[i + 3] == 255);
-    }
+    CHECK(test_utils::image_matches(color->pixels, 4, [](auto, auto) { return std::array<uint8_t,4>{255,0,0,255}; }));
     // The second and third mips use different endpoints from mip 0.
     dds.resize(152);
     word(8, 0xa1007); word(28, 3); word(108, 0x401008);

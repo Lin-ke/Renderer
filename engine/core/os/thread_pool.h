@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/core/utils/profile_session.h"
 #include <vector>
 #include <queue>
 #include <thread>
@@ -33,8 +34,10 @@ public:
     auto enqueue(F&& f, Args&&... args) -> std::future<std::invoke_result_t<F, Args...>> {
         using return_type = std::invoke_result_t<F, Args...>;
         
+        const auto profile_context = ProfileSession::context();
         auto task = std::make_shared<std::packaged_task<return_type()>>(
-            [func = std::forward<F>(f), ...args = std::forward<Args>(args)]() mutable {
+            [profile_context, func = std::forward<F>(f), ...args = std::forward<Args>(args)]() mutable {
+                ProfileContextScope profile_scope(profile_context);
                 return func(std::forward<decltype(args)>(args)...);
             });
 

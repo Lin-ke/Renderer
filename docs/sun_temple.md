@@ -15,10 +15,14 @@ xmake run sun_temple "game/assets/sun_temple/source"
 
 # 隐藏窗口截图，完成后退出
 xmake run sun_temple "game/assets/sun_temple/source" --capture "build/test-results/sun_temple.png"
+
+# 在 Render/Device Thread 路径验证 Bloom
+xmake run sun_temple "game/assets/sun_temple/source" --bloom --capture "build/test-results/sun_temple_bloom.png" --frames 6
 ```
 
 WASD 移动，右键拖动转向，Space/Ctrl 升降，Ctrl+S 保存场景。
 `--frames N` 限制运行帧数，`--verbose` 输出完整导入日志。
+`--bloom` 开启半分辨率亮部提取与横纵高斯模糊，参数默认 threshold=0.25、intensity=0.8。游戏编辑器的 Renderer Debug 面板也提供 Bloom 开关和参数。
 
 ```powershell
 xmake f --mode=release
@@ -26,7 +30,15 @@ xmake build sun_temple
 xmake run sun_temple "game/assets/sun_temple/source" --benchmark --frames 150
 ```
 
-基准会跳过前 30 帧，输出平均帧时间、P95、录制与提交耗时、GPU Pass 耗时及可见网格批次数。加入 `--capture <png-path>` 可在隐藏窗口运行并保存第 3 帧，用于比较像素输出。
+基准会跳过前 30 个完成帧，输出完成帧吞吐率、Device 墙钟时间与 GPU 整帧时间的均值/P95，并保存 Profile JSON。加入 `--capture <png-path>` 可在隐藏窗口运行并保存第 3 帧，用于比较像素输出。
+
+## 加载与资源采集
+
+```powershell
+xmake run sun_temple game/assets/sun_temple/source --profile --frames 6 --bloom --capture build/test-results/profile-sun-temple.png
+```
+
+控制台输出初始化、场景加载和首帧耗时，以及阶段边界的 CPU/GPU 内存。默认报告为 `build/test-results/sun-temple-profile.json`，可用 `--profile-output` 指定。报告包含跨线程 CPU 时间线、GPU 帧/Pass、RDG 依赖/lifetime/物理资源映射和 Device 显存快照。采集口径、CPU 内存 API 和当前覆盖范围见 [profile.md](profile.md)。
 
 ## 实现
 

@@ -1,4 +1,5 @@
 #include "rdg_builder.h"
+#include "engine/core/utils/profile_session.h"
 #include <algorithm>
 #include <map>
 #include <optional>
@@ -258,6 +259,13 @@ bool RDGBuilder::compile() {
             ++indegree[i]; successors[dependency].push_back(i);
         }
         if (!indegree[i]) ready.push(i);
+    }
+    compiled_dependencies_.clear();
+    if (ProfileSession::instance().generation()) {
+        for (size_t i = 0; i < count; ++i) if (live[i]) {
+            for (auto dependency : ordering_dependencies[i]) if (live[dependency])
+                compiled_dependencies_[passes_[i]->ID()].push_back(passes_[dependency]->ID());
+        }
     }
     while (!ready.empty()) {
         auto index = ready.top(); ready.pop();

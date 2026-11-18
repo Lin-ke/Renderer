@@ -18,11 +18,22 @@ void DX12Backend::free_imgui_srv_index(uint32_t index) {
     imgui_free_srv_indices_.push_back(index);
 }
 uint32_t DX12Backend::sampler_table(D3D12_CPU_DESCRIPTOR_HANDLE handle) {
+    std::scoped_lock lock(submission_mutex_);
     if (auto iter = sampler_tables_.find(handle.ptr); iter != sampler_tables_.end()) return iter->second;
     auto index = gpu_sampler_heap_.allocate();
     if (index != UINT32_MAX) {
         device_->CopyDescriptorsSimple(1, gpu_sampler_heap_.get_cpu_handle(index), handle, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER);
         sampler_tables_[handle.ptr] = index;
+    }
+    return index;
+}
+uint32_t DX12Backend::resource_table(D3D12_CPU_DESCRIPTOR_HANDLE handle) {
+    std::scoped_lock lock(submission_mutex_);
+    if (auto iter = resource_tables_.find(handle.ptr); iter != resource_tables_.end()) return iter->second;
+    const auto index = gpu_srv_uav_heap_.allocate();
+    if (index != UINT32_MAX) {
+        device_->CopyDescriptorsSimple(1, gpu_srv_uav_heap_.get_cpu_handle(index), handle, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        resource_tables_[handle.ptr] = index;
     }
     return index;
 }
@@ -74,17 +85,19 @@ void DX12Backend::imgui_render() {
     if (!imgui_initialized_) return;
     ImGui::Render();
     if (!active_swapchain_) return;
-    ensure_recording();
+    auto* context = get_immediate_context();
+    auto* command = context ? context->ensure_recording() : nullptr;
+    if (!command) return;
     auto texture = active_swapchain_->get_texture(active_swapchain_->get_current_frame_index());
     auto* native = static_cast<DX12Texture*>(texture.get());
-    native->transition(command_list_.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
-    auto rtv = native->get_rtv(); command_list_->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+    native->transition(command, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    auto rtv = native->get_rtv(); command->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
     // ImGui image views share the persistent part of the same shader-visible heap.
-    prepare_imgui_resources();
-    native->transition(command_list_.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+    prepare_imgui_resources(command);
+    native->transition(command, D3D12_RESOURCE_STATE_RENDER_TARGET);
     ID3D12DescriptorHeap* heaps[] = {gpu_srv_uav_heap_.get_heap(), gpu_sampler_heap_.get_heap()};
-    command_list_->SetDescriptorHeaps(2, heaps);
-    ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), command_list_.Get());
+    command->SetDescriptorHeaps(2, heaps);
+    ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), command);
 }
 void DX12Backend::imgui_shutdown() {
     if (!imgui_initialized_) return;
@@ -94,7 +107,8 @@ void DX12CommandContext::imgui_create_fonts_texture() { ImGui_ImplDX12_CreateDev
 void DX12CommandContext::imgui_render_draw_data(ImDrawData* draw_data) {
     if (!draw_data || !draw_data->CmdListsCount) return;
     if (auto backend = backend_.lock()) {
-        backend->ensure_recording();
+        auto* command = ensure_recording();
+        if (!command) return;
         // ImGui does not use depth. Unbind the editor depth attachment before
         // sampling any depth visualization images.
         if (current_render_pass_) {
@@ -104,19 +118,20 @@ void DX12CommandContext::imgui_render_draw_data(ImDrawData* draw_data) {
             for (uint32_t i = 0; i < MAX_RENDER_TARGETS; ++i) if (attachments[i].texture_view) {
                 targets[i] = static_cast<DX12TextureView*>(attachments[i].texture_view.get())->get_rtv(); count = i + 1;
             }
-            backend->get_command_list()->OMSetRenderTargets(count, targets, FALSE, nullptr);
+            command->OMSetRenderTargets(count, targets, FALSE, nullptr);
         }
-        backend->prepare_imgui_resources();
-        ImGui_ImplDX12_RenderDrawData(draw_data, backend->get_command_list());
+        backend->prepare_imgui_resources(command);
+        ImGui_ImplDX12_RenderDrawData(draw_data, command);
     }
 }
-void DX12Backend::prepare_imgui_resources() {
+void DX12Backend::prepare_imgui_resources(ID3D12GraphicsCommandList* command_list) {
+    if (!command_list) return;
     for (auto& resource : resource_map_[RHI_TEXTURE_VIEW]) {
         auto* view = static_cast<DX12TextureView*>(resource.get());
-        if (view->has_imgui_descriptor()) view->get_dx12_texture()->transition(command_list_.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        if (view->has_imgui_descriptor()) view->get_dx12_texture()->transition(command_list, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     }
 }
-GPUProfilerRef DX12Backend::create_gpu_profiler() { return std::make_unique<DX12GPUProfiler>(device_.Get(), command_queue_.Get(), command_list_.Get()); }
+GPUProfilerRef DX12Backend::create_gpu_profiler() { return std::make_unique<DX12GPUProfiler>(*this); }
 
 void DX12Backend::create_mipmap_pipelines() {
     D3D12_DESCRIPTOR_RANGE ranges[] = {{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, 0}, {D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 0, 0, 0}};
@@ -161,8 +176,8 @@ void DX12CommandContext::generate_mips(RHITextureRef texture) {
     if (!(texture->get_info().type & RESOURCE_TYPE_RW_TEXTURE) || !backend->get_mipmap_pso_array()) {
         ERR(LogDX12Support, "Mipmap generation requires a UAV-capable texture"); return;
     }
-    backend->ensure_recording(); backend->retain(texture);
-    auto* command = backend->get_command_list();
+    auto* command = ensure_recording(); if (!command) return;
+    backend->retain(texture);
     command->SetComputeRootSignature(backend->get_mipmap_root_sig()); command->SetPipelineState(backend->get_mipmap_pso_array());
     command->SetComputeRoot32BitConstant(2, texture->get_info().format == FORMAT_R8G8B8A8_SRGB ? 1 : 0, 0);
     for (uint32_t mip = 1; mip < texture->get_info().mip_levels; ++mip) {

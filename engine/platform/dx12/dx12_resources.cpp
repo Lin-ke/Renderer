@@ -1,4 +1,5 @@
 #include "platform_rhi.h"
+#include "engine/core/utils/profile_probe.h"
 #include <algorithm>
 #include <cstring>
 
@@ -20,7 +21,9 @@ bool DX12Buffer::init() {
     desc.Height = 1; desc.DepthOrArraySize = 1; desc.MipLevels = 1; desc.SampleDesc.Count = 1;
     desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
     if (info_.type & RESOURCE_TYPE_RW_BUFFER) desc.Flags |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-    if (FAILED(backend->get_device()->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, state_, nullptr, IID_PPV_ARGS(&resource_)))) return false;
+    resource_ = backend->allocate_memory(heap, desc, state_, heap_type_ == D3D12_HEAP_TYPE_UPLOAD ? "Upload" :
+        heap_type_ == D3D12_HEAP_TYPE_READBACK ? "Readback" : "Buffer");
+    if (!resource_) return false;
     current_gpu_address_ = resource_->GetGPUVirtualAddress();
     if (heap_type_ == D3D12_HEAP_TYPE_UPLOAD) {
         D3D12_RANGE read = {0, 0};
@@ -76,7 +79,9 @@ void DX12Buffer::transition(ID3D12GraphicsCommandList* command, D3D12_RESOURCE_S
 }
 
 DX12Texture::DX12Texture(const RHITextureInfo& info, std::shared_ptr<DX12Backend> backend, ComPtr<ID3D12Resource> resource)
-    : RHITexture(info), resource_(resource), backend_(backend) {}
+    : RHITexture(info), backend_(backend) {
+    if (resource) resource_ = backend->adopt_memory(std::move(resource), "BackBuffer", true);
+}
 DX12Texture::~DX12Texture() { destroy(); }
 bool DX12Texture::init() {
     auto backend = backend_.lock();
@@ -100,8 +105,8 @@ bool DX12Texture::init() {
     if (info_.type & RESOURCE_TYPE_DEPTH_STENCIL) desc.Flags |= D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
     if (info_.type & RESOURCE_TYPE_RW_TEXTURE) desc.Flags |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
     D3D12_HEAP_PROPERTIES heap = {}; heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-    return SUCCEEDED(backend->get_device()->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
-        D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&resource_)));
+    resource_ = backend->allocate_memory(heap, desc, D3D12_RESOURCE_STATE_COMMON, "Texture");
+    return bool(resource_);
 }
 void DX12Texture::destroy() {
     if (auto backend = backend_.lock()) {
@@ -258,7 +263,19 @@ RHITextureViewRef DX12Backend::create_texture_view(const RHITextureViewInfo& inf
     const auto& range = info.subresource;
     if (range.base_mip_level >= texture.mip_levels || range.level_count > texture.mip_levels - range.base_mip_level ||
         range.base_array_layer >= texture.array_layers || range.layer_count > texture.array_layers - range.base_array_layer) return nullptr;
-    auto view = std::make_shared<DX12TextureView>(info, shared_from_this());
+    auto normalized = info;
+    if (normalized.format == FORMAT_UKNOWN) normalized.format = texture.format;
+    if (!normalized.subresource.level_count) normalized.subresource.level_count = texture.mip_levels - range.base_mip_level;
+    if (!normalized.subresource.layer_count) normalized.subresource.layer_count = texture.array_layers - range.base_array_layer;
+    const auto& subresource = normalized.subresource;
+    const std::array<uint32_t, 7> key{uint32_t(normalized.format), uint32_t(normalized.view_type),
+        uint32_t(subresource.aspect), subresource.base_mip_level, subresource.level_count,
+        subresource.base_array_layer, subresource.layer_count};
+    auto& cached = static_cast<DX12Texture*>(info.texture.get())->object_views_[key];
+    if (auto existing = cached.lock()) return existing;
+    ProfileProbe probe("DX12_CreateTextureView");
+    auto view = std::make_shared<DX12TextureView>(normalized, shared_from_this());
+    cached = view;
     register_resource(view);
     return view;
 }

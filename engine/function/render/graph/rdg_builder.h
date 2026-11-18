@@ -7,6 +7,8 @@
 #include "engine/function/render/rhi/rhi_command_list.h"
 #include "engine/function/render/rhi/rhi_structs.h"
 
+#include "rdg_profile.h"
+#include <optional>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -151,6 +153,11 @@ public:
     const RDGBlackBoard& get_blackboard() const { return black_board_; }
 
 private:
+    void begin_profile();
+    void end_profile();
+    void profile_resource(RDGResourceNodeRef node, RHIResourceRef resource);
+    std::optional<RDGProfile> profile_;
+    std::unordered_map<NodeID, std::vector<NodeID>> compiled_dependencies_;
     void create_input_barriers(RDGPassNodeRef pass);
     void create_output_barriers(RDGPassNodeRef pass);
     void prepare_descriptor_set(RDGPassNodeRef pass);

@@ -16,28 +16,33 @@ TEST_CASE("Sun Temple imports materials and renders from native assets", "[.][su
     REQUIRE(renderers.size() > 1);
     std::unordered_set<Material*> materials;
     size_t mesh_instances = 0;
+    std::vector<std::string> failures;
     for (auto* renderer : renderers) {
         auto model = renderer->get_model();
-        REQUIRE(model);
+        if (!model) { failures.push_back("Missing model"); continue; }
         mesh_instances += model->get_slot_count();
         for (uint32_t i = 0; i < model->get_slot_count(); ++i) {
             auto material = std::dynamic_pointer_cast<PBRMaterial>(model->get_material(i));
-            REQUIRE(material);
+            if (!material) { failures.push_back("Missing PBR material"); continue; }
             if (!materials.insert(material.get()).second) continue;
-            CAPTURE(material->get_name());
-            REQUIRE(material->get_diffuse_texture());
-            REQUIRE(material->get_diffuse_texture()->texture_);
-            REQUIRE(material->get_normal_texture());
-            REQUIRE(material->get_normal_texture()->texture_);
-            REQUIRE(material->get_arm_texture());
-            REQUIRE(material->get_arm_texture()->texture_);
-            const auto diffuse = material->get_diffuse_texture()->texture_->get_info().format;
-            const auto arm = material->get_arm_texture()->texture_->get_info().format;
-            CHECK((diffuse == FORMAT_BC1_SRGB || diffuse == FORMAT_BC3_SRGB));
-            CHECK(material->get_normal_texture()->texture_->get_info().format == FORMAT_BC5_UNORM);
-            CHECK((arm == FORMAT_BC1_UNORM || arm == FORMAT_BC3_UNORM));
+            auto diffuse_texture = material->get_diffuse_texture();
+            auto normal_texture = material->get_normal_texture();
+            auto arm_texture = material->get_arm_texture();
+            if (!diffuse_texture || !normal_texture || !arm_texture ||
+                !diffuse_texture->texture_ || !normal_texture->texture_ || !arm_texture->texture_) {
+                failures.push_back(material->get_name() + ": missing GPU texture");
+                continue;
+            }
+            const auto diffuse = diffuse_texture->texture_->get_info().format;
+            const auto normal = normal_texture->texture_->get_info().format;
+            const auto arm = arm_texture->texture_->get_info().format;
+            if ((diffuse != FORMAT_BC1_SRGB && diffuse != FORMAT_BC3_SRGB) || normal != FORMAT_BC5_UNORM ||
+                (arm != FORMAT_BC1_UNORM && arm != FORMAT_BC3_UNORM))
+                failures.push_back(material->get_name() + ": unexpected texture format");
         }
     }
+    CAPTURE(failures);
+    CHECK(failures.empty());
     CHECK(mesh_instances == 1056);
     CHECK(materials.size() == 48);
 

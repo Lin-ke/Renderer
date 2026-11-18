@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/configs.h"
+#include <cereal/cereal.hpp>
 
 #include <array>
 #include <cstdint>
@@ -8,12 +9,34 @@
 #include <string>
 #include <vector>
 
+struct GPUPipelineStatistics {
+    bool available = false;
+    uint64_t input_vertices = 0;
+    uint64_t input_primitives = 0;
+    uint64_t vertex_invocations = 0;
+    uint64_t raster_primitives = 0;
+    uint64_t pixel_invocations = 0;
+    uint64_t compute_invocations = 0;
+    template<class Archive> void serialize(Archive& ar) {
+        ar(CEREAL_NVP(available), CEREAL_NVP(input_vertices), CEREAL_NVP(input_primitives),
+            CEREAL_NVP(vertex_invocations), CEREAL_NVP(raster_primitives),
+            CEREAL_NVP(pixel_invocations), CEREAL_NVP(compute_invocations));
+    }
+};
+
 /**
  * @brief Result for a single GPU-timed scope (one RDG pass).
  */
 struct GPUTimingResult {
     std::string name;
     float time_ms = 0.0f;  // Elapsed time in milliseconds
+    uint32_t pass_id = UINT32_MAX;
+    float offset_ms = 0.0f;
+    GPUPipelineStatistics pipeline_statistics;
+    template<class Archive> void serialize(Archive& ar) {
+        ar(CEREAL_NVP(name), CEREAL_NVP(time_ms), CEREAL_NVP(pass_id), CEREAL_NVP(offset_ms),
+            CEREAL_NVP(pipeline_statistics));
+    }
 };
 
 /**
@@ -27,7 +50,7 @@ struct GPUTimingResult {
  *  1. begin_frame() at the start of GPU command recording.
  *  2. begin_scope(name) / end_scope() for each scope to measure.
  *  3. end_frame() after the last scope.
- *  4. collect_results() each frame (internally delayed by FRAMES_IN_FLIGHT).
+ *  4. collect_results() once the recorded submission has completed.
  */
 class GPUProfiler {
 public:
@@ -40,7 +63,7 @@ public:
     bool is_enabled() const { return enabled_; }
     void set_enabled(bool v) { enabled_ = v; }
 
-    // --- Per-frame recording (called on the render thread) ---
+    // --- Per-frame recording (called on the device thread) ---
     virtual void begin_frame() = 0;
     virtual void end_frame() = 0;
     virtual void begin_scope(const std::string& name) = 0;
@@ -51,6 +74,7 @@ public:
 
     // --- Result accessors (platform-independent) ---
     const std::vector<GPUTimingResult>& get_results() const { return results_; }
+    uint64_t get_result_frame_id() const { return result_frame_id_; }
     float get_total_frame_time_ms() const { return total_frame_time_ms_; }
 
     const std::vector<GPUTimingResult>& get_smoothed_results() const { return smoothed_results_; }
@@ -63,6 +87,7 @@ protected:
      */
     void update_smoothing();
 
+    uint64_t result_frame_id_ = UINT64_MAX;
     bool enabled_ = true;
 
     // Raw results from the last successful readback.
