@@ -2,7 +2,6 @@
 #include "engine/core/log/Log.h"
 #include "platform_rhi.h"
 #include "engine/core/utils/profile_session.h"
-#include "engine/core/utils/profile_probe.h"
 #include <cereal/archives/json.hpp>
 #include <sstream>
 
@@ -73,7 +72,9 @@ void DX12GPUProfiler::destroy() {
 void DX12GPUProfiler::prepare_statistics(FrameQueries& frame) {
     frame.statistics_active = false;
     frame.statistics_resolved = false;
-    if (frame.frame_id != 30 || !ProfileSession::instance().generation() || !ProfileProbe::is_enabled()) return;
+    frame.statistics_status = "not_requested";
+    if (!ProfileSession::instance().generation()) return;
+    frame.statistics_status = "query_heap_failed";
     if (!frame.statistics_heap) {
         D3D12_QUERY_HEAP_DESC heap{};
         heap.Type = D3D12_QUERY_HEAP_TYPE_PIPELINE_STATISTICS;
@@ -81,8 +82,10 @@ void DX12GPUProfiler::prepare_statistics(FrameQueries& frame) {
         if (FAILED(device_->CreateQueryHeap(&heap, IID_PPV_ARGS(&frame.statistics_heap)))) return;
     }
     if (!frame.statistics_readback) {
+        frame.statistics_status = "backend_unavailable";
         auto backend = backend_.lock();
         if (!backend) return;
+        frame.statistics_status = "readback_allocation_failed";
         D3D12_HEAP_PROPERTIES heap{};
         heap.Type = D3D12_HEAP_TYPE_READBACK;
         D3D12_RESOURCE_DESC buffer{};
@@ -93,6 +96,7 @@ void DX12GPUProfiler::prepare_statistics(FrameQueries& frame) {
         frame.statistics_readback = backend->allocate_memory(heap, buffer, D3D12_RESOURCE_STATE_COPY_DEST, "Readback");
     }
     frame.statistics_active = bool(frame.statistics_readback);
+    if (frame.statistics_active) frame.statistics_status = "no_scopes";
 }
 
 void DX12GPUProfiler::begin_frame() {
@@ -196,9 +200,13 @@ void DX12GPUProfiler::collect_results() {
         float(double(timestamps[1] - timestamps[0]) * 1000.0 / frequency) : 0.0f;
     result_frame_id_ = fq.frame_id;
     D3D12_QUERY_DATA_PIPELINE_STATISTICS* statistics = nullptr;
+    auto statistics_status = fq.statistics_status;
     if (fq.statistics_resolved) {
         D3D12_RANGE range{0, sizeof(D3D12_QUERY_DATA_PIPELINE_STATISTICS) * fq.scope_count};
-        if (FAILED(fq.statistics_readback->Map(0, &range, reinterpret_cast<void**>(&statistics)))) statistics = nullptr;
+        if (FAILED(fq.statistics_readback->Map(0, &range, reinterpret_cast<void**>(&statistics)))) {
+            statistics = nullptr;
+            statistics_status = "readback_map_failed";
+        } else statistics_status = "available";
     }
 
     for (uint32_t i = 0; i < fq.scope_count; ++i) {
@@ -226,6 +234,7 @@ void DX12GPUProfiler::collect_results() {
         std::ostringstream output;
         { cereal::JSONOutputArchive archive(output);
           archive(cereal::make_nvp("frame_id", result_frame_id_), cereal::make_nvp("gpu_ms", total_frame_time_ms_),
+              cereal::make_nvp("pipeline_statistics_status", statistics_status),
               cereal::make_nvp("passes", results_)); }
         ProfileSession::instance().add_gpu_frame(output.str());
     }

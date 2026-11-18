@@ -41,6 +41,7 @@ private:
         bool resolved = false;
         bool statistics_active = false;
         bool statistics_resolved = false;
+        std::string statistics_status = "not_requested";
     };
 
     void prepare_statistics(FrameQueries& frame);

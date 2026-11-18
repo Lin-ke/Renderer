@@ -12,7 +12,13 @@ xmake run sun_temple game/assets/sun_temple/source --benchmark --frames 150 --pr
 
 `--profile` 默认采集 330 帧，可用 `--frames` 覆盖；默认报告为 `build/test-results/sun-temple-profile.json`。`--benchmark` 同时启用采集，跳过前 30 个完成帧，输出完成帧吞吐率、Device 墙钟时间和 GPU 整帧时间的均值/P95。截图在第 3 帧读取。
 
-`--profile-probes` 额外细测第 30 帧的 TextureView 创建、Descriptor 快照和绑定刷新，并采集各 Pass 的 GPU Pipeline Statistics，默认运行 40 帧。加载阶段会记录依赖扫描、资源读取/反序列化、等待及初始化。细测带来额外采集开销，稳态比较应排除第 30 帧。长帧采样应关闭 `--profile-probes`，逐绘制事件可能提前用尽 CPU 事件缓冲区；始终检查 `dropped_cpu_events`。加载调查见 [sun_temple_profile_investigation.md](sun_temple_profile_investigation.md)，后续 GPU 调查见 [GPU Profile 记录](../doc/optimization/gpu_profile/README.md)。
+`ProfileSession::write()` 同时生成同名 `.json` 和 `.html`，两者均成功才返回 `true`。例如默认采集还会生成 `build/test-results/sun-temple-profile.html`。HTML 内嵌完整数据、样式和脚本，双击即可离线查看，不需要服务器、网络或 JSON 文件。`--profile-output <path>` 可指定 JSON 或 HTML 路径；使用 `.html`（大小写均可）时，JSON 保存为同名 `.json`。
+
+HTML 包含按线程、名称和时间范围筛选的 CPU 时间线与耗时排行、GPU 帧耗时曲线及各 Pass 的时间和 Pipeline Statistics、进程/显式追踪 CPU 内存与 GPU 分配曲线和明细，以及按帧查看的 RDG Pass 依赖、资源访问、生命周期和分配 ID。点击 CPU Scope 可查看 frame/operation/pass 关联。CPU 排行为所选范围内裁剪后的 inclusive 墙钟时间，重叠 Scope 不可累加为 CPU 利用率；GPU 均值和 P95 使用全部采集帧，包含预热帧，与 `--benchmark` 排除预热的结果口径不同。未采集的 GPU 内存和 Pipeline Statistics 显示为 unavailable，不作为零值。HTML 中 CPU 与 GPU 使用独立时间轴。
+
+CPU/GPU 时间线支持鼠标滚轮以指针位置为中心缩放、拖动或 Shift+滚轮平移、双击 Scope/Pass 聚焦，以及缩放和平移按钮。聚焦画布后可用 `+`/`-` 缩放、左右方向键平移、`Home` 恢复全范围。GPU 切换帧时恢复该帧完整范围；带计数的帧标注 `counters`，默认优先选择已采集计数的帧，`Show counters frame` 跳到下一张带计数的帧。
+
+`--profile-probes` 额外细测第 30 帧的 TextureView 创建、Descriptor 快照和绑定刷新，默认运行 40 帧。GPU Pipeline Statistics 随普通 Profile 自动逐帧采集，不依赖此开关或帧数达到 30。加载阶段会记录依赖扫描、资源读取/反序列化、等待及初始化。细测带来额外采集开销，稳态比较应排除第 30 帧。长帧采样应关闭 `--profile-probes`，逐绘制事件可能提前用尽 CPU 事件缓冲区；始终检查 `dropped_cpu_events`。加载调查见 [sun_temple_profile_investigation.md](sun_temple_profile_investigation.md)，后续 GPU 调查见 [GPU Profile 记录](../doc/optimization/gpu_profile/README.md)。
 
 Sun Temple 标记 `EngineInit`、`LoadScene`、`FirstFrameReady`。首帧时间从开始加载场景计到首帧 GPU 完成并 Present 返回；只在首帧里程碑等待一次，不给后续每帧增加等待。`LoadScene` 是加载调用的墙钟时间，可能包含同步上传；其后显式 flush 剩余上传，再采集 `SceneLoaded`。不把重叠的阶段相加当总时间。
 
@@ -42,7 +48,7 @@ profile.write("build/test-results/load-profile.json");
 
 帧提交现为异步：`Submit` 是提交调用的墙钟区间，`RenderSystem_FrameReuseWait` 单列帧槽复用等待，`Present` 仍可能包含同步间隔节流。GPU 查询只在该帧 fence 完成后读取；`FrameStats` 记录观察到完成的时间，Device 耗时不包含返回后 GPU 继续执行的尾部，也不包含随后导出查询结果的时间。末尾 `EngineContext::wait_for_render()` 会排空 CPU 队列、等待 GPU 并收集剩余查询，必须在 `ProfileSession::end()` 前调用。
 
-每个 GPU Pass 的 `pipeline_statistics` 保存 IA 顶点/图元、VS 调用、送入光栅化的图元、PS 调用、CS 调用计数。当前只在显式启用细测的第 30 帧采集，其他帧或查询/回读失败时 `available=false`，此时零值不代表没有工作。DX12 在 Device 侧延迟创建查询堆和带显存统计的 Readback Buffer，围住每个平铺的 RDG Pass 查询，在已有提交 fence 完成后回读，不额外插入 CPU 等待。
+每个 GPU Pass 的 `pipeline_statistics` 保存 IA 顶点/图元、VS 调用、送入光栅化的图元、PS 调用、CS 调用计数。启用 `ProfileSession` 时逐帧采集，非采集状态不启用统计查询；逐帧 GPU 查询存在采集开销，性能比较应保持相同采集配置。查询/回读失败时 `available=false`，此时零值不代表没有工作；成功采集时，图形 Pass 的 CS 计数为 0 是有效值。GPU 帧的 `pipeline_statistics_status` 区分成功、未请求、无 Scope、查询堆创建失败、Backend 不可用、Readback 分配失败和映射失败；HTML 显示对应原因。旧版本普通 Profile 没有这些计数，需要重新采集，无法从已有时间戳推算。DX12 在 Device 侧延迟创建查询堆和带显存统计的 Readback Buffer，围住每个平铺的 RDG Pass 查询，在已有提交 fence 完成后回读，不额外插入 CPU 等待。
 
 这些计数来自 [D3D12 Pipeline Statistics](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ns-d3d12-d3d12_query_data_pipeline_statistics)，不是提交的 Draw 索引总数、显存流量或执行周期。PS 调用数不能直接当作精确 overdraw；判断 ALU、纹理或带宽瓶颈仍需硬件性能计数器。
 
@@ -74,4 +80,12 @@ Swapchain BackBuffer 记录为 `external`，单列 `external_bytes`，不计入�
 
 ## 验证
 
-`xmake run utest "[profile]"` 执行工作线程上的带分类分配、真实 GPU 绘制与回读，并验证导出的 JSON 能关联任务、GPU 帧、RenderGraph 和内存采样。报告保存在 `build/test-results/functional-profile.json`。性能指标只报告，不用固定毫秒阈值断言。
+`xmake run utest "[profile]"` 执行工作线程上的带分类分配、真实 GPU 绘制与回读，并验证导出的 JSON 能关联任务、GPU 帧、RenderGraph 和内存采样，同时验证 HTML 内嵌数据与 JSON 一致、特殊名称转义、空采集及输出失败。报告保存在 `build/test-results/functional-profile.json` 和同名 `.html`。性能指标只报告，不用固定毫秒阈值断言。
+
+可选的 DOM 交互检查使用 Node.js 与 jsdom；只用于开发验证，导出器和 HTML 报告本身不依赖它们。该检查覆盖脚本执行、离线资源、CPU 筛选、CPU/GPU 滚轮及按钮缩放、拖动平移、双击聚焦、键盘操作、GPU 计数显示以及 GPU/RDG/内存选择，不替代浏览器视觉检查。
+
+```powershell
+npm install --prefix build/profile-html-tools --no-package-lock --no-save jsdom
+$env:NODE_PATH = "$PWD/build/profile-html-tools/node_modules"
+node test/tools/profile_report.cjs build/test-results/functional-profile.html build/test-results/profile-export/empty.HTML
+```

@@ -109,6 +109,7 @@ int main(int argc, char** argv) {
     }
     ProfileProbe::set_enabled(profile_probes);
     if (profile_enabled) profile.set_metadata("profile_probes", profile_probes ? "frame 30" : "disabled");
+    if (profile_enabled) profile.set_metadata("pipeline_statistics", "all captured frames");
     const auto engine_init = profile.begin_operation("EngineInit");
     EngineContext::init(mode);
     profile.end_operation(engine_init);
@@ -210,7 +211,7 @@ int main(int argc, char** argv) {
         profile.end();
         profile.print();
         if (!profile.write(profile_path)) { std::puts("Failed to write profile report"); result = 1; }
-        else std::printf("Profile saved: %s\n", profile_path.string().c_str());
+        else std::printf("Profile saved (JSON + offline HTML): %s\n", profile_path.string().c_str());
     }
     return result;
 }
