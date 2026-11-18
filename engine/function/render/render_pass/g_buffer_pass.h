@@ -169,10 +169,8 @@ private:
     RHISamplerRef default_sampler_;   // Slot s0
 
     GBufferPerFrameData per_frame_data_;
-    bool per_frame_dirty_ = true;
 
     // Stored batches for deferred rendering
-    std::vector<DrawBatch> current_batches_;
 
     bool initialized_ = false;
 };

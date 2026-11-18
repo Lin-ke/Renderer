@@ -88,20 +88,17 @@ bool Window::process_messages() {
     return true;
 }
 
+std::recursive_mutex& Window::imgui_mutex() {
+    static std::recursive_mutex mutex;
+    return mutex;
+}
+
 LRESULT CALLBACK Window::window_proc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    
-    if (ImGui::GetCurrentContext()) {
-        ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam);
-        
-    }
-    
-    
-    bool imgui_wants_mouse = false;
-    bool imgui_wants_keyboard = false;
-    if (ImGui::GetCurrentContext()) {
-        ImGuiIO& io = ImGui::GetIO();
-        imgui_wants_mouse = io.WantCaptureMouse;
-        imgui_wants_keyboard = io.WantCaptureKeyboard;
+    {
+        std::scoped_lock lock(imgui_mutex());
+        if (ImGui::GetCurrentContext()) {
+            ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam);
+        }
     }
     
     auto& input = Input::get_instance();

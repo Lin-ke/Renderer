@@ -5,6 +5,7 @@
 #include "engine/function/framework/entity.h"
 #include "engine/function/framework/component/camera_component.h"
 #include "engine/function/asset/asset_manager.h"
+#include "engine/function/render/render_resource/model_importer.h"
 #include "engine/main/engine_context.h"
 #include "engine/function/render/render_system/render_system.h"
 #include "engine/function/render/render_system/render_mesh_manager.h"
@@ -14,7 +15,6 @@
 #include "engine/core/utils/cpu_profiler.h"
 #include "engine/core/utils/path_utils.h"
 #include <fstream>
-#include <thread>
 #include <chrono>
 #include <iomanip>
 
@@ -22,13 +22,24 @@ namespace test_utils {
 
 // TestContext static members
 bool TestContext::engine_initialized_ = false;
-std::string TestContext::test_asset_dir_;
+std::filesystem::path TestContext::project_dir_;
 
-void TestContext::init_engine() {
-    if (engine_initialized_) return;
-    
-    test_asset_dir_ = (utils::get_engine_path() / "test/test_internal").string();
-    
+bool TestContext::init_engine() {
+    if (engine_initialized_) return true;
+
+    const auto work_dir = utils::get_engine_path() / "build/test-work";
+    std::error_code error;
+    std::filesystem::create_directories(work_dir, error);
+    if (error) {
+        std::cerr << "Cannot create test workspace: " << error.message() << '\n';
+        return false;
+    }
+    project_dir_ = work_dir / UID::generate().to_string();
+    if (!std::filesystem::create_directory(project_dir_, error)) {
+        std::cerr << "Cannot create test project " << project_dir_ << ' ' << error.message() << '\n';
+        return false;
+    }
+
     std::bitset<8> mode;
     mode.set(EngineContext::StartMode::Asset);
     mode.set(EngineContext::StartMode::Window);
@@ -40,10 +51,11 @@ void TestContext::init_engine() {
     if (auto* render_system = EngineContext::render_system()) render_system->set_show_ui(false);
     
     if (auto am = EngineContext::asset()) {
-        am->init(test_asset_dir_);
+        am->init(project_dir_);
     }
     
     engine_initialized_ = true;
+    return true;
 }
 
 void TestContext::shutdown_engine() {
@@ -51,6 +63,17 @@ void TestContext::shutdown_engine() {
     
     EngineContext::exit();
     engine_initialized_ = false;
+
+    std::error_code error;
+    const auto workspace = std::filesystem::canonical(utils::get_engine_path(), error);
+    if (error) return;
+    const auto project = std::filesystem::canonical(project_dir_, error);
+    if (!error && project.parent_path() == workspace / "build/test-work" &&
+        project.filename() == project_dir_.filename()) {
+        std::filesystem::remove_all(project, error);
+    }
+    if (error) std::cerr << "Cannot clean test project " << project_dir_ << ' ' << error.message() << '\n';
+    project_dir_.clear();
 }
 
 void TestContext::reset() {
@@ -66,19 +89,17 @@ void TestContext::reset() {
         rs->cleanup_for_test();
     }
     
-    // 3. Force cleanup of any remaining entities in world
-    if (auto world = EngineContext::world()) {
-        // Reset world state completely
-        world->set_active_scene(nullptr);
-    }
-    
-    // 4. Process any pending asset operations
     if (auto am = EngineContext::asset()) {
         am->tick();
     }
-    
-    // 5. Small delay to ensure GPU has finished all work
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+}
+
+std::shared_ptr<Model> import_test_model(const std::string& source_path, const std::string& asset_path,
+    const ModelProcessSetting& settings) {
+    const auto source = EngineContext::asset()->get_physical_path(source_path);
+    if (!source) return nullptr;
+    ModelImporter importer;
+    return importer.import_model(source->string(), asset_path, settings);
 }
 
 SceneLoadResult SceneLoader::load(const std::string& virtual_path, 
@@ -139,19 +160,14 @@ SceneLoadResult SceneLoader::load(const std::string& virtual_path,
     return result;
 }
 
-bool SceneLoader::scene_exists(const std::string& virtual_path) {
-    auto am = EngineContext::asset();
-    if (!am) return false;
-    
-    auto phys_path_opt = am->get_physical_path(virtual_path);
-    if (!phys_path_opt) return false;
-    
-    std::ifstream file(phys_path_opt->generic_string());
-    return file.is_open();
-}
-
 bool export_chrome_tracing(const std::string& filename,
                            const std::vector<const CpuProfileFrame*>& frames) {
+    const auto parent = std::filesystem::path(filename).parent_path();
+    if (!parent.empty()) {
+        std::error_code error;
+        std::filesystem::create_directories(parent, error);
+        if (error) return false;
+    }
     std::ofstream ofs(filename);
     if (!ofs.is_open()) return false;
     
@@ -201,12 +217,6 @@ bool export_profiler_trace(const std::string& filename) {
     return export_chrome_tracing(filename, frames);
 }
 
-bool RenderTestApp::capture_screenshot(std::vector<uint8_t>& screenshot_data) {
-    auto* render_system = EngineContext::render_system();
-    Extent2D extent;
-    return render_system && render_system->capture_frame(screenshot_data, extent);
-}
-
 bool RenderTestApp::run(const Config& config, std::vector<uint8_t>& out_screenshot_data, int* out_frames) {
     if (out_frames) *out_frames = 0;
     out_screenshot_data.clear();
@@ -236,15 +246,11 @@ bool RenderTestApp::run(const Config& config, std::vector<uint8_t>& out_screensh
         return false;
     }
 
-    if (config.on_scene_loaded_func) {
-        config.on_scene_loaded_func(result);
-    }
-
     // End asset loading frame — all asset timing is captured here
     profiler.end_frame();
 
     // Export profiler trace for analysis
-    std::string trace_path = (utils::get_engine_path() / "test/test_internal/profile_trace.json").string();
+    std::string trace_path = (utils::get_engine_path() / "build/test-results/profile_trace.json").string();
     export_profiler_trace(trace_path);
 
     // 3. Set up custom RDG build function if provided
@@ -267,11 +273,8 @@ bool RenderTestApp::run(const Config& config, std::vector<uint8_t>& out_screensh
         Input::get_instance().tick();
         EngineContext::world()->tick(0.016f);
         
-        RenderPacket packet;
-        packet.active_camera = result.camera;
-        packet.active_scene = result.scene.get();
-        packet.frame_index = frames % FRAMES_IN_FLIGHT;
-        
+        auto packet = EngineContext::render_system()->make_render_packet(
+            result.scene.get(), result.camera, frames);
         bool should_continue = EngineContext::render_system()->tick(packet);
         if (!should_continue) break;
         
@@ -296,7 +299,7 @@ bool RenderTestApp::run(const Config& config, std::vector<uint8_t>& out_screensh
     if (out_frames) {
         *out_frames = frames;
     }
-    return screenshot_taken;
+    return frames == config.max_frames && (config.capture_frame == 0 || screenshot_taken);
 }
 
 } // namespace test_utils

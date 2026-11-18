@@ -1,10 +1,10 @@
 # 渲染系统架构 (Render System Architecture)
 
-当前默认后端为 DX12。绑定模型和隐藏窗口截图测试见 [DX12 文档](dx12.md)；下文 DX11 实现说明仅作历史参考。
+渲染后端为 DX12。绑定模型和隐藏窗口截图测试见 [DX12 文档](dx12.md)。
 
 RDG 已支持拓扑排序与 Pass 剔除，依赖语义、外部副作用和输出提取见 [RDG 编译文档](rdg.md)。
 
-本文档概述了引擎的核心渲染架构，包含了 Render Dependency Graph (RDG) 的语法说明、RHI Context 中 Immediate 的语义区分、DX11 后端实现细节以及 Shader 的自动编译机制。
+本文档概述了引擎的核心渲染架构，包含了 Render Dependency Graph (RDG) 的语法说明、RHI Context 中 Immediate 的语义区分、DX12 后端实现以及 Shader 的自动编译机制。
 
 ---
 
@@ -83,23 +83,9 @@ RHIBufferRef buffer = rhi_backend->create_buffer(info);
 
 ---
 
-## 3. DX11 Backend 抽象实现
+## 3. DX12 后端
 
-本项目提供了现代图形 API 统一抽象的实现，其中就包括基于 DirectX 11 的平台封装（`platform/dx11/platform_rhi`）。
-
-### 3.1 `ComPtr` 资源管理
-DX11 后端的实现高度利用了 `Microsoft::WRL::ComPtr` 来管理 COM 接口。      
-- `RHITexture` -> `ComPtr<ID3D11Texture2D>`
-- `RHITextureView` -> `ComPtr<ID3D11ShaderResourceView>` 等视图
-- `RHIBuffer` -> `ComPtr<ID3D11Buffer>`
-- `RHICommandContext` -> `ComPtr<ID3D11DeviceContext>`
-
-这些类型通过 C++ CRTP 及模板元特性 (`DX11ResourceTraits`) 提供向基类的隐式抽象，以及向下转型的能力。
-
-### 3.2 资源池化与别名
-DX11 的实现内部对于 RHI 抽象进行了精准映射：
-- DX11 没有原生 Command Buffer 池和记录的概念，因此 `DX11CommandContext` 是通过代理/封装 `ID3D11DeviceContext` 并自己维持内部 `std::vector` 的虚拟指令流，最终在 CPU `execute` 时将指令映射回 DX11 设备的立即执行。     
-- `DX11CommandContextImmediate` 会直接借用 `ID3D11DeviceContext` 即刻执行并使用 CPU-GPU Query 等待。
+后端通过 direct queue 提交图形、计算和上传命令。GPU fence 完成后，后端释放本次提交引用的上传缓冲并回收临时描述符。具体绑定和同步约定见 [DX12 文档](dx12.md)。
 
 ---
 
@@ -113,14 +99,9 @@ DX11 的实现内部对于 RHI 抽象进行了精准映射：
 virtual std::vector<uint8_t> compile_shader(const char* source, const char* entry, const char* profile) = 0;
 ```
 
-### 4.2 DX11 的底层实现
-在 DX11 中，通过调用 `D3DCompile` 将 HLSL 文本转换为 `ID3DBlob`，并提取出 Bytecode 数组供后续调用 `CreateVertexShader` 等接口使用。
+### 4.2 HLSL 编译与反射
 
-```cpp
-std::vector<uint8_t> DX11Backend::compile_shader(const char* source, const char* entry, const char* profile) {
-    // ...
-}
-```
+DX12 后端用 `D3DCompile` 编译 HLSL，并通过 `ID3D12ShaderReflection` 读取资源绑定和 compute 线程组尺寸。Shader 字节码用于创建对应的 DX12 管线状态。
 
 ### 4.3 管线设计哲学
 - **离线与在线两用**：既可以方便地编写即时修改即时生效的引擎内部测试材质，也可以配合脱机编译器在 Release 版本中直接加载 `.cso`。

@@ -12,6 +12,8 @@
 #include "engine/function/framework/component/camera_component.h"
 
 #include <windows.h>
+#include <chrono>
+#include <future>
 
 DEFINE_LOG_TAG(LogEngine, "Engine");
 
@@ -28,7 +30,7 @@ static void setup_utf8_locale() {
 }
 
 std::unique_ptr<EngineContext> EngineContext::instance_;
-EngineContext::ThreadRole EngineContext::thread_role_ = EngineContext::ThreadRole::Unknown;
+thread_local EngineContext::ThreadRole EngineContext::thread_role_ = EngineContext::ThreadRole::Unknown;
 EngineContext::EngineContext() {}
 EngineContext::~EngineContext() {}
 
@@ -69,32 +71,138 @@ void EngineContext::init(std::bitset<8> mode) {
 	// workers
 	instance_->thread_pool_ = std::make_unique<ThreadPool>(std::thread::hardware_concurrency());
 	
-	// main thread
-	if (!mode.test(StartMode::SingleThread)) {
-		instance_->render_thread_ = std::make_unique<std::jthread>([](std::stop_token stoken) {
-			instance_->set_thread_role(ThreadRole::Renderer);
-			CpuProfiler::instance().register_thread("Render");
-			INFO(LogEngine, "Render thread started.");
-			while (!stoken.stop_requested()) {
-				RenderPacket packet;
-				{
-					std::unique_lock lock(instance_->render_mutex_);
-					instance_->render_cv_.wait(lock, [stoken]() {
-						return stoken.stop_requested() || !instance_->render_queue_.empty();
-					});
+    if (mode.test(StartMode::Render) && !mode.test(StartMode::SingleThread)) {
+        auto* context = instance_.get();
+        context->device_thread_ = std::make_unique<std::jthread>([context] { context->device_loop(); });
+        context->render_thread_ = std::make_unique<std::jthread>([context] { context->render_loop(); });
+    }
+}
 
-					if (stoken.stop_requested() && instance_->render_queue_.empty()) {
-						break;
-					}
+static void dispatch_sent_window_messages() {
+    // DXGI can send synchronous messages to the thread which owns the HWND.
+    MSG message;
+    PeekMessageW(&message, nullptr, WM_NULL, WM_NULL, PM_NOREMOVE);
+}
 
-					packet = instance_->render_queue_.front();
-					instance_->render_queue_.pop();
-				}
-				instance_->render_cv_.notify_one();
-				instance_->render_system_->tick(packet);
-			}
-		});
-	}
+bool EngineContext::render_frame() {
+    auto* context = instance_.get();
+    if (!context || !context->render_system_) return false;
+    auto* scene = context->world_ ? context->world_->get_active_scene() : nullptr;
+    auto packet = context->render_system_->make_render_packet(scene, nullptr, context->next_frame_id_++);
+    context->current_frame_index_ = static_cast<uint32_t>(context->next_frame_id_ % FRAMES_IN_FLIGHT);
+    if (!context->render_thread_) {
+        return context->render_system_->tick(packet);
+    }
+
+    std::unique_lock lock(context->pipeline_mutex_);
+    while (context->pending_frames_ >= FRAMES_IN_FLIGHT && !context->render_failed_) {
+        context->pipeline_cv_.wait_for(lock, std::chrono::milliseconds(1));
+        lock.unlock();
+        dispatch_sent_window_messages();
+        lock.lock();
+    }
+    if (context->render_failed_) return false;
+    context->render_queue_.push(std::move(packet));
+    ++context->pending_frames_;
+    lock.unlock();
+    context->pipeline_cv_.notify_all();
+    return true;
+}
+
+bool EngineContext::wait_for_render() {
+    auto* context = instance_.get();
+    if (!context || get_thread_role() == ThreadRole::Device) return true;
+    std::unique_lock lock(context->pipeline_mutex_);
+    while (context->pending_frames_) {
+        context->pipeline_cv_.wait_for(lock, std::chrono::milliseconds(1));
+        lock.unlock();
+        if (get_thread_role() == ThreadRole::MainGame) dispatch_sent_window_messages();
+        lock.lock();
+    }
+    return !context->render_failed_;
+}
+
+void EngineContext::run_device_task(std::function<void()> task) {
+    auto* context = instance_.get();
+    if (!context || !context->device_thread_ || get_thread_role() == ThreadRole::Device) {
+        task();
+        return;
+    }
+
+    auto pending = std::make_shared<std::packaged_task<void()>>(std::move(task));
+    auto completed = pending->get_future();
+    {
+        std::scoped_lock lock(context->pipeline_mutex_);
+        context->device_queue_.emplace([pending] { (*pending)(); });
+    }
+    context->pipeline_cv_.notify_all();
+
+    if (get_thread_role() == ThreadRole::MainGame) {
+        while (completed.wait_for(std::chrono::milliseconds(1)) != std::future_status::ready) {
+            dispatch_sent_window_messages();
+        }
+    } else {
+        completed.wait();
+    }
+}
+
+void EngineContext::complete_render_frame(bool success) {
+    {
+        std::scoped_lock lock(pipeline_mutex_);
+        render_failed_ |= !success;
+        --pending_frames_;
+    }
+    pipeline_cv_.notify_all();
+}
+
+void EngineContext::render_loop() {
+    set_thread_role(ThreadRole::Renderer);
+    CpuProfiler::instance().register_thread("Render");
+    INFO(LogEngine, "Render thread started.");
+    for (;;) {
+        RenderPacket packet;
+        {
+            std::unique_lock lock(pipeline_mutex_);
+            pipeline_cv_.wait(lock, [this] { return pipeline_stopping_ || !render_queue_.empty(); });
+            if (render_queue_.empty()) return;
+            packet = std::move(render_queue_.front());
+            render_queue_.pop();
+        }
+        auto frame = render_system_->build_frame(packet);
+        if (!frame) {
+            complete_render_frame(false);
+            continue;
+        }
+        submit_frame(std::move(*frame));
+    }
+}
+
+void EngineContext::submit_frame(RenderSystem::CompiledFrame frame) {
+    auto compiled = std::make_shared<RenderSystem::CompiledFrame>(std::move(frame));
+    {
+        std::scoped_lock lock(pipeline_mutex_);
+        device_queue_.emplace([this, compiled] {
+            complete_render_frame(render_system_->execute_frame(std::move(*compiled)));
+        });
+    }
+    pipeline_cv_.notify_all();
+}
+
+void EngineContext::device_loop() {
+    set_thread_role(ThreadRole::Device);
+    CpuProfiler::instance().register_thread("Device");
+    INFO(LogEngine, "Device thread started.");
+    for (;;) {
+        std::function<void()> task;
+        {
+            std::unique_lock lock(pipeline_mutex_);
+            pipeline_cv_.wait(lock, [this] { return pipeline_stopping_ || !device_queue_.empty(); });
+            if (device_queue_.empty()) return;
+            task = std::move(device_queue_.front());
+            device_queue_.pop();
+        }
+        task();
+    }
 }
 
 void EngineContext::exit() {
@@ -102,14 +210,15 @@ void EngineContext::exit() {
 		return;
 	}
 
-	if (instance_->render_thread_) {
-		instance_->render_thread_->request_stop();
-		{
-			std::unique_lock lock(instance_->render_mutex_);
-			instance_->render_cv_.notify_all();
-		}
-		instance_->render_thread_.reset();
-	}
+    wait_for_render();
+    instance_->thread_pool_.reset();
+    {
+        std::scoped_lock lock(instance_->pipeline_mutex_);
+        instance_->pipeline_stopping_ = true;
+    }
+    instance_->pipeline_cv_.notify_all();
+    instance_->render_thread_.reset();
+    instance_->device_thread_.reset();
 
 	// Important: Destroy asset_manager BEFORE render_system to ensure all assets
 	// (which may hold RHI resources) are destroyed while RHI is still valid
@@ -175,48 +284,8 @@ void EngineContext::main_loop_internal() {
 			instance_->asset_manager_->tick();
 		}
 
-		// Logic Tick (Prepare Render Packet)
-		RenderPacket packet;
-		
-		// Fill packet with data from World/Scene
-		if (instance_->world_) {
-			Scene* active_scene = instance_->world_->get_active_scene();
-			packet.active_scene = active_scene;
-			
-			// Find active camera in scene
-			if (active_scene) {
-				PROFILE_SCOPE("MainLoop_FindCamera");
-				for (const auto& entity : active_scene->entities_) {
-					if (auto* camera = entity->get_component<CameraComponent>()) {
-						packet.active_camera = camera;
-						break;
-					}
-				}
-			}
-		}
-		
-		if (instance_->mode_.test(StartMode::SingleThread) && instance_->render_system_) {
-			PROFILE_SCOPE("MainLoop_Render");
-			// Single-threaded: set frame index before tick
-			packet.frame_index = instance_->current_frame_index_;
-			instance_->render_system_->tick(packet);
-            instance_->current_frame_index_ = (instance_->current_frame_index_ + 1) % instance_->MAX_FRAMES_IN_FLIGHT;
-		} else if (instance_->render_system_) {
-			PROFILE_SCOPE("MainLoop_QueueRender");
-			// Multi-threaded submission
-			std::unique_lock lock(instance_->render_mutex_);
-			instance_->render_cv_.wait(lock, [this]() {
-				return instance_->render_queue_.size() < instance_->MAX_FRAMES_IN_FLIGHT;
-			});
+        if (instance_->render_system_ && !render_frame()) break;
 
-			// Set frame index for this packet before queuing
-			packet.frame_index = instance_->current_frame_index_;
-			instance_->render_queue_.push(packet);
-            instance_->current_frame_index_ = (instance_->current_frame_index_ + 1) % instance_->MAX_FRAMES_IN_FLIGHT;
-			lock.unlock();
-			instance_->render_cv_.notify_one();
-		}
-		
 		// End frame for profiler (prepares for next frame)
 		Profiler::get().end_frame();
 		
@@ -233,7 +302,7 @@ RHIBackendRef EngineContext::rhi() {
 }
 
 uint32_t EngineContext::current_frame_index() {
-    return instance_ ? instance_->current_frame_index_ : 0;
+    return instance_ ? instance_->current_frame_index_.load(std::memory_order_relaxed) : 0;
 }
 
 float EngineContext::get_delta_time() {

@@ -68,12 +68,13 @@ struct CpuProfileFrame {
 };
 
 // ============================================================================
-// Thread-local write buffer – each thread owns one, no locking on hot path
+// One write buffer per thread, also read by the frame collector.
 // ============================================================================
 struct CpuProfileThreadBuffer {
     static constexpr uint32_t MAX_SCOPES = 8192;
     static constexpr uint32_t MAX_STACK  = 256;
 
+    std::mutex mutex;
     CpuProfileScope scopes[MAX_SCOPES];
     uint32_t scope_count   = 0;
     uint32_t current_depth = 0;
@@ -83,10 +84,14 @@ struct CpuProfileThreadBuffer {
     uint32_t open_stack[MAX_STACK];
     uint32_t open_count = 0;
 
-    void reset() {
-        scope_count   = 0;
-        current_depth = 0;
-        open_count    = 0;
+    void advance_frame(uint64_t timestamp) {
+        for (uint32_t i = 0; i < open_count; ++i) {
+            scopes[i] = scopes[open_stack[i]];
+            if (scopes[i].start_ticks < timestamp) scopes[i].start_ticks = timestamp;
+            scopes[i].end_ticks = scopes[i].start_ticks;
+            open_stack[i] = i;
+        }
+        scope_count = open_count;
     }
 
     uint32_t begin_scope(const char* n, const char* f, uint32_t ln, uint64_t ts) {
@@ -132,7 +137,7 @@ public:
     void begin_frame();
     void end_frame();
 
-    // --- scope recording (called from ANY thread, lock-free) ----------------
+    // --- scope recording (called from any thread) ---------------------------
     void begin_scope(const char* name, const char* file, uint32_t line);
     void end_scope();
 

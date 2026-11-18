@@ -1,4 +1,4 @@
-#include <catch2/catch_test_macros.hpp>
+#include "test/test_assertions.h"
 #include "engine/main/engine_context.h"
 #include "engine/function/asset/asset_manager.h"
 #include "test/test_utils.h"
@@ -12,8 +12,6 @@
 #include "engine/core/reflect/math_reflect.h"
 #include "engine/core/math/math.h"
 #include "engine/core/log/Log.h"
-#include "engine/core/utils/file_cleaner.h"
-#include "engine/core/utils/path_utils.h"
 #include <string>
 #include <any>
 #include <fstream>
@@ -166,7 +164,6 @@ TEST_CASE("Simplified Serialization", "[reflection]") {
 
 TEST_CASE("Prefab Modifications", "[prefab]") {
     test_utils::TestContext::reset();
-    utils::clean_old_files(utils::get_engine_path() / "test/test_internal/assets", 5);
     
     UID prefab_uid = UID::generate();
 
@@ -229,7 +226,6 @@ TEST_CASE("Prefab Modifications", "[prefab]") {
 
 TEST_CASE("Complex Prefab System", "[prefab]") {
     test_utils::TestContext::reset();
-    utils::clean_old_files(utils::get_engine_path() / "test/test_internal/assets", 5);
     UID ball_uid, cube_uid;
 
     // Phase 1: Create and Save Two Prefabs

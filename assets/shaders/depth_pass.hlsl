@@ -30,7 +30,3 @@ VSOutput VSMain(VSInput input) {
     output.position = mul(proj, mul(view, world_pos));
     return output;
 }
-
-void PSMain(VSOutput input) {
-    // Depth-only pass, no color output needed
-}

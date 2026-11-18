@@ -46,7 +46,7 @@ void Shader::on_load() {
     info.code = std::move(buffer);
 
     if (EngineContext::rhi()) {
-        shader_ = EngineContext::rhi()->create_shader(info);
+        EngineContext::run_device_task([&] { shader_ = EngineContext::rhi()->create_shader(info); });
         if (!shader_) {
             ERR(LogShader, "Failed to create RHI shader from: {}", physical_path);
         }

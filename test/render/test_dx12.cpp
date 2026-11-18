@@ -1,4 +1,4 @@
-#include <catch2/catch_test_macros.hpp>
+#include "test/test_assertions.h"
 #include "test/test_utils.h"
 #include "engine/main/engine_context.h"
 #include "engine/function/render/graph/rdg_builder.h"
@@ -9,6 +9,7 @@
 #include "engine/function/framework/entity.h"
 #include "engine/function/framework/component/camera_component.h"
 #include "engine/function/framework/component/transform_component.h"
+#include <imgui.h>
 #include <array>
 #include <cstring>
 
@@ -254,23 +255,61 @@ TEST_CASE("Hidden rendering captures the completed swapchain frame", "[rhi][dx12
     auto* camera = entity->add_component<CameraComponent>();
     auto* render_system = EngineContext::render_system();
     for (uint32_t frame = 0; frame < 2; ++frame) {
-        render_system->set_custom_rdg_build_func([frame,render_system](RDGBuilder& graph,const RenderPacket&) {
-            auto swapchain = render_system->get_swapchain();
-            auto output = graph.create_texture("CaptureTarget").import(swapchain->get_texture(swapchain->get_current_frame_index()),RESOURCE_STATE_PRESENT).finish();
+        render_system->set_custom_rdg_build_func([frame](RDGBuilder& graph,const RenderPacket&) {
+            auto output = graph.get_texture("BackBuffer");
             graph.create_render_pass("CaptureClear").color(0,output,ATTACHMENT_LOAD_OP_CLEAR,ATTACHMENT_STORE_OP_STORE,
                 frame == 0 ? Color4{0,1,0,1} : Color4{0,0,1,1}).finish();
         });
-        RenderPacket packet; packet.frame_index = frame; packet.active_camera = camera; packet.active_scene = scene.get();
+        auto packet = render_system->make_render_packet(scene.get(), camera, frame);
         REQUIRE(render_system->tick(packet));
         std::vector<uint8_t> pixels; Extent2D extent;
         REQUIRE(render_system->capture_frame(pixels,extent)); REQUIRE(extent == WINDOW_EXTENT);
-        for (size_t i = 0; i < pixels.size(); i += 4) {
-            REQUIRE(pixels[i] == 0); REQUIRE(pixels[i+1] == (frame == 0 ? 255 : 0)); REQUIRE(pixels[i+2] == (frame == 0 ? 0 : 255));
+        REQUIRE(pixels.size() == size_t(extent.width) * extent.height * 4);
+        const uint8_t green = frame == 0 ? 255 : 0;
+        const uint8_t blue = frame == 0 ? 0 : 255;
+        size_t offset = 0;
+        while (offset < pixels.size() && pixels[offset] == 0 &&
+               pixels[offset + 1] == green && pixels[offset + 2] == blue) {
+            offset += 4;
         }
+        CAPTURE(frame, offset / 4);
+        REQUIRE(offset == pixels.size());
         auto path = (utils::get_engine_path() / "build/test-results" / ("dx12-capture-" + std::to_string(frame) + ".png")).string();
         REQUIRE(test_utils::save_screenshot_png(path,extent.width,extent.height,pixels));
     }
     REQUIRE_FALSE(EngineContext::rhi()->check_debug_messages("hidden frame capture"));
+    test_utils::TestContext::reset();
+}
+
+TEST_CASE("Render packet owns the editor draw data for its frame", "[rhi][dx12][render_packet]") {
+    test_utils::TestContext::reset();
+    auto* renderer = EngineContext::render_system();
+    renderer->set_show_ui(true);
+    ImU32 color = IM_COL32(255, 0, 0, 255);
+    renderer->add_custom_ui_callback("test_overlay", [&] {
+        ImGui::GetForegroundDrawList()->AddRectFilled({8, 8}, {32, 32}, color);
+    });
+    auto first = renderer->make_render_packet(nullptr, nullptr, 0);
+    color = IM_COL32(0, 255, 0, 255);
+    auto second = renderer->make_render_packet(nullptr, nullptr, 1);
+    renderer->clear_custom_ui_callbacks();
+    renderer->set_show_ui(false);
+
+    REQUIRE(first.ui);
+    REQUIRE(second.ui);
+    std::vector<uint8_t> pixels;
+    Extent2D extent;
+    REQUIRE(renderer->tick(first));
+    REQUIRE(renderer->capture_frame(pixels, extent));
+    auto offset = (16 * extent.width + 16) * 4;
+    CHECK(pixels[offset] == 255);
+    CHECK(pixels[offset + 1] == 0);
+    REQUIRE(renderer->tick(second));
+    REQUIRE(renderer->capture_frame(pixels, extent));
+    offset = (16 * extent.width + 16) * 4;
+    CHECK(pixels[offset] == 0);
+    CHECK(pixels[offset + 1] == 255);
+    REQUIRE_FALSE(EngineContext::rhi()->check_debug_messages("queued editor draw data"));
     test_utils::TestContext::reset();
 }
 

@@ -46,6 +46,7 @@ bool DX12GraphicsPipeline::init() {
     desc.RasterizerState.CullMode = info_.rasterizer_state.cull_mode == CULL_MODE_NONE ? D3D12_CULL_MODE_NONE :
         info_.rasterizer_state.cull_mode == CULL_MODE_FRONT ? D3D12_CULL_MODE_FRONT : D3D12_CULL_MODE_BACK;
     desc.RasterizerState.DepthClipEnable = info_.rasterizer_state.depth_clip_mode == DEPTH_CLIP;
+    desc.RasterizerState.FrontCounterClockwise = TRUE;
     desc.RasterizerState.DepthBias = INT(info_.rasterizer_state.depth_bias);
     desc.RasterizerState.SlopeScaledDepthBias = info_.rasterizer_state.slope_scale_depth_bias;
     desc.BlendState.IndependentBlendEnable = TRUE;

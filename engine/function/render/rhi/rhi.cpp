@@ -1,7 +1,6 @@
 #include "engine/function/render/rhi/rhi.h"
 #include "engine/function/render/render_system/gpu_profiler.h"
 #include "engine/core/log/Log.h"
-#include "engine/platform/dx11/platform_rhi.h"
 #include "engine/platform/dx12/platform_rhi.h"
 #include <algorithm>
 #include <cstring>
@@ -55,9 +54,7 @@ public:
 
 RHIBackendRef RHIBackend::init(const RHIBackendInfo& info) {
     if (backend_ == nullptr) {
-        if (info.type == BACKEND_DX11) {
-            backend_ = std::make_shared<DX11Backend>(info);
-        } else if (info.type == BACKEND_DX12) {
+        if (info.type == BACKEND_DX12) {
             backend_ = std::make_shared<DX12Backend>(info);
             if (!backend_->is_valid()) { backend_.reset(); return nullptr; }
         } else {

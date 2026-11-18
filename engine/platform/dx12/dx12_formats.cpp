@@ -49,6 +49,11 @@ DXGI_FORMAT DX12Backend::to_dxgi_format(RHIFormat format) {
         case FORMAT_D32_SFLOAT: return DXGI_FORMAT_D32_FLOAT;
         case FORMAT_D32_SFLOAT_S8_UINT: return DXGI_FORMAT_D32_FLOAT_S8X24_UINT;
         case FORMAT_D24_UNORM_S8_UINT: return DXGI_FORMAT_D24_UNORM_S8_UINT;
+        case FORMAT_BC1_UNORM: return DXGI_FORMAT_BC1_UNORM;
+        case FORMAT_BC1_SRGB: return DXGI_FORMAT_BC1_UNORM_SRGB;
+        case FORMAT_BC3_UNORM: return DXGI_FORMAT_BC3_UNORM;
+        case FORMAT_BC3_SRGB: return DXGI_FORMAT_BC3_UNORM_SRGB;
+        case FORMAT_BC5_UNORM: return DXGI_FORMAT_BC5_UNORM;
         default: return DXGI_FORMAT_UNKNOWN;
     }
 }

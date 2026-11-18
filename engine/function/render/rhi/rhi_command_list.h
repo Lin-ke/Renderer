@@ -97,7 +97,7 @@ public:
     void draw_indexed_indirect(RHIBufferRef argument_buffer, uint32_t offset, uint32_t draw_count);
 
     void imgui_create_fonts_texture();
-    void imgui_render_draw_data();
+    void imgui_render_draw_data(std::shared_ptr<ImDrawData> draw_data);
 
 protected:
     CommandListInfo info_;
@@ -363,7 +363,9 @@ struct RHICommandImGuiCreateFontsTexture : public RHICommand {
 };
 
 struct RHICommandImGuiRenderDrawData : public RHICommand {
-    void execute(RHICommandContextRef context) override { context->imgui_render_draw_data(); }
+    explicit RHICommandImGuiRenderDrawData(std::shared_ptr<ImDrawData> data) : draw_data(std::move(data)) {}
+    void execute(RHICommandContextRef context) override { context->imgui_render_draw_data(draw_data.get()); }
+    std::shared_ptr<ImDrawData> draw_data;
 };
 
 // Immediate Commands
@@ -617,9 +619,9 @@ inline void RHICommandList::imgui_create_fonts_texture() {
     else ADD_COMMAND(RHICommandImGuiCreateFontsTexture);
 }
 
-inline void RHICommandList::imgui_render_draw_data() {
-    if (info_.bypass) info_.context->imgui_render_draw_data();
-    else ADD_COMMAND(RHICommandImGuiRenderDrawData);
+inline void RHICommandList::imgui_render_draw_data(std::shared_ptr<ImDrawData> draw_data) {
+    if (info_.bypass) info_.context->imgui_render_draw_data(draw_data.get());
+    else ADD_COMMAND(RHICommandImGuiRenderDrawData, std::move(draw_data));
 }
 
 // RHICommandListImmediate Implementation

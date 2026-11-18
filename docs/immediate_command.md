@@ -5,75 +5,21 @@
 1. **立即命令 (Immediate Command)**：通常用于资源初始化、数据上传（如纹理加载、顶点数据拷贝）或需要 CPU 立即获取 GPU 计算结果（如 Readback）的场景。要求提交后 CPU 阻塞等待 GPU 执行完毕，确保后续操作可以直接使用这些资源。
 2. **延迟命令 (Deferred Command)**：通常用于每帧的常规渲染循环（Draw Calls, 状态切换等）。CPU 负责将命令记录（Record）到命令缓冲区中，在帧的特定时刻统一提交给 GPU 执行。CPU 不需要立即等待 GPU 执行完成，而是通过多缓冲（Double/Triple Buffering）和同步原语（Fences, Semaphores）与 GPU 异步并行工作。
 
-下面我们将分别针对 **DirectX 11 (DX11)** 和 **Vulkan** 后端，详细讨论这两种范式的实现写法。
+## 1. DX12 后端
+
+当前实现将绘制、计算和资源上传提交到同一条 direct queue。命令录制需要串行使用。提交后的 GPU fence 完成后，后端释放本次提交引用的上传缓冲。
+
+### 1.1 立即命令
+
+纹理上传、资源状态转换和回读用 `RHICommandContextImmediate` 录制。调用 `flush()` 提交命令并等待 GPU 完成。纹理上传接受紧密排列的行数据，DX12 后端处理拷贝所需的行对齐。
+
+### 1.2 延迟命令
+
+`RHICommandList` 按顺序记录绘制、绑定和计算命令，由渲染流程统一执行。RDG 声明 Pass 的依赖和资源状态，执行时再插入资源屏障并完成提交。具体同步约定见 [DX12 文档](dx12.md)。
 
 ---
 
-## 1. DirectX 11 (DX11) 后端
-
-DirectX 11 的 API 设计本身相对偏上层，驱动程序在底层做了大量隐藏的队列和同步管理。在 DX11 中，命令的执行依赖于 `ID3D11DeviceContext`。
-
-### 1.1 立即命令（Immediate Command）写法
-在 DX11 中，主渲染线程总是拥有一个**立即上下文 (Immediate Context)**。大部分资源上传操作看起来是同步的，实际上驱动会将其放入队列，但从 API 层面可以直接调用并假设其完成。
-
-**资源上传示例（使用 `UpdateSubresource` 或 `Map/Unmap`）：**
-```cpp
-// 假设 device 和 immediateContext 已经初始化
-// 1. 使用 UpdateSubresource (适合较小的一次性上传)
-immediateContext->UpdateSubresource(pTexture, 0, nullptr, pData, rowPitch, depthPitch);
-
-// 2. 使用 Map/Unmap (适合动态资源，如 Dynamic Buffer)
-D3D11_MAPPED_SUBRESOURCE mappedResource;
-immediateContext->Map(pBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
-memcpy(mappedResource.pData, pData, dataSize);
-immediateContext->Unmap(pBuffer, 0);
-```
-*同步保证：* DX11 的驱动会自动管理依赖。当你上传数据后紧接着发起 Draw Call，驱动会确保上传完成再绘制。
-如果确实需要强制 CPU **等待** GPU 执行完毕（例如 Readback 回传数据到 CPU），需要使用事件查询（Event Query）：
-```cpp
-// 创建查询
-D3D11_QUERY_DESC queryDesc = { D3D11_QUERY_EVENT, 0 };
-ID3D11Query* pQuery = nullptr;
-device->CreateQuery(&queryDesc, &pQuery);
-
-// 发出命令后，插入一个 End
-immediateContext->End(pQuery);
-
-// CPU 阻塞轮询，直到 GPU 执行到 Query 的位置
-BOOL queryData;
-while (immediateContext->GetData(pQuery, &queryData, sizeof(BOOL), 0) == S_FALSE) {
-    // 阻塞等待，或者可以放弃 CPU 时间片
-}
-```
-
-### 1.2 延迟命令（Deferred Command）写法
-在 DX11 中，延迟命令通常有两种体现：
-1. **隐式延迟**：在 Immediate Context 中调用的所有 Draw、Bind 命令实际上都是被驱动缓存并在 Present 或显式 Flush 时才真正提交给硬件。
-2. **显式延迟（多线程渲染）**：使用 **延迟上下文 (Deferred Context)**。允许在工作线程中记录命令，生成命令列表，然后在主线程统一提交，以此提升多核 CPU 的利用率。
-
-**多线程延迟上下文示例：**
-```cpp
-// 1. 在工作线程中：使用 Deferred Context 记录命令
-ID3D11DeviceContext* deferredContext;
-device->CreateDeferredContext(0, &deferredContext);
-
-// 记录各种渲染命令
-deferredContext->VSSetShader(...);
-deferredContext->Draw(...);
-
-// 2. 结束记录，生成 Command List
-ID3D11CommandList* pCommandList = nullptr;
-deferredContext->FinishCommandList(FALSE, &pCommandList);
-
-// 3. 在主线程中：使用 Immediate Context 统一执行
-immediateContext->ExecuteCommandList(pCommandList, FALSE);
-
-pCommandList->Release();
-```
-
----
-
-## 2. Vulkan 后端
+## 2. Vulkan 示例
 
 Vulkan 是一种极其底层的显式 API。没有“默认的隐式上下文”，所有的命令（包括上传、渲染）**必须**由开发者显式记录到命令缓冲区（`VkCommandBuffer`）中，然后提交给队列（`VkQueue`）。因此，无论立即命令还是延迟命令，生命周期都是：**分配 -> 记录 -> 提交 -> 同步**。
 
@@ -188,5 +134,5 @@ vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFences[currentFrame]);
 | :--- | :--- | :--- |
 | **应用场景** | 资源加载、Staging Buffer 上传、计算结果回读、一次性初始化操作。 | 场景渲染、每帧 Draw Call 提交、动态计算着色器派发。 |
 | **CPU执行行为** | 命令提交后 CPU **强制阻塞**，等待 GPU 确认执行完成才继续往下走。 | 录制后异步提交，CPU **立即返回**继续执行游戏逻辑，通过围栏(Fence)延迟同步。 |
-| **DX11 实现思路** | 直接调用 `Immediate Context` 上传方法，驱动自动排队。必要时配合 `Event Query` 阻塞 CPU 实现同步等待。 | 使用 `Deferred Context` 在工作线程录制 Command List，主线程统一下发。帧内 Draw Call 由驱动隐式管理延迟执行。 |
+| **DX12 实现** | 录制上传或回读命令，通过 `flush()` 提交并等待 fence。 | RDG 录制到命令列表，渲染流程统一提交到 direct queue。 |
 | **Vulkan 实现思路**| 分配临时 `CommandBuffer` -> 录制上传/拷贝命令 -> 提交 -> 调用 `vkQueueWaitIdle` 或 `vkWaitForFences` 阻塞 CPU -> 销毁。 | 预分配循环使用的 `CommandBuffer` 数组 -> 每帧录制渲染命令 -> 提交并附带 `Semaphores` 进行 GPU 内部依赖排序 -> 传入 `Fences` 防止下一次循环过快覆盖数据。 |

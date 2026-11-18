@@ -1,4 +1,4 @@
-#include <catch2/catch_test_macros.hpp>
+#include "test/test_assertions.h"
 #include <catch2/catch_approx.hpp>
 #include "test/test_utils.h"
 #include "engine/main/engine_context.h"
@@ -76,6 +76,42 @@ TEST_CASE("Thread Pool Integration", "[core]") {
         
         REQUIRE(completed == num_tasks);
     }
+
+    test_utils::TestContext::reset();
+}
+
+TEST_CASE("Prefetched assets are initialized by a blocking load", "[core][asset]") {
+    test_utils::TestContext::reset();
+
+    auto project_dir = test_utils::TestContext::project_dir() / "asset-prefetch";
+    AssetManager assets;
+    assets.init(project_dir);
+    auto fixture = std::make_shared<Scene>();
+    fixture->create_entity()->add_component<TransformComponent>();
+    auto uid = UID::generate();
+    fixture->set_uid(uid);
+    assets.save_asset(fixture, "/Game/" + uid.to_string() + ".asset");
+    assets.unload_asset(uid);
+
+    auto first = assets.enqueue_load_task(uid);
+    auto second = assets.enqueue_load_task(uid);
+    REQUIRE_FALSE(first.empty());
+    REQUIRE_FALSE(second.empty());
+    auto prefetched = first.back().get();
+    REQUIRE(prefetched);
+    CHECK(prefetched != fixture);
+    CHECK(second.back().get() == prefetched);
+    CHECK_FALSE(prefetched->is_initialized());
+
+    auto scene = assets.load_asset<Scene>(uid);
+    REQUIRE(scene);
+    CHECK(scene == prefetched);
+    CHECK(scene->is_initialized());
+    REQUIRE_FALSE(scene->entities_.empty());
+    auto* entity = scene->entities_.front().get();
+    auto* transform = entity->get_component<TransformComponent>();
+    REQUIRE(transform);
+    CHECK(transform->get_owner() == entity);
 
     test_utils::TestContext::reset();
 }

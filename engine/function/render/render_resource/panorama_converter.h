@@ -54,6 +54,6 @@ private:
     // Sampler for panorama
     RHISamplerRef panorama_sampler_;
 
-    // Constant buffer to replace push constants for DX11 compatibility
+    // Conversion parameters
     std::vector<RHIBufferRef> params_buffers_;
 };

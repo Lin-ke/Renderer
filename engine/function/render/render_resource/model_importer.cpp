@@ -3,6 +3,9 @@
 #include "engine/function/render/render_resource/material.h"
 #include "engine/function/render/render_resource/mesh.h"
 #include "engine/main/engine_context.h"
+#include "engine/function/framework/scene.h"
+#include "engine/function/framework/component/mesh_renderer_component.h"
+#include "engine/function/framework/component/transform_component.h"
 #include "engine/core/log/Log.h"
 #include "engine/function/asset/asset_manager.h"
 #include "engine/core/utils/profiler.h"
@@ -12,6 +15,7 @@
 #include <assimp/postprocess.h>
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cstdint>
 #include <filesystem>
@@ -362,9 +366,30 @@ static std::optional<std::filesystem::path> safe_path_from_wstring(const std::ws
     try { return std::filesystem::path(wstr); } catch (...) { return std::nullopt; }
 }
 
-std::shared_ptr<Model> ModelImporter::import_model(const std::string& physical_path, const std::string& virtual_path,
-    const ModelProcessSetting& settings, const ModelImportOptions& options) {
-    PROFILE_SCOPE("ModelImporter::import_model");
+struct ModelImporter::ImportSource {
+    Assimp::Importer importer;
+    const aiScene* scene = nullptr;
+    std::vector<MtlMaterial> mtl_materials;
+    std::unordered_map<std::string, size_t> mtl_name_to_index;
+    MtlGlobalSettings mtl_settings;
+    std::array<std::unordered_map<unsigned int, std::pair<MeshRef, MaterialRef>>, 2> meshes_by_winding;
+    std::unordered_map<std::string, ModelRef> node_models;
+};
+
+namespace {
+Mat4 node_local_matrix(const aiNode& node) {
+    Mat4 local;
+    for (int row = 0; row < 4; ++row) {
+        for (int col = 0; col < 4; ++col) {
+            local.m[row][col] = node.mTransformation[col][row];
+        }
+    }
+    return local;
+}
+} // namespace
+
+bool ModelImporter::read_source(const std::string& physical_path, const std::string& virtual_path,
+    const ModelProcessSetting& settings, const ModelImportOptions& options, ImportSource& source) {
     source_path_ = std::filesystem::path(physical_path);
     virtual_path_ = virtual_path;
     model_name_ = source_path_.stem().string();
@@ -374,12 +399,11 @@ std::shared_ptr<Model> ModelImporter::import_model(const std::string& physical_p
     
     if (!EngineContext::asset()) {
         ERR(LogModelImporter, "AssetManager not initialized, cannot import model");
-        return nullptr;
+        return false;
     }
     
     texture_cache_.clear();
     material_cache_.clear();
-    mesh_cache_.clear();
     
     try {
         uint32_t process_steps = aiProcess_Triangulate | aiProcess_FixInfacingNormals;
@@ -392,8 +416,8 @@ std::shared_ptr<Model> ModelImporter::import_model(const std::string& physical_p
             process_steps |= aiProcess_GenNormals;
         }
         
-        Assimp::Importer importer;
-        const aiScene* scene = nullptr;
+        auto& importer = source.importer;
+        auto& scene = source.scene;
         
         std::string absolute_path = source_path_.string();
         scene = importer.ReadFile(absolute_path, process_steps);
@@ -414,12 +438,12 @@ std::shared_ptr<Model> ModelImporter::import_model(const std::string& physical_p
         
         if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
             ERR(LogModelImporter, "Assimp load error: {}", importer.GetErrorString());
-            return nullptr;
+            return false;
         }
         
-        std::vector<MtlMaterial> mtl_materials;
-        std::unordered_map<std::string, size_t> mtl_name_to_index;
-        MtlGlobalSettings mtl_settings;
+        auto& mtl_materials = source.mtl_materials;
+        auto& mtl_name_to_index = source.mtl_name_to_index;
+        auto& mtl_settings = source.mtl_settings;
         if (settings_.load_materials) {
             std::filesystem::path mtl_path = source_path_;
             mtl_path.replace_extension(".mtl");
@@ -433,7 +457,21 @@ std::shared_ptr<Model> ModelImporter::import_model(const std::string& physical_p
                 }
             }
         }
-        
+
+        return true;
+    } catch (const std::exception& e) {
+        ERR(LogModelImporter, "Failed to read import source: {}", e.what());
+        return false;
+    }
+}
+
+std::shared_ptr<Model> ModelImporter::import_model(const std::string& physical_path, const std::string& virtual_path,
+    const ModelProcessSetting& settings, const ModelImportOptions& options) {
+    PROFILE_SCOPE("ModelImporter::import_model");
+    ImportSource source;
+    if (!read_source(physical_path, virtual_path, settings, options, source)) return nullptr;
+    const auto* scene = source.scene;
+    try {
         std::vector<MeshInstance> process_meshes;
         process_node(scene->mRootNode, scene, Mat4::Identity(), process_meshes);
         
@@ -448,7 +486,7 @@ std::shared_ptr<Model> ModelImporter::import_model(const std::string& physical_p
             INFO(LogModelImporter, "[{}/{}] Processing mesh [{}]", i, scene->mNumMeshes, mesh_name_safe);
             
             std::shared_ptr<Material> material;
-            std::shared_ptr<Mesh> mesh_asset = process_mesh(mesh, process_meshes[i].transform, scene, i, mtl_materials, mtl_name_to_index, mtl_settings, material);
+            std::shared_ptr<Mesh> mesh_asset = process_mesh(mesh, process_meshes[i].transform, scene, i, source.mtl_materials, source.mtl_name_to_index, source.mtl_settings, material);
             
             if (mesh_asset) {
                 model->add_slot(mesh_asset, material);
@@ -463,15 +501,74 @@ std::shared_ptr<Model> ModelImporter::import_model(const std::string& physical_p
     }
 }
 
+std::shared_ptr<Scene> ModelImporter::import_scene(const std::string& physical_path, const std::string& scene_virtual_path,
+    const ModelProcessSetting& settings, const ModelImportOptions& options) {
+    PROFILE_SCOPE("ModelImporter::import_scene");
+    ImportSource source;
+    if (!read_source(physical_path, scene_virtual_path, settings, options, source)) return nullptr;
+
+    auto scene = std::make_shared<Scene>();
+    scene->set_uid(UID::from_hash(scene_virtual_path.empty() ? physical_path : scene_virtual_path));
+    const auto& node = *source.scene->mRootNode;
+    auto* root = scene->create_entity(safe_ai_string(node.mName));
+    if (!import_scene_node(*root, node, source)) return nullptr;
+    return scene;
+}
+
+bool ModelImporter::import_scene_node(Entity& entity, const aiNode& node, ImportSource& source,
+    bool parent_reverses_winding) {
+    DirectX::XMVECTOR scale, rotation, translation;
+    if (!DirectX::XMMatrixDecompose(&scale, &rotation, &translation, node_local_matrix(node).load())) {
+        ERR(LogModelImporter, "Cannot decompose the transform of scene node '{}'", safe_ai_string(node.mName));
+        return false;
+    }
+    const Vec3 node_scale(scale);
+    const bool reverse_winding = parent_reverses_winding != (node_scale.x * node_scale.y * node_scale.z < 0.0f);
+    entity.add_component<TransformComponent>()->transform = Transform(Vec3(translation), node_scale,
+        Quaternion(rotation).normalized());
+
+    if (node.mNumMeshes) {
+        auto model = get_or_create_node_model(node, source, reverse_winding);
+        if (!model) return false;
+        entity.add_component<MeshRendererComponent>()->set_model(model);
+    }
+    for (unsigned int i = 0; i < node.mNumChildren; ++i) {
+        const auto& child = *node.mChildren[i];
+        if (!import_scene_node(*entity.create_child(safe_ai_string(child.mName)), child, source, reverse_winding))
+            return false;
+    }
+    return true;
+}
+
+ModelRef ModelImporter::get_or_create_node_model(const aiNode& node, ImportSource& source, bool reverse_winding) {
+    std::string key = reverse_winding ? "reversed" : "";
+    for (unsigned int i = 0; i < node.mNumMeshes; ++i) {
+        key += "/" + std::to_string(node.mMeshes[i]);
+    }
+    if (auto existing = source.node_models.find(key); existing != source.node_models.end()) return existing->second;
+
+    auto model = std::make_shared<Model>(source_path_.string(), settings_);
+    model->set_uid(generate_sub_asset_uid(key, "node_model"));
+    auto& meshes = source.meshes_by_winding[reverse_winding];
+    for (unsigned int i = 0; i < node.mNumMeshes; ++i) {
+        const unsigned int index = node.mMeshes[i];
+        if (index >= source.scene->mNumMeshes) return nullptr;
+        auto [entry, inserted] = meshes.try_emplace(index);
+        auto& [mesh, material] = entry->second;
+        if (inserted) {
+            mesh = process_mesh(source.scene->mMeshes[index], Mat4::Identity(), source.scene, index,
+                source.mtl_materials, source.mtl_name_to_index, source.mtl_settings, material, reverse_winding);
+        }
+        if (!mesh) return nullptr;
+        model->add_slot(mesh, material);
+    }
+    source.node_models.emplace(key, model);
+    return model;
+}
+
 void ModelImporter::process_node(aiNode* node, const aiScene* scene, const Mat4& parent_transform,
     std::vector<MeshInstance>& process_meshes) {
-    Mat4 local;
-    for (int row = 0; row < 4; ++row) {
-        for (int col = 0; col < 4; ++col) {
-            local.m[row][col] = node->mTransformation[col][row];
-        }
-    }
-    const Mat4 world = local * parent_transform;
+    const Mat4 world = node_local_matrix(*node) * parent_transform;
     for (unsigned int i = 0; i < node->mNumMeshes; i++) {
         process_meshes.push_back({scene->mMeshes[node->mMeshes[i]], world});
     }
@@ -488,10 +585,12 @@ std::shared_ptr<Mesh> ModelImporter::process_mesh(
     const std::vector<MtlMaterial>& mtl_materials,
     const std::unordered_map<std::string, size_t>& mtl_name_to_index,
     const MtlGlobalSettings& mtl_settings,
-    std::shared_ptr<Material>& out_material) {
+    std::shared_ptr<Material>& out_material,
+    bool reverse_for_node) {
     
     std::string mesh_name_safe = safe_ai_string(mesh->mName);
     std::string mesh_sub_name = "mesh_" + std::to_string(index);
+    if (reverse_for_node) mesh_sub_name += "_reversed";
     UID mesh_uid = generate_sub_asset_uid(mesh_sub_name, "mesh");
     
     std::string base_path = !virtual_path_.empty() ? virtual_path_ : source_path_.string();
@@ -516,7 +615,11 @@ std::shared_ptr<Mesh> ModelImporter::process_mesh(
     // local coordinates, which are paired with bone offset matrices.
     const Mat4 transform = mesh->HasBones() ? Mat4::Identity() : node_transform;
     const Mat4 normal_transform = transform.inverse().transpose();
-    const bool mirrored = DirectX::XMVectorGetX(DirectX::XMMatrixDeterminant(transform.load())) < 0.0f;
+    const bool transform_reverses_winding =
+        DirectX::XMVectorGetX(DirectX::XMMatrixDeterminant(transform.load())) < 0.0f;
+    // Reverse the source order for the counter-clockwise rasterizer. A reflection
+    // in either the vertices or the scene transform cancels that reversal.
+    const bool reverse_indices = transform_reverses_winding == reverse_for_node;
     
     for (unsigned int i = 0; i < mesh->mNumVertices; i++) {
         const auto& position = mesh->mVertices[i];
@@ -558,7 +661,7 @@ std::shared_ptr<Mesh> ModelImporter::process_mesh(
         const aiFace& face = mesh->mFaces[i];
         if (face.mNumIndices != 3) continue;
         for (unsigned int j = 0; j < 3; j++) {
-            indices.push_back(face.mIndices[mirrored ? 2 - j : j]);
+            indices.push_back(face.mIndices[reverse_indices ? 2 - j : j]);
         }
     }
     
@@ -578,7 +681,7 @@ std::shared_ptr<Mesh> ModelImporter::process_mesh(
     
     // Get or create material
     out_material = nullptr;
-    if (settings_.load_materials && mesh->mMaterialIndex >= 0) {
+    if (settings_.load_materials && mesh->mMaterialIndex < scene->mNumMaterials) {
         aiMaterial* ai_mat = scene->mMaterials[mesh->mMaterialIndex];
         aiString mat_name;
         ai_mat->Get(AI_MATKEY_NAME, mat_name);

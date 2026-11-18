@@ -4,6 +4,7 @@
 #endif
 #include <Windows.h>
 #include <string>
+#include <mutex>
 
 class Window {
 public:
@@ -12,6 +13,7 @@ public:
 
     // Returns false if the application should quit
     bool process_messages();
+    static std::recursive_mutex& imgui_mutex();
 
     HWND get_hwnd() const { return hwnd_; }
     bool is_visible() const { return visible_; }

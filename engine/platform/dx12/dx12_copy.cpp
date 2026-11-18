@@ -77,7 +77,7 @@ void DX12CommandContext::copy_buffer_to_texture(RHIBufferRef src, uint64_t offse
     backend->ensure_recording(); backend->retain(src); backend->retain(dst);
     auto* texture = static_cast<DX12Texture*>(dst.get());
     auto layout = footprints(*backend, *texture, layers);
-    auto bytes = src->snapshot_data();
+    const auto& bytes = static_cast<DX12Buffer*>(src.get())->get_cpu_data();
     uint64_t required = 0;
     for (size_t i = 0; i < layout.layouts.size(); ++i) required += layout.row_sizes[i] * layout.rows[i] * layout.layouts[i].Footprint.Depth;
     if (offset > bytes.size() || required > bytes.size() - offset) { ERR(LogDX12Copy, "Texture uploads require a CPU-visible source buffer with enough packed data"); return; }

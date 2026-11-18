@@ -151,7 +151,7 @@ float3 GetNormal(PSInput input) {
 
 // Linearize depth value
 float Linear01Depth(float depth, float near_plane, float far_plane) {
-    // Reverse Z depth buffer (DX11 typical)
+    // Reverse Z depth buffer
     return near_plane * far_plane / (far_plane - depth * (far_plane - near_plane));
 }
 

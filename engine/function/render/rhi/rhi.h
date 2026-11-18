@@ -14,8 +14,7 @@ using GPUProfilerRef = std::unique_ptr<GPUProfiler>;
 
 enum RHIBackendType {
     BACKEND_VULKAN = 0,
-    BACKEND_DX11,
-    BACKEND_DX12,
+    BACKEND_DX12 = 2,
 
     BACKEND_MAX_ENUM,
 };
@@ -105,9 +104,9 @@ public:
     // Shader Compilation
     /**
      * @brief Compile shader source code to platform-specific bytecode
-     * @param source Shader source code (HLSL for DX11, GLSL for OpenGL/Vulkan)
+     * @param source HLSL source code
      * @param entry Entry point function name (e.g., "main")
-     * @param profile Shader profile/target (e.g., "vs_5_0", "ps_5_0" for DX11)
+     * @param profile Shader profile (e.g., "vs_5_0" or "ps_5_0")
      * @return Compiled bytecode, empty vector if compilation fails
      */
     virtual std::vector<uint8_t> compile_shader(const char* source, const char* entry, const char* profile) = 0;
@@ -123,11 +122,11 @@ public:
     /**
      * @brief Read and log any queued debug-layer messages from the graphics API.
      *
-     * Override per-platform: DX11 reads ID3D11InfoQueue, Vulkan reads
-     * VK_EXT_debug_utils, etc.  The default implementation is a no-op.
+     * Override in the backend to read its debug message queue.
+     * The default implementation is a no-op.
      *
      * @param caller_tag  Short label indicating which operation triggered
-     *                    the check (e.g. "bind_texture", "draw_indexed").
+     *                    the check (e.g. "bind_descriptor_set", "draw_indexed").
      * @return true if any warning-or-above message was found.
      */
     virtual bool check_debug_messages(const char* caller_tag = nullptr) { return false; }
@@ -146,6 +145,8 @@ protected:
 };
 
 // Command Context Interface // vkcmd... 
+struct ImDrawData;
+
 class RHICommandContext : public RHIResource {
 public:
     RHICommandContext(RHICommandPoolRef pool) : RHIResource(RHI_COMMAND_CONTEXT), pool_(pool) {}
@@ -239,7 +240,7 @@ public:
     // ImGui
     virtual void imgui_create_fonts_texture() = 0;
 
-    virtual void imgui_render_draw_data() = 0;
+    virtual void imgui_render_draw_data(ImDrawData* draw_data) = 0;
 
 private:
     std::weak_ptr<RHICommandPool> pool_;

@@ -211,6 +211,12 @@ enum RHIFormat : uint32_t {
     FORMAT_D32_SFLOAT_S8_UINT,
     FORMAT_D24_UNORM_S8_UINT,
 
+    FORMAT_BC1_UNORM,
+    FORMAT_BC1_SRGB,
+    FORMAT_BC3_UNORM,
+    FORMAT_BC3_SRGB,
+    FORMAT_BC5_UNORM,
+
     FORMAT_MAX_ENUM,
 };
 
@@ -245,6 +251,7 @@ static uint32_t format_channel_counts(RHIFormat format) {
         case FORMAT_R8G8_SINT:
         case FORMAT_R16G16_SINT:
         case FORMAT_R32G32_SINT:
+        case FORMAT_BC5_UNORM:
         case FORMAT_D32_SFLOAT_S8_UINT:
         case FORMAT_D24_UNORM_S8_UINT:
             return 2;
@@ -278,6 +285,10 @@ static uint32_t format_channel_counts(RHIFormat format) {
         case FORMAT_R8G8B8A8_SINT:
         case FORMAT_R16G16B16A16_SINT:
         case FORMAT_R32G32B32A32_SINT:
+        case FORMAT_BC1_UNORM:
+        case FORMAT_BC1_SRGB:
+        case FORMAT_BC3_UNORM:
+        case FORMAT_BC3_SRGB:
             return 4;
 
         default:
@@ -328,6 +339,11 @@ static bool is_rw_format(RHIFormat format) {
         case FORMAT_R8G8B8_SRGB:
         case FORMAT_R8G8B8A8_SRGB:
         case FORMAT_B8G8R8A8_SRGB:
+        case FORMAT_BC1_UNORM:
+        case FORMAT_BC1_SRGB:
+        case FORMAT_BC3_UNORM:
+        case FORMAT_BC3_SRGB:
+        case FORMAT_BC5_UNORM:
             return false;
         default:
             return true;

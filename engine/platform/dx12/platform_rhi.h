@@ -13,6 +13,8 @@
 #include <wrl/client.h>
 
 #include <array>
+#include <atomic>
+#include <mutex>
 #include <memory>
 #include <string>
 #include <vector>
@@ -124,7 +126,7 @@ public:
 private:
     ComPtr<IDXGISwapChain3> swap_chain_;
     std::vector<RHITextureRef> back_buffers_;
-    uint32_t current_index_ = 0;
+    std::atomic<uint32_t> current_index_ = 0;
     std::weak_ptr<DX12Backend> backend_;
 };
 
@@ -145,6 +147,7 @@ public:
     void unmap() override final;
     void unmap_written_range(uint64_t offset, uint64_t size) override final;
     std::vector<uint8_t> snapshot_data() const override { return cpu_shadow_; }
+    const std::vector<uint8_t>& get_cpu_data() const { return cpu_shadow_; }
     void complete_readback(std::vector<uint8_t> data) { cpu_shadow_ = std::move(data); }
     void destroy() override final;
     void* raw_handle() override final { return resource_.Get(); }
@@ -420,7 +423,7 @@ public:
     bool read_texture(RHITextureRef texture, void* data, uint32_t size) override final;
 
     void imgui_create_fonts_texture() override final;
-    void imgui_render_draw_data() override final;
+    void imgui_render_draw_data(ImDrawData* draw_data) override final;
 
 private:
     bool flush_graphics_bindings();
@@ -581,6 +584,7 @@ private:
     DX12DescriptorAllocator gpu_srv_uav_heap_;
     DX12DescriptorAllocator gpu_sampler_heap_;
     uint32_t imgui_next_srv_index_ = 1;
+    std::mutex imgui_srv_mutex_;
 
     DX12DynamicRingBuffer dynamic_ring_buffer_;
 

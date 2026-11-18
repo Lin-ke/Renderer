@@ -1,4 +1,4 @@
-#include <catch2/catch_test_macros.hpp>
+#include "test/test_assertions.h"
 #include "engine/function/render/graph/rdg_builder.h"
 #include <fstream>
 #include <filesystem>

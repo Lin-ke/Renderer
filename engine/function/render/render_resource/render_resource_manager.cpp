@@ -9,7 +9,7 @@
 #include <fstream>
 
 // Helper function to create raw buffer for arrays
-// Uses DYNAMIC memory for CPU write + SRV for GPU read (DX11 DYNAMIC cannot use UAV)
+// Uses DYNAMIC memory for CPU write + SRV for GPU read
 template<typename T>
 static RHIBufferRef create_array_buffer(uint32_t count) {
     RHIBufferInfo info = {};
@@ -246,7 +246,8 @@ RHIShaderRef RenderResourceManager::get_or_create_shader(const std::string& path
                 info.frequency = frequency;
                 info.code = code;
                 
-                RHIShaderRef shader = EngineContext::rhi()->create_shader(info);
+                RHIShaderRef shader;
+                EngineContext::run_device_task([&] { shader = EngineContext::rhi()->create_shader(info); });
                 if (shader) {
                     shader_cache_[key] = shader;
                     INFO(LogRenderResourceManager, "Shader loaded and cached: {}", key);

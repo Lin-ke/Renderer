@@ -1,3 +1,4 @@
+#include "engine/function/render/render_pass/draw_material.h"
 #include "engine/function/render/render_pass/g_buffer_pass.h"
 #include "engine/main/engine_context.h"
 #include "engine/function/render/render_system/render_system.h"
@@ -249,7 +250,6 @@ void GBufferPass::set_per_frame_data(const Mat4& view, const Mat4& proj, const V
     per_frame_data_.view = view;
     per_frame_data_.proj = proj;
     per_frame_data_.camera_pos = camera_pos;
-    per_frame_dirty_ = true;
 }
 
 void GBufferPass::build(RDGBuilder& builder) {
@@ -265,9 +265,6 @@ std::optional<GBufferOutputHandles> GBufferPass::build(RDGBuilder& builder, RDGT
     if (batches.empty()) {
         return std::nullopt;
     }
-    
-    // Store batches for lambda access (avoids copy in capture)
-    current_batches_ = batches;
     
     auto render_system = EngineContext::render_system();
     if (!render_system) return std::nullopt;
@@ -321,7 +318,7 @@ std::optional<GBufferOutputHandles> GBufferPass::build(RDGBuilder& builder, RDGT
                Color4{0.0f, 0.0f, 0.0f, 0.0f})
         .depth_stencil(depth_target, ATTACHMENT_LOAD_OP_LOAD, ATTACHMENT_STORE_OP_STORE, 
                        1.0f, 0)
-        .execute([this, render_system, extent](RDGPassContext context) {
+        .execute([this, batches, extent, frame_data = per_frame_data_](RDGPassContext context) {
             RHICommandListRef cmd = context.command;
             if (!cmd) return;
             
@@ -330,13 +327,9 @@ std::optional<GBufferOutputHandles> GBufferPass::build(RDGBuilder& builder, RDGT
             cmd->set_graphics_pipeline(pipeline_);
             
             if (per_frame_buffer_) {
-                if (per_frame_dirty_) {
-                    void* mapped = per_frame_buffer_->map();
-                    if (mapped) {
-                        memcpy(mapped, &per_frame_data_, sizeof(per_frame_data_));
-                        per_frame_buffer_->unmap();
-                    }
-                    per_frame_dirty_ = false;
+                if (void* mapped = per_frame_buffer_->map()) {
+                    memcpy(mapped, &frame_data, sizeof(frame_data));
+                    per_frame_buffer_->unmap();
                 }
                 descriptor_set_->write_buffer(0, per_frame_buffer_);
             }
@@ -351,8 +344,7 @@ std::optional<GBufferOutputHandles> GBufferPass::build(RDGBuilder& builder, RDGT
             RHITextureRef fallback_black = rsys ? rsys->get_fallback_black_texture() : nullptr;
             RHITextureRef fallback_normal = rsys ? rsys->get_fallback_normal_texture() : nullptr;
             
-            // Use stored batches
-            for (const auto& batch : current_batches_) {
+            for (const auto& batch : batches) {
                 if (per_object_buffer_) {
                     GBufferPerObjectData object_data;
                     object_data.model = batch.model_matrix;
@@ -365,118 +357,24 @@ std::optional<GBufferOutputHandles> GBufferPass::build(RDGBuilder& builder, RDGT
                     descriptor_set_->write_buffer(1, per_object_buffer_);
                 }
                 
-                // Update material data and bind textures
-                auto pbr_mat = std::dynamic_pointer_cast<PBRMaterial>(batch.material);
-                auto cull = batch.material ? batch.material->cull_mode() : CULL_MODE_BACK;
-                cmd->set_graphics_pipeline(cull == CULL_MODE_NONE ? double_sided_pipeline_ :
-                    cull == CULL_MODE_FRONT ? front_cull_pipeline_ : pipeline_);
-                if (material_buffer_ && pbr_mat) {
-                    GBufferMaterialData mat_data;
-                    mat_data.albedo = pbr_mat->get_diffuse();
-                    mat_data.roughness = pbr_mat->get_roughness();
-                    mat_data.metallic = pbr_mat->get_metallic();
-                    mat_data.emission = pbr_mat->get_emission().x; // Use emission x channel as scalar
-                    mat_data.alpha_clip = pbr_mat->get_alpha_clip();
-                    mat_data.specular = pbr_mat->get_specular();
-                    mat_data.use_albedo_map = pbr_mat->get_diffuse_texture() ? 1.0f : 0.0f;
-                    mat_data.use_normal_map = pbr_mat->get_normal_texture() ? 1.0f : 0.0f;
-                    mat_data.use_arm_map = pbr_mat->get_arm_texture() ? 1.0f : 0.0f;
-                    mat_data.use_roughness_map = pbr_mat->get_roughness_texture() ? 1.0f : 0.0f;
-                    mat_data.use_metallic_map = pbr_mat->get_metallic_texture() ? 1.0f : 0.0f;
-                    mat_data.use_ao_map = pbr_mat->get_ao_texture() ? 1.0f : 0.0f;
-                    mat_data.use_emission_map = pbr_mat->get_emission_texture() ? 1.0f : 0.0f;
-                    
-                    void* mapped = material_buffer_->map();
-                    if (mapped) {
-                        memcpy(mapped, &mat_data, sizeof(mat_data));
+                const auto fallback_material = !batch.material_snapshot && batch.material
+                    ? snapshot_material(*batch.material) : DrawMaterial{};
+                const auto& material = batch.material_snapshot ? *batch.material_snapshot : fallback_material;
+                cmd->set_graphics_pipeline(material.cull_mode == CULL_MODE_NONE ? double_sided_pipeline_ :
+                    material.cull_mode == CULL_MODE_FRONT ? front_cull_pipeline_ : pipeline_);
+                if (material_buffer_ && material.pbr) {
+                    if (void* mapped = material_buffer_->map()) {
+                        memcpy(mapped, &*material.pbr, sizeof(GBufferMaterialData));
                         material_buffer_->unmap();
                     }
-                    
-                    // Bind albedo texture (t0)
-                    auto albedo_tex = pbr_mat->get_diffuse_texture();
-                    if (albedo_tex && albedo_tex->texture_) {
-                        descriptor_set_->write_texture(0, albedo_tex->texture_);
-                    } else {
-                        WARN(LogGBufferPass, "Material '{}' is missing albedo/diffuse texture, using fallback white", 
-                             pbr_mat->get_name());
-                        if (fallback_white) {
-                            descriptor_set_->write_texture(0, fallback_white);
-                        }
-                    }
-                    
-                    // Bind normal texture (t1)
-                    auto normal_tex = pbr_mat->get_normal_texture();
-                    if (normal_tex && normal_tex->texture_) {
-                        descriptor_set_->write_texture(1, normal_tex->texture_);
-                    } else {
-                        if (fallback_normal) {
-                            descriptor_set_->write_texture(1, fallback_normal);
-                        }
-                    }
-                    
-                    // Bind ARM texture (t2) - preferred over individual maps
-                    auto arm_tex = pbr_mat->get_arm_texture();
-                    if (arm_tex && arm_tex->texture_) {
-                        descriptor_set_->write_texture(2, arm_tex->texture_);
-                    } else {
-                        if (fallback_black) {
-                            descriptor_set_->write_texture(2, fallback_black);
-                        }
-                    }
-                    
-                    // Bind individual maps (t3-t6) when ARM is not available
-                    auto roughness_tex = pbr_mat->get_roughness_texture();
-                    if (roughness_tex && roughness_tex->texture_) {
-                        descriptor_set_->write_texture(3, roughness_tex->texture_);
-                    } else {
-                        if (fallback_black) {
-                            descriptor_set_->write_texture(3, fallback_black);
-                        }
-                    }
-                    
-                    auto metallic_tex = pbr_mat->get_metallic_texture();
-                    if (metallic_tex && metallic_tex->texture_) {
-                        descriptor_set_->write_texture(4, metallic_tex->texture_);
-                    } else {
-                        if (fallback_black) {
-                            descriptor_set_->write_texture(4, fallback_black);
-                        }
-                    }
-                    
-                    auto ao_tex = pbr_mat->get_ao_texture();
-                    if (ao_tex && ao_tex->texture_) {
-                        descriptor_set_->write_texture(5, ao_tex->texture_);
-                    } else {
-                        if (fallback_white) { // White = AO=1.0 (no occlusion)
-                            descriptor_set_->write_texture(5, fallback_white);
-                        }
-                    }
-                    
-                    auto emission_tex = pbr_mat->get_emission_texture();
-                    if (emission_tex && emission_tex->texture_) {
-                        descriptor_set_->write_texture(6, emission_tex->texture_);
-                    } else {
-                        if (fallback_black) {
-                            descriptor_set_->write_texture(6, fallback_black);
-                        }
-                    }
-                } else {
-                    // No material or not PBR - bind all fallbacks
-                    if (fallback_white) {
-                        descriptor_set_->write_texture(0, fallback_white); // albedo
-                        descriptor_set_->write_texture(5, fallback_white); // ao
-                    }
-                    if (fallback_normal) {
-                        descriptor_set_->write_texture(1, fallback_normal); // normal
-                    }
-                    if (fallback_black) {
-                        descriptor_set_->write_texture(2, fallback_black); // arm
-                        descriptor_set_->write_texture(3, fallback_black); // roughness
-                        descriptor_set_->write_texture(4, fallback_black); // metallic
-                        descriptor_set_->write_texture(6, fallback_black); // emission
-                    }
                 }
-                
+                const std::array fallbacks{fallback_white, fallback_normal, fallback_black,
+                    fallback_black, fallback_black, fallback_white, fallback_black};
+                for (uint32_t slot = 0; slot < fallbacks.size(); ++slot) {
+                    const auto& texture = material.pbr ? material.textures[slot] : fallbacks[slot];
+                    descriptor_set_->write_texture(slot, texture ? texture : fallbacks[slot]);
+                }
+
                 if (batch.vertex_buffer) {
                     cmd->bind_vertex_buffer(batch.vertex_buffer, 0, 0);
                 }

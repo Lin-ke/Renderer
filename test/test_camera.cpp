@@ -1,5 +1,5 @@
 #include <catch2/catch_approx.hpp>
-#include <catch2/catch_test_macros.hpp>
+#include "test/test_assertions.h"
 
 #include "engine/function/framework/component/camera_component.h"
 #include "engine/function/framework/component/transform_component.h"

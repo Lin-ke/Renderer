@@ -2,6 +2,7 @@
 
 #include "engine/function/render/render_pass/render_pass.h"
 #include "engine/core/math/math.h"
+#include "engine/function/render/data/render_structs.h"
 #include <vector>
 #include <memory>
 #include <map>
@@ -11,6 +12,8 @@ class Material;
 using MaterialRef = std::shared_ptr<Material>;
 
 namespace render {
+
+struct DrawMaterial;
 
 /**
  * @brief Simple draw batch structure for basic rendering
@@ -27,6 +30,8 @@ struct DrawBatch {
     Mat4 model_matrix = Mat4::Identity();
     Mat4 inv_model_matrix = Mat4::Identity();
     MaterialRef material;            // Material for PBR rendering
+    BoundingBox bounds;
+    std::shared_ptr<const DrawMaterial> material_snapshot;
 };
 
 /**

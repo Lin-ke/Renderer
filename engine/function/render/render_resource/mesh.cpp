@@ -4,6 +4,7 @@
 #include "engine/function/asset/asset_manager.h"
 
 #include <cassert>
+#include <utility>
 #include <cereal/archives/binary.hpp>
 #include <cereal/archives/json.hpp>
 #include <fstream>
@@ -25,6 +26,12 @@ void Mesh::on_load() {
 }
 
 void Mesh::on_save() {
+}
+
+void Mesh::reverse_triangle_winding(std::vector<uint32_t>& indices) {
+    for (size_t last = 2; last < indices.size(); last += 3) {
+        std::swap(indices[last - 2], indices[last]);
+    }
 }
 
 std::shared_ptr<Mesh> Mesh::Load(const std::string& path) {
@@ -78,33 +85,35 @@ void Mesh::create_gpu_buffers() {
         return;
     }
 
-    if (!position_.empty()) {
-        vertex_buffer_ = std::make_shared<VertexBuffer>(/*static_storage=*/true);
-        vertex_buffer_->set_position(position_);
-        if (!normal_.empty()) {
-            vertex_buffer_->set_normal(normal_);
+    EngineContext::run_device_task([this] {
+        if (!position_.empty()) {
+            vertex_buffer_ = std::make_shared<VertexBuffer>(/*static_storage=*/true);
+            vertex_buffer_->set_position(position_);
+            if (!normal_.empty()) {
+                vertex_buffer_->set_normal(normal_);
+            }
+            if (!tangent_.empty()) {
+                vertex_buffer_->set_tangent(tangent_);
+            }
+            if (!tex_coord_.empty()) {
+                vertex_buffer_->set_tex_coord(tex_coord_);
+            }
+            if (!color_.empty()) {
+                vertex_buffer_->set_color(color_);
+            }
+            if (!bone_index_.empty()) {
+                vertex_buffer_->set_bone_index(bone_index_);
+            }
+            if (!bone_weight_.empty()) {
+                vertex_buffer_->set_bone_weight(bone_weight_);
+            }
         }
-        if (!tangent_.empty()) {
-            vertex_buffer_->set_tangent(tangent_);
-        }
-        if (!tex_coord_.empty()) {
-            vertex_buffer_->set_tex_coord(tex_coord_);
-        }
-        if (!color_.empty()) {
-            vertex_buffer_->set_color(color_);
-        }
-        if (!bone_index_.empty()) {
-            vertex_buffer_->set_bone_index(bone_index_);
-        }
-        if (!bone_weight_.empty()) {
-            vertex_buffer_->set_bone_weight(bone_weight_);
-        }
-    }
 
-    if (!index_.empty()) {
-        index_buffer_ = std::make_shared<IndexBuffer>(/*static_storage=*/true);
-        index_buffer_->set_index(index_);
-    }
+        if (!index_.empty()) {
+            index_buffer_ = std::make_shared<IndexBuffer>(/*static_storage=*/true);
+            index_buffer_->set_index(index_);
+        }
+    });
 }
 
 void Mesh::calculate_bounds() {

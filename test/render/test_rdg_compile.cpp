@@ -1,4 +1,4 @@
-#include <catch2/catch_test_macros.hpp>
+#include "test/test_assertions.h"
 #include "test/test_utils.h"
 #include "engine/main/engine_context.h"
 #include "engine/function/render/graph/rdg_builder.h"
@@ -132,6 +132,46 @@ TEST_CASE("RDG explicit dependencies and side effects execute in stable order", 
     command->begin_command(); REQUIRE(graph.execute()); command->end_command(); command->execute();
     REQUIRE(calls == std::vector<std::string>{"Producer","Consumer","Independent"});
     REQUIRE(graph.get_compile_info().culled_passes == std::vector<std::string>{"DeadCallback"});
+    test_utils::TestContext::reset();
+}
+
+TEST_CASE("Compiled RDG binds an external texture before recording", "[rdg][rdg_compile]") {
+    test_utils::TestContext::reset();
+    {
+        auto backend = EngineContext::rhi();
+        const RHITextureInfo info{
+            .format = FORMAT_R8G8B8A8_UNORM,
+            .extent = {13, 7, 1},
+            .type = RESOURCE_TYPE_TEXTURE | RESOURCE_TYPE_RENDER_TARGET
+        };
+        auto target = backend->create_texture(info);
+        REQUIRE(target);
+
+        RDGBuilder graph;
+        auto external = graph.create_texture("External").import(target->get_info(), RESOURCE_STATE_UNDEFINED).finish();
+        unsigned recorded_slot = UINT32_MAX;
+        graph.create_render_pass("Clear")
+            .color(0, external, ATTACHMENT_LOAD_OP_CLEAR, ATTACHMENT_STORE_OP_STORE, {0, 1, 0, 1})
+            .execute([&](RDGPassContext context) { recorded_slot = context.frame_slot; })
+            .finish();
+        REQUIRE(graph.compile());
+        auto command = commands();
+        REQUIRE_FALSE(graph.execute_compiled(command, 1));
+        REQUIRE(recorded_slot == UINT32_MAX);
+        REQUIRE(graph.bind_external_texture(external, target));
+        command->begin_command();
+        REQUIRE(graph.execute_compiled(command, 1));
+        command->end_command();
+        command->execute();
+        REQUIRE(recorded_slot == 1);
+
+        std::vector<uint8_t> pixels(13 * 7 * 4);
+        auto readback = backend->create_command_context(nullptr);
+        REQUIRE(readback->read_texture(target, pixels.data(), static_cast<uint32_t>(pixels.size())));
+        CHECK(pixels[0] == 0);
+        CHECK(pixels[1] == 255);
+        CHECK(pixels[2] == 0);
+    }
     test_utils::TestContext::reset();
 }
 

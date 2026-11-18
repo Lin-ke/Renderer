@@ -158,6 +158,10 @@ bool outside_frustum(const BoundingBox& box, const Frustum& frustum) {
 }
 } // namespace
 
+bool MeshRendererComponent::is_visible(const render::DrawBatch& batch, const Mat4& view_projection) {
+    return !outside_frustum(batch.bounds, local_frustum(batch.model_matrix * view_projection));
+}
+
 void MeshRendererComponent::collect_draw_batch(std::vector<render::DrawBatch>& batches, const Mat4* view_projection) {
     if (!model_ || !get_owner()) return;
     auto transform = get_owner()->get_component<TransformComponent>();
@@ -171,6 +175,7 @@ void MeshRendererComponent::collect_draw_batch(std::vector<render::DrawBatch>& b
         if (!mesh) continue;
         if (frustum && outside_frustum(mesh->get_bounding_box(), *frustum)) continue;
         render::DrawBatch batch;
+        batch.bounds = mesh->get_bounding_box();
         batch.object_id = (i < object_ids_.size()) ? object_ids_[i] : 0;
         auto vb = mesh->get_vertex_buffer();
         auto ib = mesh->get_index_buffer();

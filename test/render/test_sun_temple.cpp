@@ -1,4 +1,4 @@
-#include <catch2/catch_test_macros.hpp>
+#include "test/test_assertions.h"
 #include "test/test_utils.h"
 #include "samples/sun_temple/scene.h"
 
@@ -9,61 +9,54 @@ TEST_CASE("Sun Temple imports materials and renders from native assets", "[.][su
     test_utils::TestContext::reset();
     const char* source_dir = std::getenv("SUN_TEMPLE_DIR");
     if (!source_dir) SKIP("Set SUN_TEMPLE_DIR to the ORCA SunTemple directory to run this integration test");
-    Log::set_min_log_level(1);
-    auto model = sun_temple::import_model(source_dir);
-    REQUIRE(model);
-    REQUIRE(model->get_slot_count() == 1056);
+    const std::string scene_path = "/Game/sun_temple_import_test/scene.asset";
+    auto scene = sun_temple::import_scene(source_dir, scene_path);
+    REQUIRE(scene);
+    auto renderers = scene->get_components<MeshRendererComponent>();
+    REQUIRE(renderers.size() > 1);
     std::unordered_set<Material*> materials;
-    for (uint32_t i = 0; i < model->get_slot_count(); ++i) {
-        auto material = std::dynamic_pointer_cast<PBRMaterial>(model->get_material(i));
-        REQUIRE(material);
-        if (!materials.insert(material.get()).second) continue;
-        CAPTURE(material->get_name());
-        REQUIRE(material->get_diffuse_texture());
-        REQUIRE(material->get_diffuse_texture()->texture_);
-        REQUIRE(material->get_normal_texture());
-        REQUIRE(material->get_normal_texture()->texture_);
-        REQUIRE(material->get_arm_texture());
-        REQUIRE(material->get_arm_texture()->texture_);
-        CHECK(material->get_diffuse_texture()->texture_->get_info().format == FORMAT_R8G8B8A8_SRGB);
-        CHECK(material->get_normal_texture()->texture_->get_info().format == FORMAT_R8G8B8A8_UNORM);
-        CHECK(material->get_arm_texture()->texture_->get_info().format == FORMAT_R8G8B8A8_UNORM);
+    size_t mesh_instances = 0;
+    for (auto* renderer : renderers) {
+        auto model = renderer->get_model();
+        REQUIRE(model);
+        mesh_instances += model->get_slot_count();
+        for (uint32_t i = 0; i < model->get_slot_count(); ++i) {
+            auto material = std::dynamic_pointer_cast<PBRMaterial>(model->get_material(i));
+            REQUIRE(material);
+            if (!materials.insert(material.get()).second) continue;
+            CAPTURE(material->get_name());
+            REQUIRE(material->get_diffuse_texture());
+            REQUIRE(material->get_diffuse_texture()->texture_);
+            REQUIRE(material->get_normal_texture());
+            REQUIRE(material->get_normal_texture()->texture_);
+            REQUIRE(material->get_arm_texture());
+            REQUIRE(material->get_arm_texture()->texture_);
+            const auto diffuse = material->get_diffuse_texture()->texture_->get_info().format;
+            const auto arm = material->get_arm_texture()->texture_->get_info().format;
+            CHECK((diffuse == FORMAT_BC1_SRGB || diffuse == FORMAT_BC3_SRGB));
+            CHECK(material->get_normal_texture()->texture_->get_info().format == FORMAT_BC5_UNORM);
+            CHECK((arm == FORMAT_BC1_UNORM || arm == FORMAT_BC3_UNORM));
+        }
     }
+    CHECK(mesh_instances == 1056);
     CHECK(materials.size() == 48);
-    auto bounds = model->get_bounding_box();
-    CHECK(bounds.max.x - bounds.min.x > 250.0f);
-    CHECK(bounds.max.z - bounds.min.z > 240.0f);
 
-    // Force deserialization rather than returning the just-saved instances.
     auto* assets = EngineContext::asset();
-    assets->save_asset(model, sun_temple::model_path);
+    assets->save_asset(scene, scene_path);
     std::unordered_set<UID> visited;
     std::function<void(AssetRef)> unload = [&](AssetRef asset) {
         if (!asset || !visited.insert(asset->get_uid()).second) return;
         asset->traverse_deps(unload);
         assets->unload_asset(asset->get_uid());
     };
-    unload(model);
-    model.reset();
-    model = assets->load_asset<Model>(sun_temple::model_path);
-    REQUIRE(model);
-    REQUIRE(model->get_slot_count() == 1056);
-    REQUIRE(model->get_mesh(0)->get_vertex_buffer());
-    auto material = std::dynamic_pointer_cast<PBRMaterial>(model->get_material(0));
-    REQUIRE(material);
-    REQUIRE(material->get_arm_texture());
-    REQUIRE(material->get_arm_texture()->texture_);
+    unload(scene);
+    scene.reset();
 
     test_utils::RenderTestApp::Config config;
-    config.scene_path = sun_temple::scene_path;
+    config.scene_path = scene_path;
     config.max_frames = 3;
     config.capture_frame = 3;
     config.screenshot_path = (utils::get_engine_path() / "build/test-results/sun_temple.png").string();
-    config.create_scene_func = [model, source_dir](const std::string& path) {
-        auto scene = sun_temple::create_scene(model, source_dir);
-        EngineContext::asset()->save_asset(scene, path);
-        return true;
-    };
     std::vector<uint8_t> pixels;
     REQUIRE(test_utils::RenderTestApp::run(config, pixels));
     REQUIRE_FALSE(pixels.empty());
@@ -78,5 +71,4 @@ TEST_CASE("Sun Temple imports materials and renders from native assets", "[.][su
     }
     CHECK(colored > pixels.size() / 4 / 10);
     test_utils::TestContext::reset();
-    Log::set_min_log_level(0);
 }

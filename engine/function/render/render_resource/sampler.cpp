@@ -17,7 +17,7 @@ Sampler::Sampler() {
     info.mip_lod_bias = 0.0f;
     info.max_anisotropy = 0.0f;
 
-    sampler_ = rhi->create_sampler(info);
+    EngineContext::run_device_task([&] { sampler_ = rhi->create_sampler(info); });
 }
 
 Sampler::Sampler(AddressMode address_mode, FilterType filter_type, MipMapMode mipmap_mode, float max_anisotropy, SamplerReductionMode reduction_mode) {
@@ -36,5 +36,5 @@ Sampler::Sampler(AddressMode address_mode, FilterType filter_type, MipMapMode mi
     info.mip_lod_bias = 0.0f;
     info.max_anisotropy = max_anisotropy;
 
-    sampler_ = rhi->create_sampler(info);
+    EngineContext::run_device_task([&] { sampler_ = rhi->create_sampler(info); });
 }

@@ -9,6 +9,7 @@
 #include <vector>
 #include <string>
 #include <memory>
+#include <span>
 #include <cereal/access.hpp>
 #include <cereal/types/vector.hpp>
 #include <cereal/types/string.hpp>
@@ -62,16 +63,18 @@ public:
 protected:
     std::string name_ = "";
     std::vector<std::string> paths_;
-    std::vector<std::vector<uint8_t>> image_data_;  // Embedded compressed image data (per face/layer)
+    std::vector<std::vector<uint8_t>> image_data_;  // BCZ1 payloads or legacy source images
     TextureType texture_type_;
     RHIFormat format_;
     Extent3D extent_;
     uint32_t mip_levels_;
     uint32_t array_layer_;
 
-    void init_rhi();
-    void load_from_file();
-    void load_from_image_data();   // Upload from embedded image_data_ to GPU
+    void init_rhi(RHIFormat gpu_format);
+    bool upload_bc(RHIFormat gpu_format, Extent3D extent, uint32_t mip_levels,
+        std::span<const uint8_t> blocks, bool flush = true);
+    void load_from_file(bool flush = true);
+    void load_from_image_data(bool flush = true); // Upload from embedded image_data_ to GPU
     void capture_image_data();     // Read image files into image_data_
     void ensure_virtual_paths();   // Convert physical paths to virtual paths before saving
 

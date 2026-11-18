@@ -1,4 +1,4 @@
-#include <catch2/catch_test_macros.hpp>
+#include "test/test_assertions.h"
 #include <imgui.h>
 
 #include "engine/function/render/render_system/gpu_profiler.h"

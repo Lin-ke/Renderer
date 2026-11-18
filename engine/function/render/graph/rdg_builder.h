@@ -125,6 +125,8 @@ public:
      */
     bool compile(); // Does not allocate GPU resources or execute callbacks.
     bool execute(); // Compilation failure records no GPU work.
+    bool execute_compiled(RHICommandListRef command, uint32_t frame_slot);
+    bool bind_external_texture(RDGTextureHandle handle, const RHITextureRef& texture);
     const RDGCompileInfo& get_compile_info() const { return compile_info_; }
     const std::vector<RDGPassNodeRef>& get_execution_passes() const { return execution_passes_; }
     bool keep_pass(RDGPassHandle pass, bool keep = true);
@@ -183,13 +185,18 @@ private:
                                     bool output = false);
     RHIResourceState previous_state(RDGBufferNodeRef buffer_node, RDGPassNodeRef pass_node, uint32_t offset = 0, uint32_t size = 0,
                                     bool output = false);
-    bool is_last_used_pass(RDGTextureNodeRef texture_node, RDGPassNodeRef pass_node, bool output = false);
-    bool is_last_used_pass(RDGBufferNodeRef buffer_node, RDGPassNodeRef pass_node, bool output = false);
+    bool is_last_used_pass(RDGResourceNodeRef resource, RDGPassNodeRef pass, bool output);
 
     std::vector<RDGPassNodeRef> passes_;
     std::vector<RDGPassNodeRef> execution_passes_;
     RDGCompileInfo compile_info_;
     std::unordered_map<NodeID, NodeID> resource_keys_;
+    struct ResourceLifetime {
+        uint32_t first_use = UINT32_MAX;
+        uint32_t last_use = 0;
+        bool last_use_has_output = false;
+    };
+    std::unordered_map<NodeID, ResourceLifetime> resource_lifetimes_;
     NodeID resource_key(RDGResourceNodeRef resource) const;
     std::unordered_map<NodeID, std::vector<std::pair<RDGPassNodeRef, RDGTextureEdgeRef>>> texture_usages_;
     std::unordered_map<NodeID, std::vector<std::pair<RDGPassNodeRef, RDGBufferEdgeRef>>> buffer_usages_;
@@ -200,6 +207,8 @@ private:
     RDGBlackBoard black_board_;
 
     RHICommandListRef command_;
+    uint32_t frame_slot_ = 0;
+    bool compiled_ = false;
 };
 
 /**
@@ -210,6 +219,7 @@ public:
     RDGTextureBuilder(RDGBuilder* builder, RDGTextureNodeRef texture) : builder_(builder), texture_(texture){};
 
     RDGTextureBuilder& import(RHITextureRef texture, RHIResourceState init_state);
+    RDGTextureBuilder& import(const RHITextureInfo& info, RHIResourceState init_state);
     RDGTextureBuilder& extent(Extent3D extent);
     RDGTextureBuilder& format(RHIFormat format);
     RDGTextureBuilder& memory_usage(MemoryUsage memory_usage);

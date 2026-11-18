@@ -42,6 +42,7 @@ public:
     // Ensure cube texture is up-to-date (called before rendering)
     // Returns true if cube texture is ready for rendering
     bool ensure_cube_texture_ready();
+    bool is_cube_texture_ready() const { return cube_texture_ && !cube_texture_dirty_; }
     
     // Check if cube texture needs to be regenerated
     bool is_cube_texture_dirty() const { return cube_texture_dirty_; }

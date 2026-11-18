@@ -49,25 +49,9 @@ void Model::sync_slots_to_deps() {
 }
 
 void Model::sync_deps_to_slots() {
-    size_t slot_count = std::max(mesh_deps_.size(), material_deps_.size());
-    if (slot_count == 0) {
-        material_slots_.clear();
-        return;
-    }
-    
-    material_slots_.resize(slot_count);
-    for (size_t i = 0; i < slot_count; ++i) {
-        auto& slot = material_slots_[i];
-        
-        if (i < mesh_deps_.size()) {
-            slot.mesh_ = mesh_deps_[i];
-            slot.mesh_index_ = static_cast<uint32_t>(i);
-        }
-        if (i < material_deps_.size()) {
-            slot.material_ = material_deps_[i];
-            slot.material_index_ = static_cast<uint32_t>(i);
-        }
-        slot.slot_index_ = static_cast<uint32_t>(i);
+    for (auto& slot : material_slots_) {
+        slot.mesh_ = slot.mesh_index_ < mesh_deps_.size() ? mesh_deps_[slot.mesh_index_] : nullptr;
+        slot.material_ = slot.material_index_ < material_deps_.size() ? material_deps_[slot.material_index_] : nullptr;
     }
 }
 

@@ -1,4 +1,4 @@
-#include <catch2/catch_test_macros.hpp>
+#include "test/test_assertions.h"
 #include <catch2/catch_approx.hpp>
 #include <filesystem>
 #include <fstream>
@@ -6,7 +6,6 @@
 
 #include "test/test_utils.h"
 #include "engine/main/engine_context.h"
-#include "engine/core/utils/path_utils.h"
 #include "engine/function/render/render_resource/texture.h"
 #include "engine/function/render/render_resource/material.h"
 #include "engine/function/render/render_resource/shader.h"
@@ -49,7 +48,6 @@ static std::vector<uint8_t> compile_shader_test(const std::string& source, const
 TEST_CASE("Texture RHI Initialization", "[render_resource]") {
     test_utils::TestContext::reset();
     
-    std::string test_asset_dir = (utils::get_engine_path() / "test/test_internal").string();
     REQUIRE(EngineContext::rhi() != nullptr);
 
     Extent3D extent = { 128, 128, 1 };
@@ -69,7 +67,6 @@ TEST_CASE("Texture RHI Initialization", "[render_resource]") {
 TEST_CASE("Shader Loading and Serialization", "[render_resource]") {
     test_utils::TestContext::reset();
     
-    std::string test_asset_dir = (utils::get_engine_path() / "test/test_internal").string();
     const std::string vs_source = R"(
         float4 main(float3 position : POSITION) : SV_POSITION {
             return float4(position, 1.0);
@@ -84,7 +81,7 @@ TEST_CASE("Shader Loading and Serialization", "[render_resource]") {
     
     {
         std::ofstream ofs(physical_path_opt->string(), std::ios::binary);
-        ofs.write((char*)shader_code.data(), shader_code.size());
+        REQUIRE(ofs.write(reinterpret_cast<const char*>(shader_code.data()), shader_code.size()));
     }
 
     auto shader = std::make_shared<Shader>(virtual_path, SHADER_FREQUENCY_VERTEX, "main");
@@ -94,9 +91,11 @@ TEST_CASE("Shader Loading and Serialization", "[render_resource]") {
 
     std::string asset_path = "/Game/test_shader_asset.asset";
     EngineContext::asset()->save_asset(shader, asset_path);
+    EngineContext::asset()->unload_asset(shader->get_uid());
 
     auto loaded_shader = EngineContext::asset()->load_asset<Shader>(asset_path);
     REQUIRE(loaded_shader != nullptr);
+    CHECK(loaded_shader != shader);
     CHECK(loaded_shader->get_file_path() == virtual_path);
     CHECK(loaded_shader->get_frequency() == SHADER_FREQUENCY_VERTEX);
     CHECK(loaded_shader->get_entry() == "main");
@@ -108,7 +107,6 @@ TEST_CASE("Shader Loading and Serialization", "[render_resource]") {
 TEST_CASE("Material System", "[render_resource]") {
     test_utils::TestContext::reset();
     
-    std::string test_asset_dir = (utils::get_engine_path() / "test/test_internal").string();
     SECTION("Material Parameters and Serialization") {
         // Use PBRMaterial for specific properties
         auto material = std::make_shared<PBRMaterial>();
@@ -123,10 +121,12 @@ TEST_CASE("Material System", "[render_resource]") {
         
         std::string material_path = "/Game/test_material.asset";
         EngineContext::asset()->save_asset(material, material_path);
+        EngineContext::asset()->unload_asset(material->get_uid());
         
         // Load back as Material, then cast
         auto loaded_asset = EngineContext::asset()->load_asset<Material>(material_path);
         REQUIRE(loaded_asset != nullptr);
+        CHECK(loaded_asset != material);
         
         auto loaded_pbr = std::dynamic_pointer_cast<PBRMaterial>(loaded_asset);
         REQUIRE(loaded_pbr != nullptr);
@@ -150,10 +150,12 @@ TEST_CASE("Material System", "[render_resource]") {
         
         std::string material_path = "/Game/test_npr_material.asset";
         EngineContext::asset()->save_asset(material, material_path);
+        EngineContext::asset()->unload_asset(material->get_uid());
         
         // Load back as Material, then cast
         auto loaded_asset = EngineContext::asset()->load_asset<Material>(material_path);
         REQUIRE(loaded_asset != nullptr);
+        CHECK(loaded_asset != material);
         REQUIRE(loaded_asset->get_material_type() == MaterialType::NPR);
         
         auto loaded_npr = std::dynamic_pointer_cast<NPRMaterial>(loaded_asset);
@@ -168,7 +170,6 @@ TEST_CASE("Material System", "[render_resource]") {
     SECTION("Material Texture Dependencies") {
         Extent3D extent = { 64, 64, 1 };
         auto texture = std::make_shared<Texture>(TextureType::Texture2D, FORMAT_R8G8B8A8_SRGB, extent);
-        texture->texture_id_ = 123; 
         
         std::string texture_path = "/Game/test_tex.binasset";
         EngineContext::asset()->save_asset(texture, texture_path);
@@ -180,6 +181,8 @@ TEST_CASE("Material System", "[render_resource]") {
         
         std::string material_path = "/Game/dep_material.asset";
         EngineContext::asset()->save_asset(material, material_path);
+        EngineContext::asset()->unload_asset(material->get_uid());
+        EngineContext::asset()->unload_asset(tex_uid);
 
         material.reset();
         texture.reset();
@@ -204,7 +207,6 @@ TEST_CASE("Material System", "[render_resource]") {
 TEST_CASE("Model System", "[render_resource]") {
     test_utils::TestContext::reset();
     
-    std::string test_asset_dir = (utils::get_engine_path() / "test/test_internal").string();
     SECTION("Model Loading with bunny.obj") {
         REQUIRE(EngineContext::rhi() != nullptr);
         
@@ -213,9 +215,16 @@ TEST_CASE("Model System", "[render_resource]") {
         setting.flip_uv = false;
         setting.load_materials = false;
         
-        std::string model_path = "/Engine/models/bunny.obj";
-        auto model = Model::Load(model_path, setting);
-        
+        auto* assets = EngineContext::asset();
+        const auto source = assets->get_physical_path("/Engine/models/bunny.obj");
+        const std::string fixture_path = "/Game/model_loading/bunny.obj";
+        const auto fixture = assets->get_physical_path(fixture_path);
+        REQUIRE(source);
+        REQUIRE(fixture);
+        std::filesystem::create_directories(fixture->parent_path());
+        REQUIRE(std::filesystem::copy_file(*source, *fixture));
+        auto model = Model::Load(fixture_path, setting);
+
         REQUIRE(model != nullptr);
         REQUIRE(model->get_submesh_count() > 0);
         
@@ -260,9 +269,8 @@ TEST_CASE("Model System", "[render_resource]") {
 TEST_CASE("FBX Material System", "[render_resource][fbx]") {
     test_utils::TestContext::reset();
     
-    std::string test_asset_dir = (utils::get_engine_path() / "test/test_internal").string();
     SECTION("FBX Model Loading with Materials") {
-        // Load FBX model with materials using Model::Load
+        // Import the FBX with materials enabled
         std::string model_path = "/Engine/models/material_ball/material_ball.fbx";
         
         ModelProcessSetting setting;
@@ -270,7 +278,7 @@ TEST_CASE("FBX Material System", "[render_resource][fbx]") {
         setting.load_materials = true;  // Enable material loading
         setting.flip_uv = false;
         
-        auto model = Model::Load(model_path, setting);
+        auto model = test_utils::import_test_model(model_path, "/Game/render_fixtures/material_ball", setting);
         
         // Verify model loaded successfully
         REQUIRE(model != nullptr);
@@ -289,16 +297,12 @@ TEST_CASE("FBX Material System", "[render_resource][fbx]") {
     SECTION("FBX Model Without Materials") {
         std::string model_path = "/Engine/models/material_ball/material_ball.fbx";
         
-        // Load without materials using Model::Load
+        // Import the FBX with materials disabled
         ModelProcessSetting setting;
         setting.smooth_normal = true;
         setting.load_materials = false;  // Disable material loading
         
-        // Import options apply to source import, not an already cached .asset.
-        auto physical_path = EngineContext::asset()->get_physical_path(model_path);
-        REQUIRE(physical_path);
-        ModelImporter importer;
-        auto model = importer.import_model(physical_path->string(), model_path, setting);
+        auto model = test_utils::import_test_model(model_path, "/Game/render_fixtures/material_ball_no_material", setting);
         REQUIRE(model != nullptr);
         REQUIRE(model->get_submesh_count() > 0);
         

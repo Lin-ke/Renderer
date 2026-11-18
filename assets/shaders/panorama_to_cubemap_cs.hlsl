@@ -24,7 +24,7 @@ float3 get_cubemap_direction(uint face, float2 uv) {
     float2 pos = uv * 2.0 - 1.0;
     
     float3 dir;
-    // DX11 cubemap face order: +X, -X, +Y, -Y, +Z, -Z
+    // Cubemap face order: +X, -X, +Y, -Y, +Z, -Z
     switch (face) {
         case 0: // +X (Right)
             dir = float3(1.0, -pos.y, -pos.x);

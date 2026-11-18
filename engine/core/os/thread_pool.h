@@ -54,10 +54,10 @@ public:
     }
     
 private:
-    std::vector<std::jthread> workers_;
     std::queue<std::function<void()>> tasks_;
     std::mutex queue_mutex_;
     std::condition_variable condition_;
     bool stop_flag_ = false;
+    std::vector<std::jthread> workers_;
     static std::atomic<int> next_id_;
 };

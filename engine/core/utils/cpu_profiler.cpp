@@ -161,6 +161,7 @@ void CpuProfiler::end_frame() {
         {
             std::lock_guard<std::mutex> lock(thread_mutex_);
             for (auto& [tid, buf] : thread_buffers_) {
+                std::scoped_lock buffer_lock(buf->mutex);
                 if (buf->scope_count == 0) continue;
 
                 CpuProfileThreadData td;
@@ -183,15 +184,12 @@ void CpuProfiler::end_frame() {
                 for (uint32_t i = 0; i < buf->open_count; ++i) {
                     uint32_t idx = buf->open_stack[i];
                     if (idx < td.scopes.size()) {
-                        td.scopes[idx].end_ticks = frame_end;
+                        td.scopes[idx].end_ticks = (std::max)(frame_end, td.scopes[idx].start_ticks);
                     }
                 }
 
                 frame.threads.push_back(std::move(td));
-            }
-            // Reset all buffers for next frame
-            for (auto& [tid, buf] : thread_buffers_) {
-                buf->reset();
+                buf->advance_frame(frame_end);
             }
         }
 
@@ -210,7 +208,8 @@ void CpuProfiler::end_frame() {
         // Even if paused / below threshold, still reset buffers
         std::lock_guard<std::mutex> lock(thread_mutex_);
         for (auto& [tid, buf] : thread_buffers_) {
-            buf->reset();
+            std::scoped_lock buffer_lock(buf->mutex);
+            buf->advance_frame(frame_end);
         }
     }
 
@@ -218,18 +217,20 @@ void CpuProfiler::end_frame() {
 }
 
 // ============================================================================
-// Scope recording – hot path, no locks
+// Scope recording
 // ============================================================================
 void CpuProfiler::begin_scope(const char* name, const char* file, uint32_t line) {
     if (!enabled_.load(std::memory_order_relaxed)) return;
     auto* buf = get_thread_buffer();
     if (!buf) return;
+    std::scoped_lock lock(buf->mutex);
     buf->begin_scope(name, file, line, get_timestamp());
 }
 
 void CpuProfiler::end_scope() {
     if (!enabled_.load(std::memory_order_relaxed)) return;
     if (!tls_buffer_) return;
+    std::scoped_lock lock(tls_buffer_->mutex);
     tls_buffer_->end_scope(get_timestamp());
 }
 

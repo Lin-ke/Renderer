@@ -77,7 +77,6 @@ int main() {
     mode.set(EngineContext::StartMode::Asset);
     mode.set(EngineContext::StartMode::Window);
     mode.set(EngineContext::StartMode::Render);
-    mode.set(EngineContext::StartMode::SingleThread);
     EngineContext::init(mode);
 
     // 2. Init asset manager — "game" makes /Game/ resolve to game/assets/
@@ -198,34 +197,16 @@ int main() {
             EngineContext::world()->tick(delta_time);
         }
 
-        // Prepare render packet
-        RenderPacket packet;
-        packet.frame_index = frame_count % FRAMES_IN_FLIGHT;
-
-        Scene* active_scene = EngineContext::world()
-                                  ? EngineContext::world()->get_active_scene()
-                                  : nullptr;
-        packet.active_scene = active_scene;
-
-        if (active_scene) {
-            packet.active_camera = active_scene->get_camera();
-        }
-
-        // Render
-        if (EngineContext::render_system()) {
-            if (!EngineContext::render_system()->tick(packet)) {
-                INFO(LogGame, "RenderSystem returned false, exiting");
-                break;
-            }
-        }
+        if (!EngineContext::render_frame()) break;
 
         frame_count++;
     }
 
     INFO(LogGame, "========================================");
+    const bool rendered = EngineContext::wait_for_render();
     INFO(LogGame, "Rendered {} frames, exiting", frame_count);
     INFO(LogGame, "========================================");
 
     EngineContext::exit();
-    return 0;
+    return rendered ? 0 : 1;
 }

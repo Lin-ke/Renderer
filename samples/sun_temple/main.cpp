@@ -32,9 +32,9 @@ struct Benchmark {
     double gpu_total = 0;
     size_t visible_batches = 0;
 
-    void record(const CpuProfileFrame& frame, const GPUProfiler* gpu, size_t batch_count) {
+    void record(const CpuProfileFrame& frame, RenderSystem::FrameStats stats) {
         frame_times.push_back(frame.duration_ms);
-        visible_batches += batch_count;
+        visible_batches += stats.visible_batches;
         for (const auto& thread : frame.threads) {
             for (const auto& scope : thread.scopes) {
                 for (size_t i = 0; i < benchmark_scopes.size(); ++i) {
@@ -44,7 +44,7 @@ struct Benchmark {
                 }
             }
         }
-        if (gpu) gpu_total += gpu->get_total_frame_time_ms();
+        gpu_total += stats.gpu_ms;
     }
 
     void print() {
@@ -93,7 +93,6 @@ int main(int argc, char** argv) {
     mode.set(EngineContext::StartMode::Asset);
     mode.set(EngineContext::StartMode::Window);
     mode.set(EngineContext::StartMode::Render);
-    mode.set(EngineContext::StartMode::SingleThread);
     if (!capture_path.empty()) mode.set(EngineContext::StartMode::HiddenWindow);
     EngineContext::init(mode);
     if (!verbose) Log::set_min_log_level(1);
@@ -104,30 +103,23 @@ int main(int argc, char** argv) {
 
     int result = 0;
     {
-        ModelRef model;
         std::shared_ptr<Scene> scene;
-        auto physical_path = assets->get_physical_path(sun_temple::model_path);
-        if (!reimport && physical_path && std::filesystem::exists(*physical_path)) {
-            model = assets->load_asset<Model>(sun_temple::model_path);
-        } else {
-            if (std::filesystem::is_regular_file(source_dir / "SunTemple.fbx")) {
-                std::printf("Importing Sun Temple from %s\n", source_dir.string().c_str());
-                model = sun_temple::import_model(source_dir);
-            }
-            if (model) assets->save_asset(model, sun_temple::model_path);
-        }
         auto scene_physical_path = assets->get_physical_path(sun_temple::scene_path);
         if (!reimport && scene_physical_path && std::filesystem::exists(*scene_physical_path)) {
             scene = assets->load_asset<Scene>(sun_temple::scene_path);
-        } else {
-            scene = sun_temple::create_scene(model, source_dir);
+        } else if (std::filesystem::is_regular_file(source_dir / "SunTemple.fbx")) {
+            std::printf("Importing Sun Temple from %s\n", source_dir.string().c_str());
+            scene = sun_temple::import_scene(source_dir);
             if (scene) assets->save_asset(scene, sun_temple::scene_path);
         }
         if (!scene) {
             result = 1;
         } else {
-            std::printf("Sun Temple ready: %u meshes, %llu vertices. WASD: move; RMB: look; Space/Ctrl: up/down; Ctrl+S: save.\n",
-                model ? model->get_slot_count() : 0, static_cast<unsigned long long>(model ? model->get_total_vertex_count() : 0));
+            const auto renderers = scene->get_components<MeshRendererComponent>();
+            size_t mesh_count = 0;
+            for (auto* component : renderers) mesh_count += component->get_submesh_count();
+            std::printf("Sun Temple ready: %zu mesh instances in %zu entities. WASD: move; RMB: look; Space/Ctrl: up/down; Ctrl+S: save.\n",
+                mesh_count, renderers.size());
             EngineContext::world()->set_active_scene(scene, sun_temple::scene_path);
             auto* camera = scene->get_camera();
             if (camera) camera->set_input_smoothing(0.06f);
@@ -148,17 +140,12 @@ int main(int argc, char** argv) {
                     EngineContext::world()->save_active_scene();
                 }
                 EngineContext::world()->tick(delta_time);
-                RenderPacket packet;
-                packet.frame_index = frames % FRAMES_IN_FLIGHT;
-                packet.active_scene = scene.get();
-                packet.active_camera = camera;
-                if (!renderer->tick(packet)) { result = 1; break; }
+                if (!EngineContext::render_frame()) { result = 1; break; }
                 ++frames;
                 if (benchmark_enabled) {
                     cpu_profiler.end_frame();
                     if (frames > benchmark_warmup) {
-                        benchmark.record(cpu_profiler.get_display_frame(), renderer->get_gpu_profiler(),
-                            renderer->get_mesh_manager()->get_current_batches().size());
+                        benchmark.record(cpu_profiler.get_display_frame(), renderer->get_frame_stats());
                     }
                 }
                 if (!capture_path.empty() && frames == 3) {
@@ -178,8 +165,8 @@ int main(int argc, char** argv) {
             }
             if (benchmark_enabled) benchmark.print();
             if (!capture_path.empty() && !captured) result = 1;
+            if (!EngineContext::wait_for_render()) result = 1;
             EngineContext::world()->set_active_scene(nullptr);
-            renderer->cleanup_for_test();
         }
     }
     EngineContext::exit();

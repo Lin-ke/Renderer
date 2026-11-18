@@ -32,7 +32,6 @@ private:
 
     // Shaders
     ShaderRef vertex_shader_;
-    ShaderRef fragment_shader_;
 
     // Pipeline
     RHIGraphicsPipelineRef pipeline_;

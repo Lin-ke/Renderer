@@ -1,5 +1,8 @@
 #include "engine/function/render/render_system/render_system.h"
 #include "engine/core/log/Log.h"
+#include "engine/core/window/window.h"
+#include "engine/function/render/render_pass/draw_material.h"
+#include "engine/function/render/render_resource/skybox_material.h"
 #include "engine/core/utils/profiler.h"
 #include "engine/core/utils/profiler_widget.h"
 #include "engine/function/framework/component/camera_component.h"
@@ -138,6 +141,9 @@ void RenderSystem::init_base_resource() {
 	sw_info.format = COLOR_FORMAT;
 
 	swapchain_ = backend_->create_swapchain(sw_info);
+	if (auto back_buffer = swapchain_->get_texture(0)) {
+		back_buffer_info_ = back_buffer->get_info();
+	}
 
 	// Create cached texture views and render passes for swapchain back buffers
 	for (uint32_t i = 0; i < FRAMES_IN_FLIGHT; i++) {
@@ -302,242 +308,267 @@ void RenderSystem::init_passes() {
 
 
 
-void RenderSystem::build_and_execute_rdg(uint32_t frame_index, const RenderPacket &packet,
-                                       const std::vector<SkyboxComponent *> &skyboxes) {
-	// Create command list from command context
-	CommandListInfo cmd_info;
-	cmd_info.pool = pool_;
-	cmd_info.context = per_frame_common_resources_[frame_index].command;
-	cmd_info.bypass = true;
-	auto command_list = std::make_shared<RHICommandList>(cmd_info);
+std::shared_ptr<ImDrawData> RenderSystem::build_editor_ui(Scene* scene, CameraComponent* camera) {
+    if (!show_ui_ || !backend_) return {};
 
-	// Create RDG builder
-	RDGBuilder rdg_builder(command_list);
+    std::scoped_lock lock(Window::imgui_mutex());
+    if (!ImGui::GetCurrentContext()) return {};
+    backend_->imgui_new_frame();
+    ImGuizmo::BeginFrame();
 
-	// Get current back buffer
-	uint32_t current_buffer_index = swapchain_->get_current_frame_index();
-	RHITextureRef back_buffer = swapchain_->get_texture(current_buffer_index);
+	draw_scene_hierarchy(scene);
+	draw_inspector_panel();
 
-	if (!back_buffer) {
-		ERR(LogRenderSystem, "No back buffer available for RDG");
-		return;
+	if (show_buffer_debug_) {
+		draw_buffer_debug();
 	}
 
-	Extent2D extent = swapchain_->get_extent();
+	draw_rdg_visualizer();
 
-	// Import back buffer as RDG texture
-	RDGTextureHandle color_target = rdg_builder.create_texture("BackBuffer")
-											.import(back_buffer, RESOURCE_STATE_COLOR_ATTACHMENT)
-											.finish();
+	ImGui::Begin("Renderer Debug", &show_ui_);
 
-	// Import depth texture
-	RDGTextureHandle depth_target = rdg_builder.create_texture("Depth")
-											.import(depth_texture_, RESOURCE_STATE_DEPTH_STENCIL_ATTACHMENT)
-											.finish();
+	ImGui::Checkbox("Wireframe", &wireframe_mode_);
 
-	const auto &batches = mesh_manager_->get_current_batches();
+	ImGui::Checkbox("Show Buffer Debug", &show_buffer_debug_);
+	ImGui::Checkbox("Show RDG Visualizer", &show_rdg_visualizer_);
 
-	// Get camera data early (needed for both batches and skybox)
-	CameraComponent *camera = packet.active_camera;
-	if (!camera && mesh_manager_) {
-		camera = mesh_manager_->get_active_camera();
+	ImGui::Separator();
+	ImGui::Text("Render Passes:");
+	ImGui::Checkbox("Depth Prepass", &enable_depth_prepass_);
+	ImGui::Checkbox("PBR Pass", &enable_pbr_pass_);
+	ImGui::Checkbox("NPR Pass", &enable_npr_pass_);
+	ImGui::Checkbox("Skybox Pass", &enable_skybox_pass_);
+	ImGui::Checkbox("Depth Visualize", &enable_depth_visualize_);
+
+	if (gizmo_manager_) {
+		gizmo_manager_->draw_controls();
 	}
 
-	if (!camera) {
-		WARN(LogRenderSystem, "No active camera for RDG rendering");
-		rdg_builder.execute();
-		return;
+	ImGui::Text("Application average %.3f ms/frame (%.1f FPS)",
+			1000.0f / ImGui::GetIO().Framerate,
+			ImGui::GetIO().Framerate);
+
+	ImGui::Separator();
+	ImGui::Separator();
+	if (ImGui::Button("Toggle Profiler")) {
+		ProfilerWidget::toggle_visibility();
+	}
+	ImGui::SameLine();
+	if (ImGui::Button("Toggle GPU Profiler")) {
+		GPUProfilerWidget::toggle_visibility();
 	}
 
+	ImGui::End();
+
+	// Custom game UI callbacks
 	{
-		// Initialize every frame, including forward-only scenes whose passes load
-		// the color attachment. Otherwise swapchain images retain older scenes.
-		rdg_builder.create_render_pass("ClearPass")
-				.color(0, color_target, ATTACHMENT_LOAD_OP_CLEAR, ATTACHMENT_STORE_OP_STORE,
-						Color4{ 0.0f, 0.0f, 0.0f, 1.0f })
-				.execute([extent](RDGPassContext context) {
-					context.command->set_viewport({ 0, 0 }, { extent.width, extent.height });
-					context.command->set_scissor({ 0, 0 }, { extent.width, extent.height });
-				})
-				.finish();
-		// Note: Continue to skybox pass even with empty batches
-	}
-
-	// Get light data
-	Vec3 light_dir = Vec3(0.0f, -1.0f, 0.0f);
-	Vec3 light_color = Vec3(1.0f, 1.0f, 1.0f);
-	float light_intensity = 1.0f;
-
-	if (packet.active_scene) {
-		for (auto &entity : packet.active_scene->entities_) {
-			if (!entity) {
-				continue;
-			}
-			auto *light = entity->get_component<DirectionalLightComponent>();
-			if (light && light->enable()) {
-				auto *transform = entity->get_component<TransformComponent>();
-				if (transform) {
-					light_dir = -transform->transform.front();
-				}
-				light_color = light->get_color();
-				light_intensity = light->get_intensity();
-				break;
-			}
+		std::lock_guard<std::mutex> lock(custom_ui_callbacks_mutex_);
+		for (const auto& [name, callback] : custom_ui_callbacks_) {
+			callback();
 		}
 	}
 
-	// Execute depth prepass first (before any forward/render passes)
-	if (enable_depth_prepass_ && depth_prepass_) {
-		PROFILE_SCOPE("RenderSystem_DepthPrepass");
-
-		depth_prepass_->set_per_frame_data(
-				camera->get_view_matrix(),
-				camera->get_projection_matrix());
-
-		depth_prepass_->build(rdg_builder, depth_target, batches);
+	if (ProfilerWidget::is_visible()) {
+		ProfilerWidget::draw_window();
 	}
 
-	// Call custom RDG build function if set (for testing)
-	// Custom RDG (e.g., deferred pass) should execute before forward pass
-	if (custom_rdg_build_func_) {
-		PROFILE_SCOPE("RenderSystem_CustomRDG");
-		custom_rdg_build_func_(rdg_builder, packet);
+	if (GPUProfilerWidget::is_visible() && gpu_profiler_) {
+		GPUProfilerWidget::draw_window(*gpu_profiler_);
 	}
 
-	// Build mesh passes using the mesh manager
-	if (enable_pbr_pass_ || enable_npr_pass_) {
-		PROFILE_SCOPE("RenderSystem_MeshPasses");
-		mesh_manager_->build_rdg(rdg_builder, color_target, depth_target, enable_pbr_pass_, enable_npr_pass_);
+	// Draw gizmo in a transparent viewport window for proper ImGuizmo input handling.
+	// ImGuizmo's IsHoveringWindow() requires the draw list to belong to a real
+	// ImGui window that matches g.HoveredWindow; using GetForegroundDrawList()
+	// breaks this check and prevents drag interaction.
+	if (gizmo_manager_ && selected_entity_ && camera) {
+		ImGuiIO &io = ImGui::GetIO();
+
+		// Calculate viewport area (exclude hierarchy and inspector panels)
+		float hierarchy_width = 250.0f;
+		float inspector_width = 300.0f;
+		ImVec2 viewport_pos(hierarchy_width, 0);
+		ImVec2 viewport_size(io.DisplaySize.x - hierarchy_width - inspector_width, io.DisplaySize.y);
+
+		// Create a transparent overlay window so ImGuizmo can detect hover/click/drag
+		ImGui::SetNextWindowPos(viewport_pos);
+		ImGui::SetNextWindowSize(viewport_size);
+		ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
+		ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0, 0, 0, 0));
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+		ImGui::Begin("##GizmoViewport", nullptr,
+				ImGuiWindowFlags_NoDecoration |
+				ImGuiWindowFlags_NoBackground |
+				ImGuiWindowFlags_NoSavedSettings |
+				ImGuiWindowFlags_NoFocusOnAppearing |
+				ImGuiWindowFlags_NoBringToFrontOnFocus |
+				ImGuiWindowFlags_NoNav |
+				ImGuiWindowFlags_NoMove |
+				ImGuiWindowFlags_NoResize);
+
+		// Use the window's own draw list (nullptr) so ImGuizmo's
+		// IsHoveringWindow() correctly matches g.HoveredWindow
+		gizmo_manager_->draw_gizmo(camera, selected_entity_,
+				viewport_pos, viewport_size, nullptr);
+
+		ImGui::End();
+		ImGui::PopStyleVar();
+		ImGui::PopStyleColor(2);
+
+		// Draw light gizmo at entity position
+		draw_light_gizmo(camera, selected_entity_,
+				Extent2D{ static_cast<uint32_t>(io.DisplaySize.x),
+						static_cast<uint32_t>(io.DisplaySize.y) });
 	}
 
-	// Build skybox pass (renders after opaque objects)
-	if (!skyboxes.empty()) {
-		PROFILE_SCOPE("RenderSystem_SkyboxPass");
-		skybox_pass_->build(rdg_builder, color_target, depth_target,
-				camera->get_view_matrix(), camera->get_projection_matrix(), skyboxes);
-	}
+    ImGui::Render();
+    const auto* source = ImGui::GetDrawData();
+    if (!source || !source->CmdListsCount) return {};
 
-	// Build editor UI pass (renders on top of everything)
-	if (show_ui_ && editor_ui_pass_ && editor_ui_pass_->is_ready()) {
-		// Set the UI draw function for this frame (will be called during build)
-		editor_ui_pass_->set_ui_draw_function([this, &packet]() {
-			draw_scene_hierarchy(packet.active_scene);
-			draw_inspector_panel();
-			
-			if (show_buffer_debug_) {
-				draw_buffer_debug();
-			}
-			
-			draw_rdg_visualizer();
-			
-			ImGui::Begin("Renderer Debug", &show_ui_);
-			
-			if (ImGui::Checkbox("Wireframe", &wireframe_mode_)) {
-				if (mesh_manager_) {
-					mesh_manager_->set_wireframe(wireframe_mode_);
-				}
-			}
-			
-			ImGui::Checkbox("Show Buffer Debug", &show_buffer_debug_);
-			ImGui::Checkbox("Show RDG Visualizer", &show_rdg_visualizer_);
-			
-			ImGui::Separator();
-			ImGui::Text("Render Passes:");
-			ImGui::Checkbox("Depth Prepass", &enable_depth_prepass_);
-			ImGui::Checkbox("PBR Pass", &enable_pbr_pass_);
-			ImGui::Checkbox("NPR Pass", &enable_npr_pass_);
-			ImGui::Checkbox("Skybox Pass", &enable_skybox_pass_);
-			ImGui::Checkbox("Depth Visualize", &enable_depth_visualize_);
-			
-			if (gizmo_manager_) {
-				gizmo_manager_->draw_controls();
-			}
-			
-			ImGui::Text("Application average %.3f ms/frame (%.1f FPS)",
-					1000.0f / ImGui::GetIO().Framerate,
-					ImGui::GetIO().Framerate);
-			
-			ImGui::Separator();
-			ImGui::Separator();
-			if (ImGui::Button("Toggle Profiler")) {
-				ProfilerWidget::toggle_visibility();
-			}
-			ImGui::SameLine();
-			if (ImGui::Button("Toggle GPU Profiler")) {
-				GPUProfilerWidget::toggle_visibility();
-			}
-			
-			ImGui::End();
+    struct FrameDrawData : ImDrawData {
+#if IMGUI_VERSION_NUM >= 19200
+        ImVector<ImTextureData*> textures;
+#endif
+        ~FrameDrawData() {
+            for (auto* list : CmdLists) IM_DELETE(list);
+        }
+    };
+    auto draw_data = std::make_shared<FrameDrawData>();
+    static_cast<ImDrawData&>(*draw_data) = *source;
+    for (auto*& list : draw_data->CmdLists) list = list->CloneOutput();
+#if IMGUI_VERSION_NUM >= 19200
+    if (source->Textures) {
+        draw_data->textures = *source->Textures;
+        draw_data->Textures = &draw_data->textures;
+    }
+#endif
+    return draw_data;
+}
 
-			// Custom game UI callbacks
-			{
-				std::lock_guard<std::mutex> lock(custom_ui_callbacks_mutex_);
-				for (const auto& [name, callback] : custom_ui_callbacks_) {
-					callback();
-				}
-			}
-			
-			if (ProfilerWidget::is_visible()) {
-				ProfilerWidget::draw_window();
-			}
-			
-			if (GPUProfilerWidget::is_visible() && gpu_profiler_) {
-				GPUProfilerWidget::draw_window(*gpu_profiler_);
-			}
-			
-			// Draw gizmo in a transparent viewport window for proper ImGuizmo input handling.
-			// ImGuizmo's IsHoveringWindow() requires the draw list to belong to a real
-			// ImGui window that matches g.HoveredWindow; using GetForegroundDrawList()
-			// breaks this check and prevents drag interaction.
-			if (gizmo_manager_ && selected_entity_ && packet.active_camera) {
-				ImGuiIO &io = ImGui::GetIO();
-				
-				// Calculate viewport area (exclude hierarchy and inspector panels)
-				float hierarchy_width = 250.0f;
-				float inspector_width = 300.0f;
-				ImVec2 viewport_pos(hierarchy_width, 0);
-				ImVec2 viewport_size(io.DisplaySize.x - hierarchy_width - inspector_width, io.DisplaySize.y);
-				
-				// Create a transparent overlay window so ImGuizmo can detect hover/click/drag
-				ImGui::SetNextWindowPos(viewport_pos);
-				ImGui::SetNextWindowSize(viewport_size);
-				ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
-				ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0, 0, 0, 0));
-				ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-				ImGui::Begin("##GizmoViewport", nullptr,
-						ImGuiWindowFlags_NoDecoration |
-						ImGuiWindowFlags_NoBackground |
-						ImGuiWindowFlags_NoSavedSettings |
-						ImGuiWindowFlags_NoFocusOnAppearing |
-						ImGuiWindowFlags_NoBringToFrontOnFocus |
-						ImGuiWindowFlags_NoNav |
-						ImGuiWindowFlags_NoMove |
-						ImGuiWindowFlags_NoResize);
-				
-				// Use the window's own draw list (nullptr) so ImGuizmo's
-				// IsHoveringWindow() correctly matches g.HoveredWindow
-				gizmo_manager_->draw_gizmo(packet.active_camera, selected_entity_,
-						viewport_pos, viewport_size, nullptr);
-				
-				ImGui::End();
-				ImGui::PopStyleVar();
-				ImGui::PopStyleColor(2);
-				
-				// Draw light gizmo at entity position
-				draw_light_gizmo(packet.active_camera, selected_entity_,
-						Extent2D{ static_cast<uint32_t>(io.DisplaySize.x),
-								static_cast<uint32_t>(io.DisplaySize.y) });
-			}
-		});
-		
-		editor_ui_pass_->build(rdg_builder);
-	}
+RenderPacket RenderSystem::make_render_packet(Scene* scene, CameraComponent* camera, uint64_t frame_id) {
+    PROFILE_FUNCTION();
+    RenderPacket packet;
+    packet.frame_id = frame_id;
+    if (!camera && scene) {
+        auto cameras = scene->get_components<CameraComponent>();
+        if (!cameras.empty()) camera = cameras.front();
+    }
+    packet.ui = build_editor_ui(scene, camera);
 
-	// Capture RDG info for visualization
-	if (show_ui_ && show_rdg_visualizer_) capture_rdg_info(rdg_builder);
+    if (camera) {
+        camera->update_camera_info();
+        packet.camera = RenderCamera{camera->get_view_matrix(), camera->get_projection_matrix(),
+            camera->get_position(), camera->get_near(), camera->get_far()};
+    }
 
-	// Execute the RDG
-	rdg_builder.execute();
+    packet.depth_prepass = enable_depth_prepass_;
+    packet.pbr = enable_pbr_pass_;
+    packet.npr = enable_npr_pass_;
+    packet.wireframe = wireframe_mode_;
+    packet.visualize_depth = show_ui_ && enable_depth_visualize_;
+    packet.visualize_graph = show_ui_ && show_rdg_visualizer_;
+
+    if (mesh_manager_) {
+        mesh_manager_->collect_draw_batches(scene, packet.instances);
+        std::unordered_map<const Material*, std::shared_ptr<const render::DrawMaterial>> materials;
+        for (auto& instance : packet.instances) {
+            if (!instance.material) continue;
+            auto [entry, inserted] = materials.try_emplace(instance.material.get());
+            if (inserted) {
+                entry->second = std::make_shared<render::DrawMaterial>(render::snapshot_material(*instance.material));
+            }
+            instance.material_snapshot = entry->second;
+            instance.material.reset();
+        }
+    }
+
+    if (!scene) return packet;
+    bool has_main_light = false;
+    for (const auto& entity : scene->entities_) {
+        if (!entity) continue;
+        auto* transform = entity->get_component<TransformComponent>();
+        if (auto* light = entity->get_component<DirectionalLightComponent>(); light && light->enable()) {
+            const auto direction = transform ? transform->transform.front() : Vec3(0.0f, -1.0f, 0.0f);
+            if (!has_main_light) {
+                packet.lights.direction = direction;
+                packet.lights.color = light->get_color();
+                packet.lights.intensity = light->get_intensity();
+                has_main_light = true;
+            } else {
+                render::ShaderLightData data{};
+                data.direction = direction;
+                data.color = light->get_color();
+                data.intensity = light->get_intensity();
+                data.type = static_cast<uint32_t>(render::LightType::Directional);
+                packet.lights.additional.push_back(data);
+            }
+        } else if (auto* light = entity->get_component<PointLightComponent>(); light && light->enable()) {
+            render::ShaderLightData data{};
+            data.position = transform ? transform->get_world_position() : Vec3::Zero();
+            data.color = light->get_color();
+            data.intensity = light->get_intensity();
+            data.type = static_cast<uint32_t>(render::LightType::Point);
+            data.range = 25.0f;
+            packet.lights.additional.push_back(data);
+        }
+    }
+
+    if (enable_skybox_pass_ && packet.camera && skybox_pass_ && skybox_pass_->is_ready()) {
+        for (auto* skybox : scene->get_components<SkyboxComponent>()) {
+            auto material = skybox->get_material();
+            if (!material) continue;
+            if (!material->is_cube_texture_ready()) {
+                EngineContext::run_device_task([&] { material->ensure_cube_texture_ready(); });
+            }
+            if (auto cube = material->get_cube_texture(); cube && cube->texture_) {
+                packet.skyboxes.push_back({cube->texture_, material->get_intensity(), skybox->get_skybox_scale()});
+            }
+        }
+    }
+    if (light_manager_) light_manager_->tick(static_cast<uint32_t>(frame_id % FRAMES_IN_FLIGHT));
+    return packet;
+}
+
+std::optional<RenderSystem::CompiledFrame> RenderSystem::build_frame(const RenderPacket& packet) {
+    PROFILE_FUNCTION();
+    if (!swapchain_ || !depth_texture_) return std::nullopt;
+
+    auto graph = std::make_unique<RDGBuilder>();
+    auto& rdg = *graph;
+    const Extent2D extent{back_buffer_info_.extent.width, back_buffer_info_.extent.height};
+    const auto color = rdg.create_texture("BackBuffer").import(back_buffer_info_, RESOURCE_STATE_PRESENT).finish();
+    const auto depth = rdg.create_texture("Depth").import(depth_texture_, RESOURCE_STATE_DEPTH_STENCIL_ATTACHMENT).finish();
+    rdg.create_render_pass("ClearPass")
+        .color(0, color, ATTACHMENT_LOAD_OP_CLEAR, ATTACHMENT_STORE_OP_STORE, Color4{0.0f, 0.0f, 0.0f, 1.0f})
+        .execute([extent](RDGPassContext context) {
+            context.command->set_viewport({0, 0}, {extent.width, extent.height});
+            context.command->set_scissor({0, 0}, {extent.width, extent.height});
+        })
+        .finish();
+
+    {
+        PROFILE_SCOPE("RenderSystem_Managers");
+        mesh_manager_->prepare_batches(packet.instances, packet.camera ? &*packet.camera : nullptr);
+    }
+    if (packet.camera) {
+        const auto& camera = *packet.camera;
+        if (packet.depth_prepass && depth_prepass_) {
+            depth_prepass_->set_per_frame_data(camera.view, camera.projection);
+            depth_prepass_->build(rdg, depth, mesh_manager_->get_current_batches());
+        }
+
+        if (custom_rdg_build_func_) custom_rdg_build_func_(rdg, packet);
+        if (packet.pbr || packet.npr) {
+            mesh_manager_->set_wireframe(packet.wireframe);
+            mesh_manager_->build_rdg(rdg, color, depth, camera, packet.lights, packet.pbr, packet.npr);
+        }
+        if (!packet.skyboxes.empty()) skybox_pass_->build(rdg, color, depth, camera.view, camera.projection, packet.skyboxes);
+    }
+    if (packet.ui && editor_ui_pass_) editor_ui_pass_->build(rdg, color, extent, packet.ui);
+
+    if (!rdg.compile()) return std::nullopt;
+    if (packet.visualize_graph) capture_rdg_info(rdg);
+    return CompiledFrame{std::move(graph), color, packet.visualize_depth ? packet.camera : std::nullopt,
+        packet.frame_id, mesh_manager_->get_current_batches().size()};
 }
 
 void RenderSystem::capture_rdg_info(RDGBuilder &builder) {
@@ -676,120 +707,86 @@ void RenderSystem::capture_rdg_info(RDGBuilder &builder) {
 	}
 }
 
-bool RenderSystem::tick(const RenderPacket &packet) {
-	PROFILE_FUNCTION();
+bool RenderSystem::tick(const RenderPacket& packet) {
+    auto frame = build_frame(packet);
+    return frame && execute_frame(std::move(*frame));
+}
 
-	// Note: Window close check is now handled by Window::process_messages() in EngineContext
+bool RenderSystem::execute_frame(CompiledFrame frame) {
+    PROFILE_FUNCTION();
+    const uint32_t frame_slot = next_frame_slot_;
+    auto& resource = per_frame_common_resources_[frame_slot];
+    resource.fence->wait();
+    auto back_buffer = swapchain_->get_new_frame(nullptr, resource.start_semaphore);
+    if (!frame.graph->bind_external_texture(frame.back_buffer, back_buffer)) {
+        ERR(LogRenderSystem, "Failed to bind the back buffer for frame {}", frame.frame_id);
+        return false;
+    }
 
-	// Use frame_index from packet for multi-threaded safety
-	uint32_t frame_index = packet.frame_index;
+    auto& command = resource.command;
+    auto command_list = std::make_shared<RHICommandList>(CommandListInfo{pool_, command, true});
+    command->begin_command();
+    if (gpu_profiler_) {
+        std::scoped_lock lock(Window::imgui_mutex());
+        gpu_profiler_->collect_results();
+    }
+    bool recorded;
+    {
+        PROFILE_SCOPE("RenderSystem_SceneRender");
+        command->gpu_timestamp_begin_frame();
+        recorded = frame.graph->execute_compiled(command_list, frame_slot);
+        command->gpu_timestamp_end_frame();
+    }
 
-	// Update active camera in mesh manager if provided
-	if (packet.active_camera) {
-		mesh_manager_->set_active_camera(packet.active_camera);
-	}
+    if (recorded && frame.depth_visualization_camera && depth_visualize_initialized_ &&
+        depth_visualize_pass_ && depth_visualize_texture_view_) {
+        const auto& info = depth_visualize_texture_->get_info();
+        const auto& camera = *frame.depth_visualization_camera;
+        depth_visualize_pass_->draw(command, depth_texture_, depth_visualize_texture_view_,
+            {info.extent.width, info.extent.height}, camera.near_plane, camera.far_plane);
+    }
+    command->end_render_pass();
+    command->texture_barrier({back_buffer, RESOURCE_STATE_COLOR_ATTACHMENT, RESOURCE_STATE_PRESENT});
+    command->end_command();
+    {
+        PROFILE_SCOPE("RenderSystem_Submit");
+        command->execute(resource.fence, resource.start_semaphore, resource.finish_semaphore);
+    }
+    if (!recorded) return false;
 
-	// Tick managers (collect render data)
-	{
-		PROFILE_SCOPE("RenderSystem_Managers");
-		mesh_manager_->tick();
-		light_manager_->tick(frame_index);
-		update_global_setting();
-	}
+    last_rendered_texture_ = std::move(back_buffer);
+    {
+        PROFILE_SCOPE("RenderSystem_Present");
+        swapchain_->present(resource.finish_semaphore);
+    }
+    {
+        PROFILE_SCOPE("RenderSystem_ResourceTick");
+        backend_->tick();
+    }
+    next_frame_slot_ = (frame_slot + 1) % FRAMES_IN_FLIGHT;
+    {
+        std::scoped_lock lock(frame_stats_mutex_);
+        frame_stats_ = {frame.visible_batches, gpu_profiler_ ? gpu_profiler_->get_total_frame_time_ms() : 0.0f};
+    }
+    return true;
+}
 
-	// Execute rendering using frame_index from packet for thread safety
-	auto &resource = per_frame_common_resources_[frame_index];
-	resource.fence->wait();
-
-	RHITextureRef swapchain_texture = swapchain_->get_new_frame(nullptr, resource.start_semaphore);
-	RHICommandContextRef command = resource.command;
-
-	Extent2D extent = swapchain_->get_extent();
-
-	// Start ImGui new frame BEFORE building RDG (UI building happens in EditorUIPass)
-	if (backend_ && show_ui_) {
-		backend_->imgui_new_frame();
-		ImGuizmo::BeginFrame();
-	}
-
-	std::vector<SkyboxComponent *> skyboxes;
-	if (enable_skybox_pass_ && skybox_pass_ && skybox_pass_->is_ready() && packet.active_scene &&
-			(packet.active_camera || mesh_manager_->get_active_camera())) {
-		skyboxes = packet.active_scene->get_components<SkyboxComponent>();
-		// Panorama conversion submits commands using the shared DX12 command list.
-		std::erase_if(skyboxes, [](SkyboxComponent *skybox) {
-			auto material = skybox->get_material();
-			return !material || !material->ensure_cube_texture_ready();
-		});
-	}
-
-	command->begin_command();
-	{
-		PROFILE_SCOPE("RenderSystem_SceneRender");
-
-		// Collect GPU profiler results from previous frames
-		if (gpu_profiler_) {
-			gpu_profiler_->collect_results();
-		}
-
-		// Begin GPU timestamp frame
-		command->gpu_timestamp_begin_frame();
-
-		// Use RDG-based rendering
-		build_and_execute_rdg(frame_index, packet, skyboxes);
-
-		// End GPU timestamp frame
-		command->gpu_timestamp_end_frame();
-
-		// Depth visualization
-		if (show_ui_ && enable_depth_visualize_ && depth_visualize_initialized_ && depth_visualize_pass_ && depth_visualize_texture_view_) {
-			PROFILE_SCOPE("RenderSystem_DepthVisualize");
-			CameraComponent *camera = packet.active_camera;
-			if (!camera && mesh_manager_) {
-				camera = mesh_manager_->get_active_camera();
-			}
-			if (camera) {
-				Extent2D viz_extent = {
-					depth_visualize_texture_->get_info().extent.width,
-					depth_visualize_texture_->get_info().extent.height
-				};
-				depth_visualize_pass_->draw(
-						command,
-						depth_texture_,
-						depth_visualize_texture_view_,
-						viz_extent,
-						camera->get_near(),
-						camera->get_far());
-			}
-		}
-
-		command->end_render_pass();
-		if (swapchain_texture) {
-			command->texture_barrier({swapchain_texture, RESOURCE_STATE_COLOR_ATTACHMENT, RESOURCE_STATE_PRESENT});
-		}
-	}
-	command->end_command();
-
-	{
-		PROFILE_SCOPE("RenderSystem_Submit");
-		command->execute(resource.fence, resource.start_semaphore, resource.finish_semaphore);
-	}
-	last_rendered_texture_ = swapchain_texture;
-
-	{
-		PROFILE_SCOPE("RenderSystem_Present");
-		swapchain_->present(resource.finish_semaphore);
-	}
-
-	if (backend_) {
-		PROFILE_SCOPE("RenderSystem_ResourceTick");
-		backend_->tick();
-	}
-
-	return true;
+RenderSystem::FrameStats RenderSystem::get_frame_stats() const {
+    std::scoped_lock lock(frame_stats_mutex_);
+    return frame_stats_;
 }
 
 bool RenderSystem::capture_frame(std::vector<uint8_t>& rgba, Extent2D& extent) {
+    if (!EngineContext::wait_for_render()) {
+        rgba.clear();
+        return false;
+    }
+    bool captured = false;
+    EngineContext::run_device_task([&] { captured = capture_completed_frame(rgba, extent); });
+    return captured;
+}
+
+bool RenderSystem::capture_completed_frame(std::vector<uint8_t>& rgba, Extent2D& extent) {
     rgba.clear();
     if (!backend_ || !last_rendered_texture_) return false;
     const auto& info = last_rendered_texture_->get_info();
@@ -940,7 +937,7 @@ void RenderSystem::update_global_setting() {
 }
 
 void RenderSystem::render_ui_begin() {
-	// UI building is done directly in tick() after imgui_new_frame()
+	// The game thread builds UI while producing the render packet.
 }
 
 void RenderSystem::render_ui(RHICommandContextRef command) {

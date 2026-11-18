@@ -2,7 +2,6 @@
 
 #include <string>
 #include <filesystem>
-#include <regex>
 #include <vector>
 #include <cstdint>
 #include <memory>
@@ -12,6 +11,8 @@
 
 // Forward declarations
 class Scene;
+class Model;
+struct ModelProcessSetting;
 class CameraComponent;
 struct RenderPacket;
 class RDGBuilder;
@@ -34,108 +35,6 @@ bool export_chrome_tracing(const std::string& filename,
  * Convenience wrapper that pulls frames from CpuProfiler::instance().
  */
 bool export_profiler_trace(const std::string& filename);
-
-/**
- * @brief Check if a filename is a UUID format
- * UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
- */
-inline bool is_uuid_filename(const std::string& filename) {
-    // Remove extension
-    std::string name = filename;
-    size_t dot_pos = name.find_last_of('.');
-    if (dot_pos != std::string::npos) {
-        name = name.substr(0, dot_pos);
-    }
-    
-    // Check UUID pattern: 8-4-4-4-12 hex digits
-    std::regex uuid_pattern("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
-    return std::regex_match(name, uuid_pattern);
-}
-
-/**
- * @brief Clean up UUID-named asset files in a directory
- * 
- * This function removes auto-generated asset files with UUID names,
- * while preserving human-readable named files.
- * 
- * @param directory The directory to clean up
- * @param recursive Whether to clean subdirectories recursively
- * @return Number of files deleted
- */
-inline size_t cleanup_uuid_named_assets(const std::filesystem::path& directory, bool recursive = true) {
-    size_t deleted_count = 0;
-    
-    if (!std::filesystem::exists(directory)) {
-        return 0;
-    }
-    
-    auto process_entry = [&](const std::filesystem::path& path) {
-        if (!std::filesystem::is_regular_file(path)) {
-            return;
-        }
-        
-        std::string ext = path.extension().string();
-        // Only process asset files
-        if (ext != ".asset" && ext != ".binasset") {
-            return;
-        }
-        
-        std::string filename = path.filename().string();
-        if (is_uuid_filename(filename)) {
-            std::error_code ec;
-            std::filesystem::remove(path, ec);
-            if (!ec) {
-                deleted_count++;
-            }
-        }
-    };
-    
-    if (recursive) {
-        for (const auto& entry : std::filesystem::recursive_directory_iterator(directory)) {
-            process_entry(entry.path());
-        }
-    } else {
-        for (const auto& entry : std::filesystem::directory_iterator(directory)) {
-            process_entry(entry.path());
-        }
-    }
-    
-    return deleted_count;
-}
-
-/**
- * @brief RAII helper to clean up UUID files on scope exit
- * 
- * Usage:
- *   auto cleanup = test_utils::ScopedAssetCleanup(test_asset_dir);
- *   // ... run test ...
- *   // files are auto-deleted when cleanup goes out of scope
- */
-class ScopedAssetCleanup {
-public:
-    explicit ScopedAssetCleanup(std::filesystem::path directory) 
-        : directory_(std::move(directory)) {}
-    
-    ~ScopedAssetCleanup() {
-        cleanup_uuid_named_assets(directory_, true);
-    }
-    
-    // Explicit cleanup before destruction
-    size_t cleanup_now() {
-        return cleanup_uuid_named_assets(directory_, true);
-    }
-    
-    // Prevent copying
-    ScopedAssetCleanup(const ScopedAssetCleanup&) = delete;
-    ScopedAssetCleanup& operator=(const ScopedAssetCleanup&) = delete;
-    
-    // Allow moving
-    ScopedAssetCleanup(ScopedAssetCleanup&&) = default;
-    ScopedAssetCleanup& operator=(ScopedAssetCleanup&&) = default;
-    
-private:
-    std::filesystem::path directory_;
-};
 
 /**
  * @brief Save screenshot data to PNG file
@@ -177,6 +76,9 @@ inline float calculate_average_brightness(const std::vector<uint8_t>& data) {
     return static_cast<float>(total) / static_cast<float>(pixel_count);
 }
 
+std::shared_ptr<Model> import_test_model(const std::string& source_path, const std::string& asset_path,
+    const ModelProcessSetting& settings);
+
 /**
  * @brief Result of scene loading operation
  */
@@ -211,10 +113,6 @@ public:
     static SceneLoadResult load(const std::string& virtual_path, 
                                  bool set_active = true);
     
-    /**
-     * @brief Check if scene file exists at virtual path
-     */
-    static bool scene_exists(const std::string& virtual_path);
 };
 
 /**
@@ -223,23 +121,18 @@ public:
 class RenderTestApp {
 public:
     using SceneCreateFunc = std::function<bool(const std::string&)>;
-    using SceneLoadedFunc = std::function<void(SceneLoadResult&)>;
     using BuildRDGFunc = std::function<void(class RDGBuilder&, const RenderPacket&)>;
 
     struct Config {
         std::string scene_path;
-        uint32_t width = 1280;
-        uint32_t height = 720;
         int max_frames = 60;
         int capture_frame = 30; // 0 to disable
         std::string screenshot_path; // Empty: build/test-results/<scene-name>.png
         SceneCreateFunc create_scene_func = nullptr;
-        SceneLoadedFunc on_scene_loaded_func = nullptr;
         BuildRDGFunc build_rdg_func = nullptr;  // Custom RDG building function
     };
 
     static bool run(const Config& config, std::vector<uint8_t>& out_screenshot_data, int* out_frames = nullptr);
-    static bool capture_screenshot(std::vector<uint8_t>& screenshot_data);
 };
 
 /**
@@ -253,7 +146,7 @@ public:
     /**
      * @brief Initialize the global Engine (called once before all tests)
      */
-    static void init_engine();
+    static bool init_engine();
     
     /**
      * @brief Shutdown the global Engine (called once after all tests)
@@ -272,13 +165,13 @@ public:
     static void reset();
     
     /**
-     * @brief Check if Engine is initialized
+     * @brief Per-run directory mounted as the test project
      */
-    static bool is_initialized() { return engine_initialized_; }
+    static const std::filesystem::path& project_dir() { return project_dir_; }
 
 private:
     static bool engine_initialized_;
-    static std::string test_asset_dir_;
+    static std::filesystem::path project_dir_;
 };
 
 } // namespace test_utils

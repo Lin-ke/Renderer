@@ -69,9 +69,10 @@ bool RDGBuilder::extract_buffer(RDGBufferHandle handle, RHIBufferRef& output) {
 }
 
 bool RDGBuilder::compile() {
+    compiled_ = false;
     compile_info_ = {};
     execution_passes_.clear();
-    resource_keys_.clear(); texture_usages_.clear(); buffer_usages_.clear();
+    resource_keys_.clear(); resource_lifetimes_.clear(); texture_usages_.clear(); buffer_usages_.clear();
     const size_t count = passes_.size();
     std::unordered_map<RDGPassNodeRef, size_t> indices;
     for (size_t i = 0; i < count; ++i) {
@@ -274,5 +275,23 @@ bool RDGBuilder::compile() {
         pass->is_culled_ = false; pass->execution_index_ = i;
         compile_info_.execution_order.push_back(pass->name());
     }
+    auto record_lifetimes = [this](const auto& resource_usages) {
+        for (const auto& [id, uses] : resource_usages) {
+            for (const auto& [pass, edge] : uses) {
+                if (pass->is_culled()) continue;
+                auto& lifetime = resource_lifetimes_[id];
+                const auto index = pass->execution_index();
+                lifetime.first_use = std::min(lifetime.first_use, index);
+                if (index > lifetime.last_use) {
+                    lifetime.last_use = index;
+                    lifetime.last_use_has_output = false;
+                }
+                if (index == lifetime.last_use && edge->is_output()) lifetime.last_use_has_output = true;
+            }
+        }
+    };
+    record_lifetimes(texture_usages_);
+    record_lifetimes(buffer_usages_);
+    compiled_ = true;
     return true;
 }

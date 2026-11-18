@@ -59,6 +59,7 @@ public:
     inline const std::vector<Vec4>& get_tangents() const { return tangent_; }
     inline const std::vector<Vec2>& get_tex_coords() const { return tex_coord_; }
     inline const std::vector<Vec3>& get_colors() const { return color_; }
+    // Front faces use counter-clockwise winding in the rasterizer.
     inline const std::vector<uint32_t>& get_indices() const { return index_; }
     inline const std::vector<IVec4>& get_bone_indices() const { return bone_index_; }
     inline const std::vector<Vec4>& get_bone_weights() const { return bone_weight_; }
@@ -128,7 +129,16 @@ public:
         ar(cereal::make_nvp("color", color_));
         ar(cereal::make_nvp("bone_index", bone_index_));
         ar(cereal::make_nvp("bone_weight", bone_weight_));
-        ar(cereal::make_nvp("index", index_));
+        // Mesh archives use the original index order. Convert at the archive
+        // boundary so existing assets and counter-clockwise draws both work.
+        if constexpr (Archive::is_loading::value) {
+            ar(cereal::make_nvp("index", index_));
+            reverse_triangle_winding(index_);
+        } else {
+            auto stored_indices = index_;
+            reverse_triangle_winding(stored_indices);
+            ar(cereal::make_nvp("index", stored_indices));
+        }
         ar(cereal::make_nvp("bones", bones_));
         ar(cereal::make_nvp("bounding_box", bounding_box_));
         ar(cereal::make_nvp("bounding_sphere", bounding_sphere_));
@@ -157,6 +167,7 @@ private:
 
     void create_gpu_buffers();
     void calculate_bounds();
+    static void reverse_triangle_winding(std::vector<uint32_t>& indices);
 
     friend class cereal::access;
 };

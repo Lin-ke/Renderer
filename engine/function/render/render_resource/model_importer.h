@@ -20,6 +20,8 @@ enum aiTextureType;
 
 struct MtlMaterial;
 struct MtlGlobalSettings;
+class Entity;
+class Scene;
 
 // Source conventions used only during import; native assets contain converted data.
 struct ModelImportOptions {
@@ -48,7 +50,17 @@ public:
     std::shared_ptr<Model> import_model(const std::string& physical_path, const std::string& virtual_path,
         const ModelProcessSetting& settings, const ModelImportOptions& options = {});
 
+    std::shared_ptr<Scene> import_scene(const std::string& physical_path, const std::string& scene_virtual_path,
+        const ModelProcessSetting& settings, const ModelImportOptions& options = {});
+
 private:
+    struct ImportSource;
+    bool read_source(const std::string& physical_path, const std::string& virtual_path,
+        const ModelProcessSetting& settings, const ModelImportOptions& options, ImportSource& source);
+    bool import_scene_node(Entity& entity, const aiNode& node, ImportSource& source,
+        bool parent_reverses_winding = false);
+    ModelRef get_or_create_node_model(const aiNode& node, ImportSource& source, bool reverse_winding);
+
     // Processing state
     std::filesystem::path source_path_;
     std::string virtual_path_; // Base virtual path for generating sub-assets
@@ -60,7 +72,6 @@ private:
     // Caches to avoid duplicates during import
     std::unordered_map<std::string, std::shared_ptr<Texture>> texture_cache_;
     std::unordered_map<std::string, std::shared_ptr<Material>> material_cache_;
-    std::unordered_map<std::string, std::shared_ptr<Mesh>> mesh_cache_;
     
     // Internal processing methods
     struct MeshInstance {
@@ -78,7 +89,8 @@ private:
         const std::vector<MtlMaterial>& mtl_materials,
         const std::unordered_map<std::string, size_t>& mtl_name_to_index,
         const MtlGlobalSettings& mtl_settings,
-        std::shared_ptr<Material>& out_material);
+        std::shared_ptr<Material>& out_material,
+        bool reverse_for_node = false);
         
     std::shared_ptr<Material> get_or_create_material(
         const std::string& mat_name,

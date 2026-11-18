@@ -59,7 +59,7 @@ public:
 
     /**
      * @brief Enqueues an asynchronous load task for an asset and its dependencies.
-     * @return A vector of futures for the requested asset and its dependencies.
+     * @return Futures for deserialized assets. Call load_asset to finish initialization.
      */
     [[nodiscard]]
     std::vector<std::shared_future<AssetRef>> enqueue_load_task(UID uid);
@@ -144,10 +144,7 @@ private:
     
     // --- Internal Workers ---
 
-    /**
-     * @brief Performs the actual deserialization from disk.
-     */
-    AssetRef perform_load_from_disk(UID uid, const std::filesystem::path& path);
+    void initialize_loaded_asset(const AssetRef& asset);
 
     /**
      * @brief Performs the actual serialization to disk.
@@ -164,15 +161,13 @@ private:
     void collect_save_dependencies_recursive(AssetRef asset, std::vector<AssetRef>& sorted_assets, 
         std::unordered_set<UID>& visited_uids, std::unordered_set<UID>& visiting);
 
-    // Helper to check if a load is already in progress
-    std::optional<std::shared_future<AssetRef>> check_pending_cache(UID uid);
-
     // Internal register_path without lock (caller must hold asset_mutex_)
     void register_path_internal(UID uid, const std::string &path);
 
 private:
     std::unordered_map<UID, AssetRef> assets_; ///< Cache of loaded assets.
-    std::unordered_map<UID, std::shared_future<AssetRef>> pending_assets_; ///< Assets currently being loaded.
+    struct LoadTask;
+    std::unordered_map<UID, std::shared_ptr<LoadTask>> pending_assets_;
 
     // Path Mappings
     std::unordered_map<std::string, UID> path_to_uid_;

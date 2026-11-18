@@ -24,7 +24,6 @@ namespace fs = std::filesystem;
 
 DEFINE_LOG_TAG(LogAsset, "Asset"); // Define the tag here
 
-constexpr bool use_thread_pool = false;
 struct AssetUID {
 	UID uid;
 
@@ -125,7 +124,26 @@ static std::shared_future<T> make_ready_future(const T &value) {
 	return promise.get_future().share();
 }
 
-AssetManager::~AssetManager() = default;
+struct AssetManager::LoadTask {
+	UID uid;
+	fs::path disk_path;
+	std::once_flag read_once;
+	std::promise<AssetRef> promise;
+	std::shared_future<AssetRef> future = promise.get_future().share();
+};
+
+AssetManager::~AssetManager() {
+	std::vector<std::shared_future<AssetRef>> futures;
+	{
+		std::scoped_lock lock(asset_mutex_);
+		for (const auto &entry : pending_assets_) {
+			futures.push_back(entry.second->future);
+		}
+	}
+	for (const auto &future : futures) {
+		future.wait();
+	}
+}
 
 void AssetManager::init(const fs::path &game_path) {
 	engine_path_ = utils::get_engine_path() / "assets";
@@ -155,9 +173,8 @@ UID AssetManager::peek_uid_from_file(const fs::path &path) {
 	});
 }
 
-AssetRef AssetManager::perform_load_from_disk(UID uid, const fs::path &path) {
-	PROFILE_SCOPE("AssetManager::load_from_disk");
-	return with_asset_read<AssetFile>(path, [&](AssetFile &&file) -> AssetRef {
+static AssetRef load_from_disk(const fs::path &path) {
+	return with_asset_read<AssetFile>(path, [](AssetFile &&file) -> AssetRef {
 		return file.asset;
 	});
 }
@@ -193,28 +210,21 @@ void AssetManager::collect_dependencies_recursive(UID uid, std::vector<UID> &sor
 		return;
 	}
 
-	auto it = uid_to_path_.find(uid);
-	if (it == uid_to_path_.end()) {
-		visited.insert(uid);
+	visited.insert(uid);
+	fs::path disk_path;
+	{
+		std::scoped_lock lock(asset_mutex_);
+		if (auto it = uid_to_path_.find(uid); it != uid_to_path_.end()) {
+			disk_path = it->second;
+		}
+	}
+	if (disk_path.empty()) {
 		return;
 	}
-
-	visited.insert(uid);
-	for (const auto &dep_uid : peek_asset_deps(it->second)) {
+	for (const auto &dep_uid : peek_asset_deps(disk_path)) {
 		collect_dependencies_recursive(dep_uid, sorted_uids, visited);
 	}
 	sorted_uids.push_back(uid);
-}
-
-std::optional<std::shared_future<AssetRef>> AssetManager::check_pending_cache(UID uid) {
-	std::scoped_lock lock(asset_mutex_);
-	if (assets_.contains(uid)) {
-		return make_ready_future(assets_[uid]);
-	}
-	if (pending_assets_.contains(uid)) {
-		return pending_assets_[uid];
-	}
-	return std::nullopt;
 }
 
 std::vector<std::shared_future<AssetRef>> AssetManager::enqueue_load_task(UID uid) {
@@ -223,18 +233,14 @@ std::vector<std::shared_future<AssetRef>> AssetManager::enqueue_load_task(UID ui
 	std::unordered_set<UID> visited;
 	collect_dependencies_recursive(uid, load_order, visited); // include self
 
-	auto *pool = EngineContext::thread_pool();
+	// A pool worker must be able to finish its reads even when other workers are waiting.
+	auto *pool = EngineContext::get_thread_role() == EngineContext::ThreadRole::Worker
+		? nullptr : EngineContext::thread_pool();
 	std::vector<std::shared_future<AssetRef>> futures;
 	futures.reserve(load_order.size());
 
 	// Phase 1: Under lock, plan all tasks and collect paths
-	struct LoadTask {
-		UID uid;
-		fs::path disk_path;
-		std::shared_ptr<std::promise<AssetRef>> promise;
-		std::shared_future<AssetRef> future;
-	};
-	std::vector<LoadTask> tasks_to_execute;
+	std::vector<std::shared_ptr<LoadTask>> tasks_to_execute;
 
 	{
 		std::scoped_lock lock(asset_mutex_);
@@ -244,40 +250,48 @@ std::vector<std::shared_future<AssetRef>> AssetManager::enqueue_load_task(UID ui
 				futures.push_back(make_ready_future(assets_[dep_uid]));
 				continue;
 			}
-			if (pending_assets_.count(dep_uid)) {
-				futures.push_back(pending_assets_[dep_uid]);
+			if (auto pending = pending_assets_.find(dep_uid); pending != pending_assets_.end()) {
+				futures.push_back(pending->second->future);
+				if (!pool) {
+					tasks_to_execute.push_back(pending->second);
+				}
 				continue;
 			}
-			if (!uid_to_path_.contains(dep_uid)) {
+			auto path = uid_to_path_.find(dep_uid);
+			if (path == uid_to_path_.end()) {
 				ERR(LogAsset, "Asset UID {} has no registered path.", dep_uid.to_string());
 				futures.push_back(make_ready_future<AssetRef>(nullptr));
 				continue;
 			}
 
-			auto promise = std::make_shared<std::promise<AssetRef>>();
-			std::shared_future<AssetRef> future = promise->get_future().share();
-			pending_assets_[dep_uid] = future;
-			futures.push_back(future);
-
-			tasks_to_execute.push_back({dep_uid, uid_to_path_[dep_uid], promise, future});
+			auto task = std::make_shared<LoadTask>();
+			task->uid = dep_uid;
+			task->disk_path = path->second;
+			pending_assets_.emplace(dep_uid, task);
+			futures.push_back(task->future);
+			tasks_to_execute.push_back(std::move(task));
 		}
 	} // unlock
 
 	// Phase 2: Execute all load tasks without holding the lock
 	for (auto &task : tasks_to_execute) {
-		auto task_lambda = [this, dep_uid = task.uid, disk_path = task.disk_path, promise = task.promise]() {
-			AssetRef loaded = this->perform_load_from_disk(dep_uid, disk_path);
-			{
-				std::scoped_lock inner_lock(this->asset_mutex_);
-				if (loaded) {
-					this->assets_[dep_uid] = loaded;
+		auto task_lambda = [this, task]() {
+			std::call_once(task->read_once, [&]() {
+				AssetRef loaded = load_from_disk(task->disk_path);
+				{
+					std::scoped_lock lock(asset_mutex_);
+					if (auto cached = assets_.find(task->uid); cached != assets_.end()) {
+						loaded = cached->second;
+					} else if (loaded) {
+						assets_.emplace(task->uid, loaded);
+					}
+					pending_assets_.erase(task->uid);
 				}
-				this->pending_assets_.erase(dep_uid);
-			}
-			promise->set_value(loaded);
+				task->promise.set_value(loaded);
+			});
 		};
 
-		if (pool && use_thread_pool) {
+		if (pool) {
 			pool->enqueue(std::move(task_lambda));
 		} else {
 			task_lambda();
@@ -292,15 +306,47 @@ AssetRef AssetManager::load_asset_blocking(UID uid) {
 	if (uid.is_empty()) {
 		return nullptr;
 	}
-	if (auto cached = check_pending_cache(uid); cached.has_value()) {
-		return cached->get();
+
+	static thread_local uint32_t load_depth = 0;
+	static thread_local bool pending_gpu_flush = false;
+	struct LoadDepthGuard {
+		uint32_t &depth;
+		bool &needs_flush;
+		~LoadDepthGuard() {
+			if (--depth == 0 && needs_flush) {
+				needs_flush = false;
+				if (EngineContext::rhi()) {
+					EngineContext::run_device_task([] {
+						if (auto rhi = EngineContext::rhi()) {
+							if (auto cmd = rhi->get_immediate_command()) {
+								cmd->flush();
+							}
+						}
+					});
+				}
+			}
+		}
+	} depth_guard{ ++load_depth, pending_gpu_flush };
+
+	AssetRef result;
+	{
+		std::scoped_lock lock(asset_mutex_);
+		if (auto cached = assets_.find(uid); cached != assets_.end()) {
+			result = cached->second;
+		}
+	}
+	if (result) {
+		if (!result->is_initialized()) {
+			pending_gpu_flush = true;
+			initialize_loaded_asset(result);
+		}
+		return result;
 	}
 
 	auto futures = enqueue_load_task(uid);
 	for (auto &fut : futures) {
 		fut.wait();
 	}
-	AssetRef result = nullptr;
 	for (auto &fut : futures) {
 		auto asset = fut.get();
 		if (!asset) continue;
@@ -309,13 +355,9 @@ AssetRef AssetManager::load_asset_blocking(UID uid) {
 			result = asset;
 		}
 
-		// Double-check under init_mutex_ to avoid double initialization
 		if (!asset->is_initialized()) {
-			std::unique_lock<std::mutex> init_lock(asset->init_mutex_);
-			if (!asset->is_initialized()) {
-				asset->on_load_asset();
-				asset->mark_initialized();
-			}
+			pending_gpu_flush = true;
+			initialize_loaded_asset(asset);
 		}
 	}
 	if (result == nullptr) {
@@ -324,9 +366,20 @@ AssetRef AssetManager::load_asset_blocking(UID uid) {
 	return result;
 }
 
+void AssetManager::initialize_loaded_asset(const AssetRef &asset) {
+	if (asset->is_initialized()) {
+		return;
+	}
+	std::scoped_lock lock(asset->init_mutex_);
+	if (!asset->is_initialized()) {
+		asset->on_load_asset();
+		asset->mark_initialized();
+	}
+}
+
 AssetRef AssetManager::get_asset_immediate(UID uid) {
 	std::scoped_lock lock(asset_mutex_);
-	if (auto it = assets_.find(uid); it != assets_.end()) {
+	if (auto it = assets_.find(uid); it != assets_.end() && it->second->is_initialized()) {
 		return it->second;
 	}
 	return nullptr;
@@ -363,7 +416,8 @@ void AssetManager::scan_directory(const fs::path &dir_path) {
 		}
 	}
 
-	auto *pool = EngineContext::thread_pool();
+	auto *pool = EngineContext::get_thread_role() == EngineContext::ThreadRole::Worker
+		? nullptr : EngineContext::thread_pool();
 	std::vector<std::pair<UID, std::string>> results(paths.size());
 	std::vector<std::future<void>> futures;
 
@@ -371,7 +425,7 @@ void AssetManager::scan_directory(const fs::path &dir_path) {
 		auto task = [this, &results, i, p = paths[i]]() {
 			results[i] = { peek_uid_from_file(p), p.generic_string() };
 		};
-		if (pool && use_thread_pool) {
+		if (pool) {
 			futures.push_back(pool->enqueue(std::move(task)));
 		} else {
 			task();
@@ -407,6 +461,7 @@ void AssetManager::register_asset(AssetRef asset, const std::string &path) {
 	}
 	std::scoped_lock lock(asset_mutex_);
 	register_path_internal(asset->get_uid(), path);
+	asset->mark_initialized();
 	assets_[asset->get_uid()] = asset;
 }
 
@@ -491,10 +546,7 @@ void AssetManager::save_asset(AssetRef asset, const std::string &virtual_path) {
          virtual_path,
          sorted_assets.size() - 1);
 
-	// 3. Parallel Save
-	auto *pool = EngineContext::thread_pool();
-	std::vector<std::future<void>> futures;
-
+	// 3. Save dependencies, then the root asset.
 	for (auto &asset_to_save : sorted_assets) {
 		fs::path save_path;
 		bool is_new = false;
@@ -537,20 +589,8 @@ void AssetManager::save_asset(AssetRef asset, const std::string &virtual_path) {
 		// Call on_save_asset to sync internal state before saving
 		asset_to_save->on_save_asset();
 
-		auto task = [this, asset_to_save, save_path]() {
-			this->perform_save_to_disk(asset_to_save, save_path);
-			asset_to_save->clear_dirty();
-		};
-
-		if (pool && use_thread_pool) {
-			futures.emplace_back(pool->enqueue(std::move(task)));
-		} else {
-			task();
-		}
-	}
-
-	for (auto &f : futures) {
-		f.wait();
+		perform_save_to_disk(asset_to_save, save_path);
+		asset_to_save->clear_dirty();
 	}
 }
 

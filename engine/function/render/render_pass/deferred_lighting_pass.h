@@ -131,10 +131,8 @@ private:
     RHISamplerRef gbuffer_sampler_;
     
     DeferredLightingPerFrameData per_frame_data_;
-    bool per_frame_dirty_ = true;
     
     std::vector<ShaderLightData> lights_data_;
-    bool lights_dirty_ = true;
     
     bool initialized_ = false;
 };

@@ -329,7 +329,7 @@ void SkyboxPass::build(RDGBuilder& builder) {
 
 void SkyboxPass::build(RDGBuilder& builder, RDGTextureHandle color_target,
                        RDGTextureHandle depth_target, const Mat4& view, const Mat4& proj,
-                       const std::vector<SkyboxComponent*>& skyboxes) {
+                       const std::vector<SkyboxDrawData>& skyboxes) {
     if (!initialized_ || !pipeline_) {
         WARN(LogSkyboxPass, "SkyboxPass not initialized");
         return;
@@ -346,12 +346,10 @@ void SkyboxPass::build(RDGBuilder& builder, RDGTextureHandle color_target,
     
     // Per-frame log removed to avoid stutter from log buffer flush
     
-    // Prepare per-frame data (remove translation from view)
-    per_frame_data_.view = view;
-    per_frame_data_.proj = proj;
-    // Translation removal is done in shader
-    per_frame_dirty_ = true;
-    
+    PerFrameData frame_data{};
+    frame_data.view = view;
+    frame_data.proj = proj;
+
     // Get vertex/index buffers
     auto vertex_buffer = cube_mesh_->get_vertex_buffer()->position_buffer_;
     auto index_buffer = cube_mesh_->get_index_buffer()->buffer_;
@@ -362,50 +360,12 @@ void SkyboxPass::build(RDGBuilder& builder, RDGTextureHandle color_target,
         return;
     }
     
-    // Build render pass for each skybox
-    int skybox_index = 0;
-    for (auto* skybox : skyboxes) {
-        skybox_index++;
-        if (!skybox) {
-            WARN(LogSkyboxPass, "Skybox {} is null", skybox_index);
-            continue;
-        }
-        
-        auto material = skybox->get_material();
-        if (!material) {
-            WARN(LogSkyboxPass, "Skybox {} has no material", skybox_index);
-            continue;
-        }
-        
-
-        
-        // Cubemaps are prepared before recording the frame.
-        auto cube_texture = material->get_cube_texture();
-        if (!cube_texture) {
-            WARN(LogSkyboxPass, "Skybox {} cube_texture wrapper is null", skybox_index);
-            continue;
-        }
-        if (!cube_texture->texture_) {
-            WARN(LogSkyboxPass, "Skybox {} cube_texture->texture_ (RHI) is null", skybox_index);
-            continue;
-        }
-
-        
-        // Get intensity from material
-        float intensity = material->get_intensity();
-        
-        // Build skybox at camera position with specified scale
-        float scale = skybox->get_skybox_scale();
+    for (const auto& skybox : skyboxes) {
         Mat4 model = Mat4::Identity();
-        model.m[0][0] = scale;
-        model.m[1][1] = scale;
-        model.m[2][2] = scale;
-        
-        // Store data for lambda capture
-        float captured_intensity = intensity;
-        Mat4 captured_model = model;
-        RHITextureRef captured_cube_tex = cube_texture->texture_;
-        
+        model.m[0][0] = skybox.scale;
+        model.m[1][1] = skybox.scale;
+        model.m[2][2] = skybox.scale;
+
         // Create render pass
         builder.create_render_pass("SkyboxPass")
         .root_signature(root_signature_)
@@ -413,7 +373,7 @@ void SkyboxPass::build(RDGBuilder& builder, RDGTextureHandle color_target,
             .color(0, color_target, ATTACHMENT_LOAD_OP_LOAD, ATTACHMENT_STORE_OP_STORE)
             .depth_stencil(depth_target, ATTACHMENT_LOAD_OP_LOAD, ATTACHMENT_STORE_OP_DONT_CARE, 
                           1.0f, 0, {}, true)  // Read-only depth
-            .execute([this, captured_model, captured_intensity, captured_cube_tex,
+            .execute([this, frame_data, model, skybox,
                      vertex_buffer, index_buffer, index_count](RDGPassContext context) {
                 RHICommandListRef cmd = context.command;
                 if (!cmd) {
@@ -425,13 +385,9 @@ void SkyboxPass::build(RDGBuilder& builder, RDGTextureHandle color_target,
                 
                 // Update and bind per-frame buffer
                 if (per_frame_buffer_) {
-                    if (per_frame_dirty_) {
-                        void* mapped = per_frame_buffer_->map();
-                        if (mapped) {
-                            memcpy(mapped, &per_frame_data_, sizeof(PerFrameData));
-                            per_frame_buffer_->unmap();
-                        }
-                        per_frame_dirty_ = false;
+                    if (void* mapped = per_frame_buffer_->map()) {
+                        memcpy(mapped, &frame_data, sizeof(frame_data));
+                        per_frame_buffer_->unmap();
                     }
                     descriptor_set_->write_buffer(0, per_frame_buffer_);
                 }
@@ -439,8 +395,8 @@ void SkyboxPass::build(RDGBuilder& builder, RDGTextureHandle color_target,
                 // Update and bind per-object buffer
                 if (per_object_buffer_) {
                     PerObjectData obj_data;
-                    obj_data.model = captured_model;
-                    obj_data.inv_model = captured_model.inverse();
+                    obj_data.model = model;
+                    obj_data.inv_model = model.inverse();
                     
                     void* mapped = per_object_buffer_->map();
                     if (mapped) {
@@ -453,7 +409,7 @@ void SkyboxPass::build(RDGBuilder& builder, RDGTextureHandle color_target,
                 // Update and bind params buffer
                 if (params_buffer_) {
                     SkyboxParams params;
-                    params.intensity = captured_intensity;
+                    params.intensity = skybox.intensity;
                     
                     void* mapped = params_buffer_->map();
                     if (mapped) {
@@ -466,7 +422,7 @@ void SkyboxPass::build(RDGBuilder& builder, RDGTextureHandle color_target,
                   
                 
                 // Bind cube texture and sampler
-                descriptor_set_->write_texture(0, captured_cube_tex);
+                descriptor_set_->write_texture(0, skybox.texture);
                 descriptor_set_->write_sampler(0, cube_sampler_);
                 
                 // Bind vertex and index buffers

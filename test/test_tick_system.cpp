@@ -1,4 +1,4 @@
-#include <catch2/catch_test_macros.hpp>
+#include "test/test_assertions.h"
 #include <catch2/catch_approx.hpp>
 #include <cmath>
 #include "test/test_utils.h"

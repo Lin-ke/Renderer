@@ -260,21 +260,17 @@ void DeferredLightingPass::create_pipeline() {
 void DeferredLightingPass::set_per_frame_data(const Vec3& camera_pos, const Mat4& inv_view_proj) {
     per_frame_data_.camera_pos = camera_pos;
     per_frame_data_.inv_view_proj = inv_view_proj;
-    per_frame_dirty_ = true;
 }
 
 void DeferredLightingPass::set_main_light(const Vec3& dir, const Vec3& color, float intensity) {
     per_frame_data_.main_light_dir = dir;
     per_frame_data_.main_light_color = color;
     per_frame_data_.main_light_intensity = intensity;
-    per_frame_dirty_ = true;
 }
 
 void DeferredLightingPass::set_lights(const std::vector<ShaderLightData>& lights) {
     lights_data_ = lights;
     per_frame_data_.light_count = static_cast<uint32_t>(std::min(lights.size(), static_cast<size_t>(MAX_LIGHTS)));
-    per_frame_dirty_ = true;
-    lights_dirty_ = true;
 }
 
 
@@ -366,7 +362,7 @@ void DeferredLightingPass::build(RDGBuilder& builder, RDGTextureHandle color_tar
         .read(0, 3, 0, gbuffer.position_depth);
     
 
-    rp_builder.execute([this, extent](RDGPassContext context) {
+    rp_builder.execute([this, extent, frame_data = per_frame_data_, lights = lights_data_](RDGPassContext context) {
         RHICommandListRef cmd = context.command;
         if (!cmd) return;
         
@@ -380,29 +376,24 @@ void DeferredLightingPass::build(RDGBuilder& builder, RDGTextureHandle color_tar
         }
         
         if (per_frame_buffer_) {
-            if (per_frame_dirty_) {
-                void* mapped = per_frame_buffer_->map();
-                if (mapped) {
-                    memcpy(mapped, &per_frame_data_, sizeof(per_frame_data_));
-                    per_frame_buffer_->unmap();
-                }
-                per_frame_dirty_ = false;
+            if (void* mapped = per_frame_buffer_->map()) {
+                memcpy(mapped, &frame_data, sizeof(frame_data));
+                per_frame_buffer_->unmap();
             }
             descriptor_set_->write_buffer(0, per_frame_buffer_);
         }
         
         // Upload and bind light buffer (cbuffer b1)
-        if (light_buffer_ && lights_dirty_) {
+        if (light_buffer_) {
             void* mapped = light_buffer_->map();
             if (mapped) {
-                size_t copy_count = std::min(lights_data_.size(), static_cast<size_t>(MAX_LIGHTS));
+                size_t copy_count = std::min(lights.size(), static_cast<size_t>(MAX_LIGHTS));
                 memset(mapped, 0, sizeof(ShaderLightData) * MAX_LIGHTS);
                 if (copy_count > 0) {
-                    memcpy(mapped, lights_data_.data(), sizeof(ShaderLightData) * copy_count);
+                    memcpy(mapped, lights.data(), sizeof(ShaderLightData) * copy_count);
                 }
                 light_buffer_->unmap();
             }
-            lights_dirty_ = false;
         }
         if (light_buffer_) {
             descriptor_set_->write_buffer(1, light_buffer_);

@@ -19,7 +19,7 @@ struct GPUTimingResult {
 /**
  * @brief Abstract GPU time profiler interface.
  *
- * Platform backends (DX11, Vulkan, ...) provide a concrete subclass via
+ * The platform backend provides a concrete subclass via
  * RHIBackend::create_gpu_profiler().  The base class owns the smoothing /
  * book-keeping logic that is identical across all backends.
  *

@@ -7,11 +7,16 @@
 DEFINE_LOG_TAG(LogDX12Support, "DX12Support");
 
 uint32_t DX12Backend::allocate_imgui_srv_index() {
+    std::scoped_lock lock(imgui_srv_mutex_);
     if (!imgui_free_srv_indices_.empty()) { auto index = imgui_free_srv_indices_.back(); imgui_free_srv_indices_.pop_back(); return index; }
     if (imgui_next_srv_index_ >= GPU_SRV_UAV_RESERVED_COUNT) { ERR(LogDX12Support, "Persistent descriptor heap exhausted"); return UINT32_MAX; }
     return imgui_next_srv_index_++;
 }
-void DX12Backend::free_imgui_srv_index(uint32_t index) { if (index != UINT32_MAX) imgui_free_srv_indices_.push_back(index); }
+void DX12Backend::free_imgui_srv_index(uint32_t index) {
+    if (index == UINT32_MAX) return;
+    std::scoped_lock lock(imgui_srv_mutex_);
+    imgui_free_srv_indices_.push_back(index);
+}
 uint32_t DX12Backend::sampler_table(D3D12_CPU_DESCRIPTOR_HANDLE handle) {
     if (auto iter = sampler_tables_.find(handle.ptr); iter != sampler_tables_.end()) return iter->second;
     auto index = gpu_sampler_heap_.allocate();
@@ -86,7 +91,8 @@ void DX12Backend::imgui_shutdown() {
     ImGui_ImplDX12_Shutdown(); ImGui_ImplWin32_Shutdown(); ImGui::DestroyContext(); imgui_initialized_ = false;
 }
 void DX12CommandContext::imgui_create_fonts_texture() { ImGui_ImplDX12_CreateDeviceObjects(); }
-void DX12CommandContext::imgui_render_draw_data() {
+void DX12CommandContext::imgui_render_draw_data(ImDrawData* draw_data) {
+    if (!draw_data || !draw_data->CmdListsCount) return;
     if (auto backend = backend_.lock()) {
         backend->ensure_recording();
         // ImGui does not use depth. Unbind the editor depth attachment before
@@ -101,7 +107,7 @@ void DX12CommandContext::imgui_render_draw_data() {
             backend->get_command_list()->OMSetRenderTargets(count, targets, FALSE, nullptr);
         }
         backend->prepare_imgui_resources();
-        ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), backend->get_command_list());
+        ImGui_ImplDX12_RenderDrawData(draw_data, backend->get_command_list());
     }
 }
 void DX12Backend::prepare_imgui_resources() {

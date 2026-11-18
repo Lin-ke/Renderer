@@ -41,6 +41,7 @@ struct RDGPassContext {
     RHICommandListRef command;
     RDGBuilder* builder;
     std::array<RHIDescriptorSetRef, MAX_DESCRIPTOR_SETS> descriptors;
+    uint32_t frame_slot = 0;
 
     uint32_t pass_index[3] = {0, 0, 0};
 };

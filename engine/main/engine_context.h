@@ -7,6 +7,8 @@
 #include <queue>
 #include <mutex>
 #include <condition_variable>
+#include <functional>
+#include <atomic>
 
 #include "engine/function/render/render_system/render_system.h"
 #include "engine/function/render/rhi/rhi.h"
@@ -36,6 +38,7 @@ public:
         Unknown = 0,
         MainGame,
         Renderer,
+        Device,
         Worker
     };
 
@@ -44,6 +47,9 @@ public:
 	static void init(std::bitset<8> mode );
     static void exit();
 	static void main_loop();
+    static bool render_frame();
+    static bool wait_for_render();
+    static void run_device_task(std::function<void()> task);
     
     static RHIBackendRef rhi();
     static AssetManager* asset();
@@ -59,7 +65,7 @@ public:
     static ThreadRole get_thread_role() {
         return thread_role_;
     }
-    void set_thread_role(ThreadRole role) {
+    static void set_thread_role(ThreadRole role) {
         thread_role_ = role;
     }
 
@@ -89,18 +95,26 @@ private:
     std::unique_ptr<ThreadPool> thread_pool_;
     std::unique_ptr<std::jthread> render_thread_;
 	void main_loop_internal();
+    void render_loop();
+    void device_loop();
+    void submit_frame(RenderSystem::CompiledFrame frame);
+    void complete_render_frame(bool success);
 
-    static ThreadRole thread_role_;
-    uint32_t current_frame_index_ = 0;
+    static thread_local ThreadRole thread_role_;
+    std::atomic<uint32_t> current_frame_index_ = 0;
     uint32_t current_tick_ = 0;          // Total frame/tick count
     float delta_time_ = 0.0f;            // Time since last frame in seconds
     Timer timer_;                        // Timer for measuring delta time
+    uint64_t next_frame_id_ = 0;
 
-    // Render Thread Synchronization
-    std::mutex render_mutex_;
-    std::condition_variable render_cv_;
+    std::unique_ptr<std::jthread> device_thread_;
+    std::mutex pipeline_mutex_;
+    std::condition_variable pipeline_cv_;
     std::queue<RenderPacket> render_queue_;
-    const size_t MAX_FRAMES_IN_FLIGHT = 3;
+    std::queue<std::function<void()>> device_queue_;
+    size_t pending_frames_ = 0;
+    bool pipeline_stopping_ = false;
+    bool render_failed_ = false;
 };
 
 #endif

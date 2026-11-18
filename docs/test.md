@@ -25,9 +25,7 @@ test_utils::TestContext::shutdown_engine();
 TEST_CASE("Example Test", "[tag]") {
     test_utils::TestContext::reset(); // 1. 重置上一个测试可能残留的状�?
     
-    // 2. 准备测试资产目录
-    std::string test_asset_dir = std::string(ENGINE_PATH) + "/test/test_internal";
-    EngineContext::asset()->init(test_asset_dir);
+    // 临时资源直接使用 /Game，测试进程负责挂载临时项目。
     
     // 3. 执行测试逻辑
     REQUIRE(EngineContext::rhi() != nullptr);
@@ -42,18 +40,9 @@ TEST_CASE("Example Test", "[tag]") {
 
 `test_utils.h` 提供了大量的辅助工具类和函数来简化测试编写�?
 
-### 2.1 临时资产清理 (`ScopedAssetCleanup`)
-当测试需要生成临时的 `.asset` 文件并要求自动清理时，使�?`ScopedAssetCleanup`。它会在作用域结束时自动清理基于 UUID 命名的资产文件�?
+### 2.1 临时资产
 
-```cpp
-SECTION("Test Material Save/Load") {
-    auto cleanup = test_utils::ScopedAssetCleanup(test_asset_dir);
-    
-    // ... 生成并保存临时资�?...
-    
-    // 离开作用域时，生成的临时UUID文件会被自动删除
-}
-```
+每次测试运行在 `build/test-work` 下创建临时项目，并将其挂载为 `/Game`。测试退出时清理该项目。截图和分析文件保存在 `build/test-results`。
 
 ### 2.2 场景加载 (`SceneLoader`)
 用于一键式处理场景的虚拟路径解析、UID查找、加载、以及组件初始化�?
@@ -71,8 +60,6 @@ REQUIRE(result.camera != nullptr);
 ```cpp
 test_utils::RenderTestApp::Config config;
 config.scene_path = "/Game/test_scene.asset";
-config.width = 1280;
-config.height = 720;
 config.max_frames = 60;
 config.capture_frame = 30; // 捕获�?0帧作为截图验�?
 config.create_scene_func = custom_scene_setup;
@@ -150,7 +137,7 @@ TEST_CASE("Buffer Tests", "[render_resource]") {
 - �?忘记在测试末尾调�?`TestContext::reset()`�?
 - �?�?`SECTION` 之间共享可变状态�?
 - �?编写没有验证逻辑的空测试（如仅仅检查非空而不验证行为）�?
-- �?将临时资产写入源码目录且不清理（必须使用 `ScopedAssetCleanup`）�?
+- 临时资产应写入测试项目，避免写入源码目录。
 
 ---
 

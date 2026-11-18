@@ -2,6 +2,10 @@
 
 `RDGBuilder::execute()` 先编译依赖图，再执行保留的 Pass。`compile()` 可单独调用，不分配 GPU 资源、不调用执行回调。两者都返回 `bool`；错误详情在 `get_compile_info().error`。编译失败不记录任何 Pass 的 GPU 命令。
 
+在线程化帧循环里，Game Thread 在更新场景后生成 `RenderPacket`。Render Thread 对快照剔除、组批和构图，再运行 `compile()`。编译会记录保留 Pass 的顺序以及资源的首次和末次使用。Device Thread 从 swapchain 获取本帧纹理，绑定图中用规格声明的 `BackBuffer`，通过 `execute_compiled()` 录制已有计划，并提交和 Present。`RDGPassContext::frame_slot` 标识 Device Thread 取得的帧资源槽。
+
+`game` 和 `sun_temple` 默认走这条路径。`EngineContext::render_frame()` 入队后返回，满队列提供背压。截图和退出会等待已入队帧处理完毕。单线程模式可以用同样的快照、构图和执行入口同步运行。
+
 ## 依赖与执行顺序
 
 - 根据 Shader 读写、颜色/深度附件、copy 和 present 声明建立数据依赖。

@@ -13,6 +13,7 @@
 #include "engine/function/render/render_pass/depth_visualize_pass.h"
 #include "engine/function/render/render_pass/skybox_pass.h"
 #include "engine/function/render/render_pass/editor_ui_pass.h"
+#include "engine/function/render/render_pass/deferred_lighting_pass.h"
 // #include "engine/function/render/render_system/render_surface_cache_manager.h"
 #include <imgui.h>
 
@@ -27,27 +28,35 @@ static const RHIFormat HDR_COLOR_FORMAT = FORMAT_R16G16B16A16_SFLOAT;
 static const RHIFormat COLOR_FORMAT = FORMAT_R8G8B8A8_UNORM;
 static const RHIFormat DEPTH_FORMAT = FORMAT_D32_SFLOAT;
 
-/**
- * @brief RenderPacket contains all data needed for one frame rendering
- * 
- * This is passed from Game Thread to Render Thread (in multi-threaded mode)
- * or used directly (in single-threaded mode)
- */
+struct RenderCamera {
+    Mat4 view;
+    Mat4 projection;
+    Vec3 position;
+    float near_plane;
+    float far_plane;
+};
+
+struct RenderLights {
+    Vec3 direction{0.0f, -1.0f, 0.0f};
+    Vec3 color{1.0f, 1.0f, 1.0f};
+    float intensity = 1.0f;
+    std::vector<render::ShaderLightData> additional;
+};
+
+// Game-thread snapshot consumed by the render thread.
 struct RenderPacket {
-    uint32_t frame_index = 0;       // Frame index this packet belongs to
-    float delta_time = 0.0f;        // Time since last frame in seconds
-    
-    // Scene data
-    class Scene* active_scene = nullptr;     // Scene to render
-    class CameraComponent* active_camera = nullptr;  // Camera for this frame
-    
-    // Rendering config
-    bool enable_forward_pass = true;
-    bool enable_post_process = false;
-    
-    // Debug options
+    uint64_t frame_id = 0;
+    std::optional<RenderCamera> camera;
+    std::vector<render::DrawBatch> instances;
+    RenderLights lights;
+    std::vector<render::SkyboxDrawData> skyboxes;
+    std::shared_ptr<ImDrawData> ui;
+    bool depth_prepass = true;
+    bool pbr = true;
+    bool npr = true;
     bool wireframe = false;
-    bool visualize_lights = false;
+    bool visualize_depth = false;
+    bool visualize_graph = false;
 };
 
 struct DefaultRenderResource{
@@ -67,7 +76,24 @@ public:
     void init(void* window_handle);
     void destroy();
 
+    struct CompiledFrame {
+        std::unique_ptr<RDGBuilder> graph;
+        RDGTextureHandle back_buffer;
+        std::optional<RenderCamera> depth_visualization_camera;
+        uint64_t frame_id;
+        size_t visible_batches;
+    };
+
+    struct FrameStats {
+        size_t visible_batches = 0;
+        float gpu_ms = 0.0f;
+    };
+
+    RenderPacket make_render_packet(Scene* scene, CameraComponent* camera, uint64_t frame_id);
+    std::optional<CompiledFrame> build_frame(const RenderPacket& packet);
+    bool execute_frame(CompiledFrame frame);
     bool tick(const RenderPacket& packet);
+    FrameStats get_frame_stats() const;
     // Capture the completed frame, even after the swapchain has advanced.
     bool capture_frame(std::vector<uint8_t>& rgba, Extent2D& extent);
     void set_show_ui(bool show) { show_ui_ = show; }
@@ -143,15 +169,14 @@ public:
     
 private:
     // RDG methods
-    void build_and_execute_rdg(uint32_t frame_index, const RenderPacket& packet,
-                               const std::vector<SkyboxComponent*>& skyboxes);
     void build_fallback_rdg(RDGBuilder& builder);
     
     // RDG Visualization
     void draw_rdg_visualizer();
     void capture_rdg_info(class RDGBuilder& builder);
     
-    void render_imgui_and_gizmo(const RenderPacket& packet, const Extent2D& extent);
+    std::shared_ptr<ImDrawData> build_editor_ui(Scene* scene, CameraComponent* camera);
+    bool capture_completed_frame(std::vector<uint8_t>& rgba, Extent2D& extent);
 
 public:
     // Entity selection for gizmo
@@ -184,6 +209,10 @@ private:
     RHISurfaceRef surface_;
     RHIQueueRef queue_;
     RHISwapchainRef swapchain_;
+    RHITextureInfo back_buffer_info_ = {};
+    uint32_t next_frame_slot_ = 0;
+    mutable std::mutex frame_stats_mutex_;
+    FrameStats frame_stats_;
     RHITextureRef depth_texture_;
     RHITextureViewRef depth_texture_view_;
 

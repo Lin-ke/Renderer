@@ -115,7 +115,7 @@ auto scene = EngineContext::asset()->load_asset<Scene>(uid);
 // Option 3: Async Load (Returns futures)
 auto load_tasks = EngineContext::asset()->enqueue_load_task(uid);
 ```
-*Note: `load_asset` currently performs a synchronous blocking load. `enqueue_load_task` is available for async loading.*
+The thread pool reads and deserializes native asset files in parallel. `load_asset` blocks until dependency resolution and `on_load()` finish on the calling thread. `enqueue_load_task` can prefetch deserialized assets before a later `load_asset` call.
 
 ### Generating UIDs for Source Assets
 

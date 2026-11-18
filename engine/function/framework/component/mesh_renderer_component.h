@@ -74,6 +74,7 @@ public:
      * @param view_projection If provided, keep only meshes whose bounds overlap the view frustum
      */
     void collect_draw_batch(std::vector<render::DrawBatch>& batches, const Mat4* view_projection = nullptr);
+    static bool is_visible(const render::DrawBatch& batch, const Mat4& view_projection);
 
     /**
      * @brief Collect ray tracing acceleration structure instances

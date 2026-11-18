@@ -257,7 +257,7 @@ TextureRef PanoramaConverter::convert(TextureRef panorama, uint32_t resolution) 
         descriptor_set_->write_texture(0, panorama->texture_);
         descriptor_set_->write_texture(0, cubemap_texture, RESOURCE_TYPE_RW_TEXTURE, 0);
         
-        // Push constants (Using Constant Buffer to support DX11)
+        // Set the conversion parameters
         PushConstants pc = { face, resolution, {0, 0} };
         if (params_buffers_.size() > face && params_buffers_[face]) {
             void* mapped = params_buffers_[face]->map();

@@ -1,3 +1,4 @@
+#include "engine/function/render/render_pass/draw_material.h"
 #include "engine/function/render/render_pass/depth_pre_pass.h"
 #include "engine/function/render/render_resource/shader_utils.h"
 #include "engine/main/engine_context.h"
@@ -47,18 +48,6 @@ void DepthPrePass::create_shaders() {
     } else {
         ERR(LogDepthPrePass, "Failed to load depth_pass_vs.cso");
     }
-
-    // Load PS (Required for DX11 even if output is void)
-    auto ps_code = ShaderUtils::load_or_compile("depth_pass_ps.cso", nullptr, "PSMain", "ps_5_0");
-    if (!ps_code.empty()) {
-        RHIShaderInfo info = {};
-        info.entry = "PSMain";
-        info.frequency = SHADER_FREQUENCY_FRAGMENT;
-        info.code = ps_code;
-        auto shader = backend->create_shader(info);
-        fragment_shader_ = std::make_shared<Shader>();
-        fragment_shader_->shader_ = shader;
-    }
 }
 
 void DepthPrePass::create_uniform_buffers() {
@@ -100,9 +89,6 @@ void DepthPrePass::create_pipeline() {
 
     RHIGraphicsPipelineInfo pipe_info = {};
     pipe_info.vertex_shader = vertex_shader_->shader_;
-    if (fragment_shader_) {
-        pipe_info.fragment_shader = fragment_shader_->shader_;
-    }
     pipe_info.root_signature = root_signature_;
     pipe_info.primitive_type = PRIMITIVE_TYPE_TRIANGLE_LIST;
 
@@ -168,24 +154,23 @@ void DepthPrePass::build(RDGBuilder& builder, RDGTextureHandle depth_target, con
         extent = render_system->get_swapchain()->get_extent();
     }
 
-    rp_builder.execute([this, batches, extent](RDGPassContext context) {
+    rp_builder.execute([this, batches, extent, frame_data = per_frame_data_](RDGPassContext context) {
         RHICommandListRef cmd = context.command;
         if (!cmd) return;
 
         // Set viewport and scissor to ensure valid rendering state
         cmd->set_viewport({0, 0}, {extent.width, extent.height});
         cmd->set_scissor({0, 0}, {extent.width, extent.height});
-        
         cmd->set_graphics_pipeline(pipeline_);
         
         // Update PerFrame Buffer (Double Buffering)
-        uint32_t frame_index = EngineContext::current_frame_index() % kFramesInFlight;
+        uint32_t frame_index = context.frame_slot % kFramesInFlight;
         RHIBufferRef current_frame_buffer = per_frame_buffers_[frame_index];
 
         if (current_frame_buffer) {
             void* mapped = current_frame_buffer->map();
             if (mapped) {
-                memcpy(mapped, &per_frame_data_, sizeof(PerFrameData));
+                memcpy(mapped, &frame_data, sizeof(frame_data));
                 current_frame_buffer->unmap();
             }
             descriptor_set_->write_buffer(0, current_frame_buffer);
@@ -195,7 +180,8 @@ void DepthPrePass::build(RDGBuilder& builder, RDGTextureHandle depth_target, con
         for (const auto& batch : batches) {
             // Alpha-tested materials write depth in their material pass so holes
             // in foliage do not occlude the scene during this opaque prepass.
-            if (batch.material && !batch.material->use_for_depth_pass()) continue;
+            if (batch.material_snapshot ? !batch.material_snapshot->use_for_depth_pass
+                                        : batch.material && !batch.material->use_for_depth_pass()) continue;
             // Update PerObject Buffer
             if (per_object_buffer_) {
                 PerObjectData obj_data;

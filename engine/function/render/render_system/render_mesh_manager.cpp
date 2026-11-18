@@ -11,7 +11,8 @@
 #include "engine/function/render/render_pass/npr_forward_pass.h"
 #include "engine/function/render/render_pass/g_buffer_pass.h"
 #include "engine/function/render/render_pass/deferred_lighting_pass.h"
-#include "engine/function/render/render_resource/material.h"
+#include "engine/function/render/render_pass/draw_material.h"
+#include <unordered_set>
 #include "engine/function/render/graph/rdg_builder.h"
 #include "engine/function/render/rhi/rhi_command_list.h"
 #include "engine/core/log/Log.h"
@@ -52,25 +53,19 @@ void RenderMeshManager::destroy() {
     INFO(LogRenderMeshManager, "RenderMeshManager destroyed");
 }
 
-void RenderMeshManager::tick() {
+void RenderMeshManager::prepare_batches(const std::vector<render::DrawBatch>& instances, const RenderCamera* camera) {
+    current_batches_.clear();
     if (!initialized_) return;
-    
-    if (!active_camera_) {
-        auto* world = EngineContext::world();
-        if (world) {
-            active_camera_ = world->get_active_camera();
+
+    if (!camera) {
+        current_batches_ = instances;
+        return;
+    }
+    const auto view_projection = camera->view * camera->projection;
+    for (const auto& instance : instances) {
+        if (MeshRendererComponent::is_visible(instance, view_projection)) {
+            current_batches_.push_back(instance);
         }
-    }
-    
-    if (active_camera_) {
-        active_camera_->update_camera_info();
-    }
-    
-    if (active_camera_) {
-        const auto view_projection = active_camera_->get_view_matrix() * active_camera_->get_projection_matrix();
-        collect_draw_batches(current_batches_, &view_projection);
-    } else {
-        collect_draw_batches(current_batches_);
     }
 }
 
@@ -108,34 +103,27 @@ void RenderMeshManager::collect_draw_batches(std::vector<render::DrawBatch>& bat
 }
 
 void RenderMeshManager::collect_draw_batches(std::vector<render::DrawBatch>& batches, const Mat4* view_projection) {
-    batches.clear();
-    
     auto* world = EngineContext::world();
-    if (world && world->get_active_scene()) {
-        auto world_renderers = world->get_mesh_renderers();
-        for (auto* renderer : world_renderers) {
-            if (renderer) {
-                renderer->collect_draw_batch(batches, view_projection);
-            }
+    batches.clear();
+    std::unordered_set<MeshRendererComponent*> collected;
+    if (world) {
+        for (auto* renderer : world->get_mesh_renderers()) {
+            if (collected.insert(renderer).second) renderer->collect_draw_batch(batches, view_projection);
         }
     }
-    
     for (auto* renderer : mesh_renderers_) {
-        if (!renderer) continue;
-        
-        bool already_added = false;
-        if (world && world->get_active_scene()) {
-            for (auto* world_renderer : world->get_mesh_renderers()) {
-                if (world_renderer == renderer) {
-                    already_added = true;
-                    break;
-                }
-            }
-        }
-        
-        if (!already_added) {
+        if (renderer && collected.insert(renderer).second) {
             renderer->collect_draw_batch(batches, view_projection);
         }
+    }
+}
+
+void RenderMeshManager::collect_draw_batches(const Scene* scene, std::vector<render::DrawBatch>& batches,
+                                             const Mat4* view_projection) {
+    batches.clear();
+    if (!scene) return;
+    for (auto* renderer : scene->get_components<MeshRendererComponent>()) {
+        renderer->collect_draw_batch(batches, view_projection);
     }
 }
 
@@ -152,146 +140,37 @@ void RenderMeshManager::cleanup_for_test() {
 
 }
 
-void RenderMeshManager::build_rdg(RDGBuilder& builder, RDGTextureHandle color_target, 
-                                   std::optional<RDGTextureHandle> depth_target,
-                                   bool enable_pbr, bool enable_npr) {
+void RenderMeshManager::build_rdg(RDGBuilder& builder, RDGTextureHandle color_target,
+                                 RDGTextureHandle depth_target, const RenderCamera& camera,
+                                 const RenderLights& lights, bool enable_pbr, bool enable_npr) {
     if (!initialized_) return;
-    
-    if (!active_camera_) {
-        WARN(LogRenderMeshManager, "No active camera, skipping RDG build");
-        return;
-    }
-    
-    Vec3 light_dir = Vec3(0.0f, -1.0f, 0.0f);
-    Vec3 light_color = Vec3(1.0f, 1.0f, 1.0f);
-    float light_intensity = 1.0f;
-    std::vector<render::ShaderLightData> additional_lights;
-    
-    auto* world = EngineContext::world();
-    if (world && world->get_active_scene()) {
-        bool main_light_found = false;
-        for (auto& entity : world->get_active_scene()->entities_) {
-            if (!entity) continue;
-            
-            // Directional lights
-            auto* dir_light = entity->get_component<DirectionalLightComponent>();
-            if (dir_light && dir_light->enable()) {
-                auto* transform = entity->get_component<TransformComponent>();
-                Vec3 dir = Vec3(0.0f, -1.0f, 0.0f);
-                if (transform) {
-                    dir = transform->transform.front();
-                }
-                
-                if (!main_light_found) {
-                    // First directional light → main light in cbuffer
-                    light_dir = dir;
-                    light_color = dir_light->get_color();
-                    light_intensity = dir_light->get_intensity();
-                    main_light_found = true;
-                } else {
-                    // Extra directional lights → light buffer
-                    render::ShaderLightData ld = {};
-                    ld.direction = dir;
-                    ld.color = dir_light->get_color();
-                    ld.intensity = dir_light->get_intensity();
-                    ld.type = static_cast<uint32_t>(render::LightType::Directional);
-                    additional_lights.push_back(ld);
-                }
-                continue;
-            }
-            
-            // Point lights
-            auto* pt_light = entity->get_component<PointLightComponent>();
-            if (pt_light && pt_light->enable()) {
-                auto* transform = entity->get_component<TransformComponent>();
-                render::ShaderLightData ld = {};
-                ld.position = transform ? transform->get_world_position() : Vec3::Zero();
-                ld.color = pt_light->get_color();
-                ld.intensity = pt_light->get_intensity();
-                ld.type = static_cast<uint32_t>(render::LightType::Point);
-                ld.range = 25.0f; // default range
-                additional_lights.push_back(ld);
-            }
-        }
-    }
-    
+
     std::vector<render::DrawBatch> npr_batches;
     std::vector<render::DrawBatch> pbr_batches;
-    std::vector<render::DrawBatch> forward_batches;
-    
     for (const auto& batch : current_batches_) {
-        if (batch.material) {
-            auto mask = batch.material->render_pass_mask();
-            if (mask & PASS_MASK_NPR_FORWARD) {
-                npr_batches.push_back(batch);
-            } 
-            else if (mask & PASS_MASK_DEFERRED_PASS) {
-                pbr_batches.push_back(batch);
-            } 
+        if (!batch.material_snapshot) continue;
+        const auto mask = batch.material_snapshot->pass_mask;
+        if (mask & PASS_MASK_NPR_FORWARD) {
+            if (enable_npr) npr_batches.push_back(batch);
+        } else if (enable_pbr && (mask & PASS_MASK_DEFERRED_PASS)) {
+            pbr_batches.push_back(batch);
         }
     }
-    
-    // Determine if we need depth prepass (any opaque objects to render)
-    bool has_opaque_objects = !pbr_batches.empty() || !npr_batches.empty();
-    
-    // Get or create depth target for prepass
-    std::optional<RDGTextureHandle> depth_handle = depth_target;
-    if (has_opaque_objects && !depth_handle.has_value()) {
-        // Create depth texture if not provided
-        auto* rsys = EngineContext::render_system();
-        auto swapchain = rsys ? rsys->get_swapchain() : nullptr;
-        Extent2D extent = swapchain ? swapchain->get_extent() : Extent2D{1280, 720};
-        depth_handle = builder.create_texture("DepthPrePass_Depth")
-            .extent({extent.width, extent.height, 1})
-            .format(FORMAT_D32_SFLOAT)
-            .allow_depth_stencil()
-            .finish();
+
+    if (!pbr_batches.empty() && g_buffer_pass_->is_ready() && deferred_lighting_pass_->is_ready()) {
+        g_buffer_pass_->set_per_frame_data(camera.view, camera.projection, camera.position);
+        const auto gbuffer = g_buffer_pass_->build(builder, depth_target, pbr_batches);
+        if (gbuffer) {
+            deferred_lighting_pass_->set_per_frame_data(camera.position, (camera.view * camera.projection).inverse());
+            deferred_lighting_pass_->set_main_light(lights.direction, lights.color, lights.intensity);
+            deferred_lighting_pass_->set_lights(lights.additional);
+            deferred_lighting_pass_->build(builder, color_target, *gbuffer);
+        }
     }
-    
-    // Deferred rendering path: GBufferPass -> DeferredLightingPass
-    if (enable_pbr && !pbr_batches.empty() && g_buffer_pass_ && g_buffer_pass_->is_ready() && 
-        deferred_lighting_pass_ && deferred_lighting_pass_->is_ready()) {
-        
-        // G-Buffer Pass (reads depth from prepass, writes gbuffer)
-        g_buffer_pass_->set_per_frame_data(
-            active_camera_->get_view_matrix(),
-            active_camera_->get_projection_matrix(),
-            active_camera_->get_position()
-        );
-        g_buffer_pass_->build(builder, depth_handle.value(), pbr_batches);
-        
-        // Deferred Lighting Pass (reads gbuffer, writes to color_target)
-        deferred_lighting_pass_->set_per_frame_data(
-            active_camera_->get_position(),
-            (active_camera_->get_view_matrix() * active_camera_->get_projection_matrix()).inverse()
-        );
-        deferred_lighting_pass_->set_main_light(light_dir, light_color, light_intensity);
-        deferred_lighting_pass_->set_lights(additional_lights);
-        deferred_lighting_pass_->build(builder, color_target);  // Auto-gets gbuffer from blackboard
+
+    if (!npr_batches.empty() && npr_forward_pass_->is_ready()) {
+        npr_forward_pass_->set_per_frame_data(camera.view, camera.projection, camera.position,
+                                              lights.direction, lights.color, lights.intensity);
+        npr_forward_pass_->build(builder, color_target, depth_target, npr_batches);
     }
-    
-    // NPR Forward rendering path
-    if (enable_npr && !npr_batches.empty() && npr_forward_pass_ && npr_forward_pass_->is_ready()) {
-        npr_forward_pass_->set_per_frame_data(
-            active_camera_->get_view_matrix(),
-            active_camera_->get_projection_matrix(),
-            active_camera_->get_position(),
-            light_dir,
-            light_color,
-            light_intensity
-        );
-        npr_forward_pass_->build(builder, color_target, depth_handle.value(), npr_batches);
-    }
-    
-    // if (!forward_batches.empty() && forward_pass_ && forward_pass_->is_ready()) {
-    //     forward_pass_->set_per_frame_data(
-    //         active_camera_->get_view_matrix(),
-    //         active_camera_->get_projection_matrix(),
-    //         active_camera_->get_position(),
-    //         light_dir,
-    //         light_color,
-    //         light_intensity
-    //     );
-    //     forward_pass_->build(builder, color_target, depth_target, forward_batches);
-    // }
 }

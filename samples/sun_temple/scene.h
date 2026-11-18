@@ -13,13 +13,14 @@
 #include "engine/function/render/render_resource/skybox_material.h"
 
 #include <filesystem>
+#include <unordered_set>
 
 namespace sun_temple {
 
-inline constexpr const char* model_path = "/Game/sun_temple/model.asset";
 inline constexpr const char* scene_path = "/Game/sun_temple/scene.asset";
 
-inline std::shared_ptr<Model> import_model(const std::filesystem::path& source_dir) {
+inline std::shared_ptr<Scene> import_scene(const std::filesystem::path& source_dir,
+    const std::string& virtual_path = scene_path) {
     ModelProcessSetting settings;
     settings.load_materials = true;
     settings.smooth_normal = false; // Preserve the authored normals and hard edges.
@@ -29,26 +30,23 @@ inline std::shared_ptr<Model> import_model(const std::filesystem::path& source_d
     options.convert_to_left_handed = true;
     options.specular_map_is_arm = true; // ORCA README: R=AO, G=roughness, B=metallic.
     ModelImporter importer;
-    auto model = importer.import_model((source_dir / "SunTemple.fbx").string(), model_path, settings, options);
-    if (!model) return nullptr;
-    for (uint32_t i = 0; i < model->get_slot_count(); ++i) {
-        auto material = std::dynamic_pointer_cast<PBRMaterial>(model->get_material(i));
-        if (!material) continue;
-        if (material->get_name().find("DoubleSided") != std::string::npos) {
-            material->set_cull_mode(CULL_MODE_NONE);
-            material->set_alpha_clip(0.5f);
-            material->set_use_for_depth_pass(false);
+    auto scene = importer.import_scene((source_dir / "SunTemple.fbx").string(), virtual_path, settings, options);
+    if (!scene) return nullptr;
+
+    std::unordered_set<Material*> configured;
+    for (auto* renderer : scene->get_components<MeshRendererComponent>()) {
+        auto model = renderer->get_model();
+        for (uint32_t i = 0; i < model->get_slot_count(); ++i) {
+            auto material = std::dynamic_pointer_cast<PBRMaterial>(model->get_material(i));
+            if (!material || !configured.insert(material.get()).second) continue;
+            if (material->get_name().find("DoubleSided") != std::string::npos) {
+                material->set_cull_mode(CULL_MODE_NONE);
+                material->set_alpha_clip(0.5f);
+                material->set_use_for_depth_pass(false);
+                material->mark_dirty();
+            }
         }
     }
-    return model;
-}
-
-inline std::shared_ptr<Scene> create_scene(ModelRef model, const std::filesystem::path& source_dir = {}) {
-    if (!model) return nullptr;
-    auto scene = std::make_shared<Scene>();
-    auto* temple = scene->create_entity("Sun Temple");
-    temple->add_component<TransformComponent>();
-    temple->add_component<MeshRendererComponent>()->set_model(model);
 
     auto* camera_entity = scene->create_entity("Camera");
     auto* camera_transform = camera_entity->add_component<TransformComponent>();

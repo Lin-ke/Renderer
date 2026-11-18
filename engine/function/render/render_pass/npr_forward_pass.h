@@ -33,7 +33,7 @@ struct NPRPerObjectData {
 };
 
 // NPR Material data structure (matches HLSL cbuffer)
-// Size must be 16-byte aligned for DX11 constant buffers
+// Match the HLSL constant buffer's 16-byte layout
 struct NPRMaterialData {
     Vec4 albedo;           // 16 bytes - base color
     Vec4 emission;         // 16 bytes
@@ -121,6 +121,9 @@ public:
     PassType get_type() const override { return PassType::Forward; }
     
 private:
+    void record_batches(RHICommandListRef cmd, const std::vector<DrawBatch>& batches, const Extent2D& extent,
+                        const NPRPerFrameData& frame_data, const RHIGraphicsPipelineRef& pipeline,
+                        const RHITextureRef& depth_texture);
     void create_shaders();
     void create_uniform_buffers();
     void create_pipeline();

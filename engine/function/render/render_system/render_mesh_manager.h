@@ -13,6 +13,9 @@
 class MeshRendererComponent;
 class CameraComponent;
 class RDGBuilder;
+class Scene;
+struct RenderCamera;
+struct RenderLights;
 
 namespace render {
     class ForwardPass;
@@ -35,7 +38,7 @@ class RenderMeshManager {
 public:
     void init();
     void destroy();
-    void tick();
+    void prepare_batches(const std::vector<render::DrawBatch>& instances, const RenderCamera* camera);
 
     /**
      * @brief Register a mesh renderer component for rendering
@@ -86,6 +89,8 @@ public:
      * @param batches Output vector to fill with draw batches
      */
     void collect_draw_batches(std::vector<render::DrawBatch>& batches);
+    void collect_draw_batches(const Scene* scene, std::vector<render::DrawBatch>& batches,
+                              const Mat4* view_projection = nullptr);
     const std::vector<render::DrawBatch>& get_current_batches() const { return current_batches_; }
 
     /**
@@ -97,8 +102,8 @@ public:
      * @param enable_npr Enable NPR forward rendering path
      */
     void build_rdg(RDGBuilder& builder, RDGTextureHandle color_target,
-                   std::optional<RDGTextureHandle> depth_target,
-                   bool enable_pbr = true, bool enable_npr = true);
+                   RDGTextureHandle depth_target, const RenderCamera& camera,
+                   const RenderLights& lights, bool enable_pbr, bool enable_npr);
     
     /**
      * @brief Cleanup runtime state for testing (keeps passes initialized)

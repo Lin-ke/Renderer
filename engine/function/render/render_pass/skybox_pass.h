@@ -14,6 +14,12 @@ using MeshRef = std::shared_ptr<Mesh>;
 
 namespace render {
 
+struct SkyboxDrawData {
+    RHITextureRef texture;
+    float intensity;
+    float scale;
+};
+
 /**
  * @brief Skybox rendering pass
  * 
@@ -42,7 +48,7 @@ public:
      */
     void build(RDGBuilder& builder, RDGTextureHandle color_target,
                RDGTextureHandle depth_target, const Mat4& view, const Mat4& proj,
-               const std::vector<SkyboxComponent*>& skyboxes);
+               const std::vector<SkyboxDrawData>& skyboxes);
 
     PassType get_type() const override { return PassType::Forward; }
     std::string_view get_name() const override { return "SkyboxPass"; }
@@ -98,8 +104,6 @@ private:
         float _padding[3]; // 16 bytes alignment
     };
 
-    PerFrameData per_frame_data_;
-    bool per_frame_dirty_ = true;
     bool initialized_ = false;
 };
 

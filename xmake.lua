@@ -3,8 +3,8 @@ add_rules("plugin.compile_commands.autoupdate", {outputdir = ".vscode"})
 
 
 add_requires("glog", {configs = {gflags = false}})
-add_requires("stb", "assimp", "cereal", "stduuid", "catch2", "zlib", "directxtex")
-add_requires("imgui", {configs = {win32 = true, dx11 = true, dx12 = true}})
+add_requires("stb", "assimp", "cereal", "stduuid", "catch2", "zlib", "directxtex", "zstd")
+add_requires("imgui", {configs = {win32 = true, dx12 = true}})
 add_requires("imguizmo", {configs = {cxflags = "-DIMGUI_DEFINE_MATH_OPERATORS"}})
 
 set_encodings("utf-8")
@@ -23,12 +23,15 @@ target("engine")
     set_kind("static")
     set_languages("c++20")
     add_defines("IMGUI_DEFINE_MATH_OPERATORS", {public = true})
+    -- Assimp links a separate copy of RapidJSON. Keep cereal's symbols distinct.
+    add_defines("CEREAL_RAPIDJSON_NAMESPACE=renderer_cereal_json", {public = true})
     add_includedirs(".", {public = true})
     add_files("engine/**.cpp")
     remove_files("RD/**.cpp")
 
-    add_packages("imgui", "imguizmo", "stb", "assimp", "cereal", "glog", "stduuid", "directxtex", {public = true} )
-    add_syslinks("d3d12", "d3d11", "dxgi", "dxguid", "D3DCompiler", "d2d1", "dwrite", "winmm", "user32", "gdi32", "ole32")
+    add_packages("imgui", "imguizmo", "stb", "assimp", "cereal", "glog", "stduuid", {public = true} )
+    add_packages("directxtex", "zstd")
+    add_syslinks("d3d12", "dxgi", "dxguid", "D3DCompiler", "d2d1", "dwrite", "winmm", "user32", "gdi32", "ole32")
 
     -- Compile shaders before building the engine
     -- before_build(function (target)

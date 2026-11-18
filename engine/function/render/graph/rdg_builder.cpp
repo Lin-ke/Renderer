@@ -10,6 +10,7 @@
 #include "engine/function/render/rhi/rhi_structs.h"
 #include "engine/function/render/rhi/rhi_resource.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <string>
@@ -122,10 +123,27 @@ RDGBufferHandle RDGBuilder::get_buffer(std::string name) {
 
 bool RDGBuilder::execute() {
     if (!compile()) return false;
+    return execute_compiled(command_, EngineContext::current_frame_index());
+}
+
+bool RDGBuilder::execute_compiled(RHICommandListRef command, uint32_t frame_slot) {
+    if (!compiled_) return false;
+    compile_info_.error.clear();
+    command_ = std::move(command);
+    frame_slot_ = frame_slot;
     if (!execution_passes_.empty() && !command_) {
         compile_info_.error = "RDG execution requires a command list";
         ERR(LogRDGBuilder, "{}", compile_info_.error);
         return false;
+    }
+    for (const auto& [id, lifetime] : resource_lifetimes_) {
+        auto* texture = dynamic_cast<RDGTextureNode*>(graph_->GetNode(id));
+        if (texture && texture->is_imported() && !texture->texture_) {
+            compile_info_.error = "RDG external texture '" + texture->name() + "' is unbound before " +
+                execution_passes_[lifetime.first_use]->name();
+            ERR(LogRDGBuilder, "{}", compile_info_.error);
+            return false;
+        }
     }
     for (auto& pass : execution_passes_) {
         if (!pass) continue;
@@ -145,7 +163,7 @@ bool RDGBuilder::execute() {
 
     for (auto& pass : passes_) {
         for (auto& descriptor : pass->pooled_descriptor_sets_) {
-            RDGDescriptorSetPool::get(EngineContext::current_frame_index())->release(
+            RDGDescriptorSetPool::get(frame_slot_)->release(
                 {descriptor.first}, pass->root_signature_, descriptor.second);
         }
     }
@@ -155,10 +173,21 @@ bool RDGBuilder::execute() {
     for (auto& [id, output] : extracted_buffers_)
         *output = resolve(static_cast<RDGBufferNode*>(graph_->GetNode(id)));
     extracted_textures_.clear(); extracted_buffers_.clear();
-    execution_passes_.clear(); resource_keys_.clear(); texture_usages_.clear(); buffer_usages_.clear();
+    execution_passes_.clear(); resource_keys_.clear(); resource_lifetimes_.clear(); texture_usages_.clear(); buffer_usages_.clear();
     passes_.clear();
     graph_ = std::make_shared<DependencyGraph::DependencyGraph>();
     black_board_.clear();
+    compiled_ = false;
+    return true;
+}
+
+bool RDGBuilder::bind_external_texture(RDGTextureHandle handle, const RHITextureRef& texture) {
+    auto* node = dynamic_cast<RDGTextureNode*>(graph_->GetNode(handle.id()));
+    if (!compiled_ || !node || !node->is_imported() || node->texture_ || !texture ||
+        node->info_ != texture->get_info()) {
+        return false;
+    }
+    node->texture_ = texture;
     return true;
 }
 
@@ -233,7 +262,7 @@ void RDGBuilder::prepare_descriptor_set(RDGPassNodeRef pass) {
         pass->pooled_views_.push_back(view);
 
         if (pass->descriptor_sets_[edge->set] == nullptr && pass->root_signature_ != nullptr) {
-            auto descriptor = RDGDescriptorSetPool::get(EngineContext::current_frame_index())
+            auto descriptor = RDGDescriptorSetPool::get(frame_slot_)
                                   ->allocate(pass->root_signature_, edge->set)
                                   .descriptor;
             pass->descriptor_sets_[edge->set] = descriptor;
@@ -254,7 +283,7 @@ void RDGBuilder::prepare_descriptor_set(RDGPassNodeRef pass) {
     pass->for_each_buffer([&](RDGBufferEdgeRef edge, RDGBufferNodeRef buffer) {
         if (!edge->as_shader_read && !edge->as_shader_read_write) return;
         if (pass->descriptor_sets_[edge->set] == nullptr && pass->root_signature_ != nullptr) {
-            auto descriptor = RDGDescriptorSetPool::get(EngineContext::current_frame_index())
+            auto descriptor = RDGDescriptorSetPool::get(frame_slot_)
                                   ->allocate(pass->root_signature_, edge->set)
                                   .descriptor;
             pass->descriptor_sets_[edge->set] = descriptor;
@@ -348,7 +377,8 @@ void RDGBuilder::execute_pass(RDGRenderPassNodeRef pass) {
     RDGPassContext context = {
         .command = command_,
         .builder = this,
-        .descriptors = pass->descriptor_sets_
+        .descriptors = pass->descriptor_sets_,
+        .frame_slot = frame_slot_
     };
     context.pass_index[0] = pass->pass_index_[0];
     context.pass_index[1] = pass->pass_index_[1];
@@ -383,7 +413,8 @@ void RDGBuilder::execute_pass(RDGComputePassNodeRef pass) {
     RDGPassContext context = {
         .command = command_,
         .builder = this,
-        .descriptors = pass->descriptor_sets_
+        .descriptors = pass->descriptor_sets_,
+        .frame_slot = frame_slot_
     };
     context.pass_index[0] = pass->pass_index_[0];
     context.pass_index[1] = pass->pass_index_[1];
@@ -412,7 +443,8 @@ void RDGBuilder::execute_pass(RDGRayTracingPassNodeRef pass) {
     RDGPassContext context = {
         .command = command_,
         .builder = this,
-        .descriptors = pass->descriptor_sets_
+        .descriptors = pass->descriptor_sets_,
+        .frame_slot = frame_slot_
     };
     context.pass_index[0] = pass->pass_index_[0];
     context.pass_index[1] = pass->pass_index_[1];
@@ -535,6 +567,7 @@ void RDGBuilder::execute_pass(RDGCopyPassNodeRef pass) {
 
 RHITextureRef RDGBuilder::resolve(RDGTextureNodeRef texture_node) {
     if (texture_node->texture_ == nullptr) {
+        if (texture_node->is_imported()) return nullptr;
         auto pooled_texture = RDGTexturePool::get()->allocate(texture_node->info_);
         texture_node->texture_ = pooled_texture.texture;
         texture_node->init_state_ = pooled_texture.state;
@@ -647,37 +680,22 @@ RHIResourceState RDGBuilder::previous_state(RDGBufferNodeRef buffer_node, RDGPas
     return previous_state;
 }
 
-bool RDGBuilder::is_last_used_pass(RDGTextureNodeRef texture_node, RDGPassNodeRef pass_node, bool output) {
-    NodeID current_id = pass_node->execution_index();
-    bool last = true;
-
-    for (const auto& [pass, edge] : texture_usages_[resource_key(texture_node)]) {
-        if (pass->is_culled()) continue;
-        if (pass->execution_index() > current_id) last = false;
-        if (!output && pass->execution_index() == current_id && edge->is_output()) last = false;
-    }
-
-    return last;
-}
-
-bool RDGBuilder::is_last_used_pass(RDGBufferNodeRef buffer_node, RDGPassNodeRef pass_node, bool output) {
-    NodeID current_id = pass_node->execution_index();
-    bool last = true;
-
-    for (const auto& [pass, edge] : buffer_usages_[resource_key(buffer_node)]) {
-        if (pass->is_culled()) continue;
-        if (pass->execution_index() > current_id) last = false;
-        if (!output && pass->execution_index() == current_id && edge->is_output()) last = false;
-    }
-
-    return last;
+bool RDGBuilder::is_last_used_pass(RDGResourceNodeRef resource, RDGPassNodeRef pass, bool output) {
+    const auto it = resource_lifetimes_.find(resource_key(resource));
+    return it != resource_lifetimes_.end() && it->second.last_use == pass->execution_index() &&
+        (output || !it->second.last_use_has_output);
 }
 
 RDGTextureBuilder& RDGTextureBuilder::import(RHITextureRef texture, RHIResourceState init_state) {
-    this->texture_->is_imported_ = true;
+    import(texture->get_info(), init_state);
     this->texture_->texture_ = texture;
-    this->texture_->info_ = texture->get_info();
-    this->texture_->init_state_ = init_state;
+    return *this;
+}
+
+RDGTextureBuilder& RDGTextureBuilder::import(const RHITextureInfo& info, RHIResourceState init_state) {
+    texture_->is_imported_ = true;
+    texture_->info_ = info;
+    texture_->init_state_ = init_state;
     return *this;
 }
 

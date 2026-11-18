@@ -1,4 +1,4 @@
-#include <catch2/catch_test_macros.hpp>
+#include "test/test_assertions.h"
 #include <catch2/catch_approx.hpp>
 #include "test/test_utils.h"
 #include "engine/main/engine_context.h"
@@ -14,11 +14,9 @@
 #include "engine/function/render/render_resource/material.h"
 #include "engine/function/render/render_resource/texture.h"
 #include "engine/function/render/render_system/render_system.h"
-#include "engine/function/render/render_system/render_mesh_manager.h"
 #include "engine/function/input/input.h"
 #include "engine/core/log/Log.h"
 #include "engine/function/asset/asset_manager.h"
-#include "engine/core/utils/path_utils.h"
 
 #include <thread>
 #include <chrono>
@@ -77,10 +75,7 @@ static bool create_npr_scene(const std::string& scene_path) {
     
     // Reimport the fixture so old cached assets cannot hide missing mesh data
     // or a different material import setting.
-    auto physical_path = EngineContext::asset()->get_physical_path(KLEE_MODEL_PATH);
-    if (!physical_path) return false;
-    ModelImporter importer;
-    auto npr_model = importer.import_model(physical_path->string(), "/Game/render_fixtures/klee", npr_setting);
+    auto npr_model = test_utils::import_test_model(KLEE_MODEL_PATH, "/Game/render_fixtures/klee", npr_setting);
     if (!npr_model || npr_model->get_submesh_count() == 0) {
         ERR(LogNPRTest, "Failed to load Klee model");
         return false;
@@ -138,46 +133,23 @@ static bool create_npr_scene(const std::string& scene_path) {
     return true;
 }
 
-static void on_scene_loaded(test_utils::SceneLoadResult& result) {
-    // Set active camera for rendering
-    if (auto mesh_manager = EngineContext::render_system()->get_mesh_manager()) {
-        mesh_manager->set_active_camera(result.camera);
-    }
-}
-
 TEST_CASE("NPR Klee rendering", "[npr]") {
     test_utils::TestContext::reset();
     
-    std::string test_asset_dir = (utils::get_engine_path() / "test/test_internal").string();
     REQUIRE(EngineContext::rhi() != nullptr);
     REQUIRE(EngineContext::render_system() != nullptr);
     REQUIRE(EngineContext::world() != nullptr);
     
     test_utils::RenderTestApp::Config config;
     config.scene_path = NPR_SCENE_PATH;
-    config.width = 1280;
-    config.height = 720;
     config.max_frames = 60;
     config.capture_frame = 45;  // Capture at frame 45 for NPR
     config.create_scene_func = create_npr_scene;
     
-    config.on_scene_loaded_func = on_scene_loaded;
     
     std::vector<uint8_t> screenshot;
-    int frames = 0;
-    bool captured = test_utils::RenderTestApp::run(config, screenshot, &frames);
-    REQUIRE(captured);
-    
-    REQUIRE(frames > 0);
-    
-    if (captured) {
-        std::string screenshot_path = test_asset_dir + "/klee_npr.png";
-        if (test_utils::save_screenshot_png(screenshot_path, config.width, config.height, screenshot)) {
-            float brightness = test_utils::calculate_average_brightness(screenshot);
-            INFO(LogNPRTest, "Screenshot saved: {} (brightness: {:.1f})", screenshot_path, brightness);
-            REQUIRE(brightness > 0.0f);
-        }
-    }
-    
+    REQUIRE(test_utils::RenderTestApp::run(config, screenshot));
+    CHECK(test_utils::calculate_average_brightness(screenshot) > 0.0f);
+
     test_utils::TestContext::reset();
 }

@@ -20,22 +20,16 @@ public:
     ~EditorUIPass() override;
 
     void init() override;
-    void build(RDGBuilder& builder) override;
+    void build(RDGBuilder& builder, RDGTextureHandle color, Extent2D extent,
+               std::shared_ptr<ImDrawData> draw_data);
 
     std::string_view get_name() const override { return "EditorUIPass"; }
     PassType get_type() const override { return PassType::EditorUI; }
 
     bool is_ready() const { return initialized_; }
 
-    /**
-     * @brief Set the function that will draw all ImGui UI elements
-     * @param draw_func Function that contains all ImGui:: calls
-     */
-    void set_ui_draw_function(std::function<void()> draw_func) { ui_draw_func_ = std::move(draw_func); }
-
 private:
     bool initialized_ = false;
-    std::function<void()> ui_draw_func_;
 };
 
 } // namespace render

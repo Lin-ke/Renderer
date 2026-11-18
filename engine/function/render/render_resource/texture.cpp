@@ -1,17 +1,59 @@
-#define STB_IMAGE_IMPLEMENTATION
-#include <stb/stb_image.h>
 #include "engine/function/render/render_resource/texture.h"
 #include "engine/function/render/render_resource/image_decode.h"
 #include "engine/main/engine_context.h"
 #include "engine/core/log/Log.h"
 #include "engine/function/asset/asset_manager.h"
 #include "engine/core/utils/profiler.h"
+#include <zstd.h>
+#include <array>
 #include <cassert>
+#include <cstring>
 #include <fstream>
 #include <filesystem>
 
 DECLARE_LOG_TAG(LogRenderResource);
 DEFINE_LOG_TAG(LogRenderResource, "RenderResource");
+
+namespace {
+// The existing image_data entry contains a BCZ1 header followed by one Zstd
+// frame of tightly packed BC mip blocks. Older entries hold source images.
+constexpr uint32_t bc_zstd_magic = 0x315a4342;
+using BcHeader = std::array<uint32_t, 5>; // magic, format, width, height, mip count
+
+bool is_bc_payload(std::span<const uint8_t> bytes) {
+    return bytes.size() >= 4 && std::memcmp(bytes.data(), "BCZ1", 4) == 0;
+}
+
+bool compress_bc_dds(std::vector<uint8_t>& bytes, RHIFormat requested) {
+    const auto image = decode_dds_bc(bytes, requested);
+    if (!image) return false;
+    const BcHeader header{bc_zstd_magic, image->format, image->extent.width, image->extent.height, image->mip_levels};
+    std::vector<uint8_t> encoded(sizeof(header) + ZSTD_compressBound(image->blocks.size()));
+    const size_t size = ZSTD_compress(encoded.data() + sizeof(header), encoded.size() - sizeof(header),
+        image->blocks.data(), image->blocks.size(), 1);
+    if (ZSTD_isError(size)) return false;
+    std::memcpy(encoded.data(), header.data(), sizeof(header));
+    encoded.resize(sizeof(header) + size);
+    bytes = std::move(encoded);
+    return true;
+}
+
+std::optional<BcImage> read_bc_payload(std::span<const uint8_t> bytes) {
+    BcHeader header{};
+    if (bytes.size() <= sizeof(header)) return std::nullopt;
+    std::memcpy(header.data(), bytes.data(), sizeof(header));
+    BcImage image{static_cast<RHIFormat>(header[1]), {header[2], header[3], 1}, header[4], {}};
+    if (!valid_bc_layout(image.format, image.extent, image.mip_levels)) return std::nullopt;
+    size_t size = 0;
+    for (uint32_t mip = 0; mip < image.mip_levels; ++mip) size += bc_mip_size(image.format, image.extent, mip);
+    const auto payload = bytes.subspan(sizeof(header));
+    if (ZSTD_getFrameContentSize(payload.data(), payload.size()) != size) return std::nullopt;
+    image.blocks.resize(size);
+    if (ZSTD_decompress(image.blocks.data(), size, payload.data(), payload.size()) != size) return std::nullopt;
+    return image;
+}
+
+} // namespace
 
 TextureViewType texture_type_to_view_type(TextureType type) {
     switch (type) {
@@ -28,7 +70,7 @@ TextureViewType texture_type_to_view_type(TextureType type) {
 void Texture::set_name(const std::string& name) {
     name_ = name;
     if (texture_ && EngineContext::rhi()) {
-        EngineContext::rhi()->set_name(texture_, name);
+        EngineContext::run_device_task([&] { EngineContext::rhi()->set_name(texture_, name); });
     }
 }
 
@@ -52,7 +94,7 @@ Texture::Texture(const std::vector<std::string>& paths, TextureType type, RHIFor
 Texture::Texture(TextureType type, RHIFormat format, Extent3D extent, uint32_t array_layer, uint32_t mip_levels)
     : texture_type_(type), format_(format), extent_(extent), array_layer_(array_layer) {
     mip_levels_ = mip_levels == 0 ? extent.mip_size() : mip_levels;
-    init_rhi();
+    init_rhi(format_);
 }
 
 Texture::Texture(SkipInit, TextureType type, RHIFormat format, Extent3D extent, uint32_t array_layer, uint32_t mip_levels)
@@ -67,11 +109,11 @@ Texture::~Texture() {
 void Texture::on_load() {
     PROFILE_SCOPE("Texture::on_load");
     if (!image_data_.empty()) {
-        load_from_image_data();
+        load_from_image_data(false);
     } else if (paths_.size() > 0) {
-        load_from_file();
+        load_from_file(false);
     } else {
-        init_rhi();
+        init_rhi(format_);
     }
 }
 
@@ -80,6 +122,9 @@ void Texture::on_save() {
     ensure_virtual_paths();
     if (image_data_.empty() && !paths_.empty()) {
         capture_image_data();
+    }
+    if (texture_type_ == TextureType::Texture2D && array_layer_ == 1 && image_data_.size() == 1) {
+        compress_bc_dds(image_data_.front(), format_);
     }
 }
 
@@ -103,66 +148,68 @@ void Texture::ensure_virtual_paths() {
     }
 }
 
-void Texture::init_rhi() {
+void Texture::init_rhi(RHIFormat gpu_format) {
     if (!EngineContext::rhi()) {
         return;
     }
-    ResourceType resource_type = (texture_type_ == TextureType::TextureCube) ? 
-        (RESOURCE_TYPE_TEXTURE_CUBE | RESOURCE_TYPE_TEXTURE) : RESOURCE_TYPE_TEXTURE;
-    
-    if (is_rw_format(format_)) {
-        resource_type |= RESOURCE_TYPE_RW_TEXTURE;
-    }
-    
-    if (is_depth_format(format_)) {
-        resource_type |= RESOURCE_TYPE_DEPTH_STENCIL;
-    }
+    EngineContext::run_device_task([&] {
+        ResourceType resource_type = (texture_type_ == TextureType::TextureCube) ?
+            (RESOURCE_TYPE_TEXTURE_CUBE | RESOURCE_TYPE_TEXTURE) : RESOURCE_TYPE_TEXTURE;
 
-    TextureAspectFlags aspects = TEXTURE_ASPECT_COLOR;
-    if (is_depth_stencil_format(format_)) {
-        aspects = TEXTURE_ASPECT_DEPTH_STENCIL;
-    } else if (is_depth_format(format_)) {
-        aspects = TEXTURE_ASPECT_DEPTH;
-    } else if (is_stencil_format(format_)) {
-        aspects = TEXTURE_ASPECT_STENCIL;
-    }
+        if (is_rw_format(gpu_format)) {
+            resource_type |= RESOURCE_TYPE_RW_TEXTURE;
+        }
 
-    RHITextureInfo info = {};
-    info.format = format_;
-    info.extent = extent_;
-    info.array_layers = array_layer_;
-    info.mip_levels = mip_levels_;
-    info.memory_usage = MEMORY_USAGE_GPU_ONLY;
-    info.type = resource_type;
-    info.creation_flag = TEXTURE_CREATION_NONE;
-    
-    texture_ = EngineContext::rhi()->create_texture(info);
-    if (!texture_) {
-        return;
-    }
-    
-    if (!name_.empty()) {
-        EngineContext::rhi()->set_name(texture_, name_);
-    }
+        if (is_depth_format(gpu_format)) {
+            resource_type |= RESOURCE_TYPE_DEPTH_STENCIL;
+        }
 
-    RHITextureViewInfo view_info = {};
-    view_info.texture = texture_;
-    view_info.format = format_;
-    view_info.view_type = texture_type_to_view_type(texture_type_);
-    view_info.subresource = { aspects, 0, mip_levels_, 0, array_layer_ };
-    
-    texture_view_ = EngineContext::rhi()->create_texture_view(view_info);
+        TextureAspectFlags aspects = TEXTURE_ASPECT_COLOR;
+        if (is_depth_stencil_format(gpu_format)) {
+            aspects = TEXTURE_ASPECT_DEPTH_STENCIL;
+        } else if (is_depth_format(gpu_format)) {
+            aspects = TEXTURE_ASPECT_DEPTH;
+        } else if (is_stencil_format(gpu_format)) {
+            aspects = TEXTURE_ASPECT_STENCIL;
+        }
 
-    // Register with RenderResourceManager for bindless ID if available
-    if (EngineContext::render_resource()) {
-        BindlessResourceInfo res_info = {};
-        res_info.texture_view = texture_view_;
-        texture_id_ = EngineContext::render_resource()->allocate_bindless_id(res_info, BINDLESS_SLOT_TEXTURE_2D);
-        INFO(LogRenderResource, "Allocated texture ID: {} for {}", texture_id_, name_);
-    }
+        RHITextureInfo info = {};
+        info.format = gpu_format;
+        info.extent = extent_;
+        info.array_layers = array_layer_;
+        info.mip_levels = mip_levels_;
+        info.memory_usage = MEMORY_USAGE_GPU_ONLY;
+        info.type = resource_type;
+        info.creation_flag = TEXTURE_CREATION_NONE;
+
+        texture_ = EngineContext::rhi()->create_texture(info);
+        if (!texture_) {
+            return;
+        }
+
+        if (!name_.empty()) {
+            EngineContext::rhi()->set_name(texture_, name_);
+        }
+
+        RHITextureViewInfo view_info = {};
+        view_info.texture = texture_;
+        view_info.format = gpu_format;
+        view_info.view_type = texture_type_to_view_type(texture_type_);
+        view_info.subresource = { aspects, 0, mip_levels_, 0, array_layer_ };
+
+        texture_view_ = EngineContext::rhi()->create_texture_view(view_info);
+
+        // Register with RenderResourceManager for bindless ID if available
+        if (EngineContext::render_resource()) {
+            BindlessResourceInfo res_info = {};
+            res_info.texture_view = texture_view_;
+            texture_id_ = EngineContext::render_resource()->allocate_bindless_id(res_info, BINDLESS_SLOT_TEXTURE_2D);
+            INFO(LogRenderResource, "Allocated texture ID: {} for {}", texture_id_, name_);
+        }
+    });
 }
 
-void Texture::load_from_file() {
+void Texture::load_from_file(bool flush) {
     PROFILE_SCOPE("Texture::load_from_file");
     if (texture_type_ == TextureType::TextureCube && paths_.size() != 6) {
         ERR(LogRenderResource, "Wrong file num with texture type cube!");
@@ -204,94 +251,106 @@ void Texture::load_from_file() {
     }
 
     // Upload from image_data_ to GPU
-    load_from_image_data();
+    if (texture_type_ == TextureType::Texture2D && array_layer_ == 1 && image_data_.size() == 1) {
+        compress_bc_dds(image_data_.front(), format_);
+    }
+    load_from_image_data(flush);
 }
 
-void Texture::load_from_image_data() {
+bool Texture::upload_bc(RHIFormat gpu_format, Extent3D extent, uint32_t mip_levels,
+    std::span<const uint8_t> blocks, bool flush) {
+    auto backend = EngineContext::rhi();
+    auto staging = backend->create_buffer({.size = blocks.size(), .memory_usage = MEMORY_USAGE_CPU_ONLY,
+        .type = RESOURCE_TYPE_BUFFER, .creation_flag = BUFFER_CREATION_PERSISTENT_MAP});
+    if (!staging) return false;
+    void* mapped = staging->map();
+    if (!mapped) return false;
+    std::memcpy(mapped, blocks.data(), blocks.size());
+    staging->unmap();
+
+    extent_ = extent;
+    mip_levels_ = mip_levels;
+    init_rhi(gpu_format);
+    if (!texture_ || !texture_view_) return false;
+    auto command = backend->get_immediate_command();
+    const TextureSubresourceRange range{TEXTURE_ASPECT_COLOR, 0, mip_levels, 0, 1};
+    command->texture_barrier({texture_, RESOURCE_STATE_UNDEFINED, RESOURCE_STATE_TRANSFER_DST, range});
+    size_t offset = 0;
+    for (uint32_t mip = 0; mip < mip_levels; ++mip) {
+        command->copy_buffer_to_texture(staging, offset, texture_, {TEXTURE_ASPECT_COLOR, mip, 0, 1});
+        offset += bc_mip_size(gpu_format, extent, mip);
+    }
+    command->texture_barrier({texture_, RESOURCE_STATE_TRANSFER_DST, RESOURCE_STATE_SHADER_RESOURCE, range});
+    if (flush) {
+        command->flush();
+    }
+    return true;
+}
+
+void Texture::load_from_image_data(bool flush) {
     PROFILE_SCOPE("Texture::load_from_image_data");
     if (image_data_.empty() || !EngineContext::rhi()) return;
 
-    bool rhi_initialized = false;
-    std::vector<RHIBufferRef> staging_buffers;
-    
-    auto immediate_command = EngineContext::rhi()->get_immediate_command();
-    
-    for (uint32_t i = 0; i < (uint32_t)image_data_.size(); ++i) {
-        if (image_data_[i].empty()) continue;
-
-        auto decoded = decode_image_rgba(image_data_[i]);
+    struct Layer {
+        uint32_t index;
+        DecodedImage image;
+    };
+    std::vector<Layer> layers;
+    for (uint32_t i = 0; i < image_data_.size(); ++i) {
+        const auto& bytes = image_data_[i];
+        if (bytes.empty()) continue;
+        if (is_bc_payload(bytes)) {
+            const auto bc = read_bc_payload(bytes);
+            bool uploaded = false;
+            if (bc) {
+                EngineContext::run_device_task([&] {
+                    uploaded = upload_bc(bc->format, bc->extent, bc->mip_levels, bc->blocks, flush);
+                });
+            }
+            if (!uploaded) ERR(LogRenderResource, "Failed to upload embedded BC texture '{}'", name_);
+            return;
+        }
+        auto decoded = decode_image_rgba(bytes);
         if (!decoded) {
             ERR(LogRenderResource, "Failed to decode embedded image data[{}]", i);
             continue;
         }
-        const uint32_t width = decoded->width, height = decoded->height;
-        const auto* pixels = decoded->pixels.data();
+        layers.push_back({i, std::move(*decoded)});
+    }
+    if (layers.empty()) return;
 
-        if (!rhi_initialized) {
-            extent_ = {(uint32_t)width, (uint32_t)height, 1};
-            mip_levels_ = extent_.mip_size();
-            INFO(LogRenderResource, "Texture init: {}x{}, mip_levels={}", width, height, mip_levels_);
-            init_rhi();
-            rhi_initialized = true;
+    EngineContext::run_device_task([&] {
+        auto backend = EngineContext::rhi();
+        extent_ = {layers.front().image.width, layers.front().image.height, 1};
+        mip_levels_ = extent_.mip_size();
+        init_rhi(format_);
+        if (!texture_) return;
+
+        auto command = backend->get_immediate_command();
+        std::vector<RHIBufferRef> staging_buffers;
+        for (const auto& layer : layers) {
+            const auto& pixels = layer.image.pixels;
+            auto staging = backend->create_buffer({.size = pixels.size(), .memory_usage = MEMORY_USAGE_CPU_ONLY,
+                .type = RESOURCE_TYPE_BUFFER, .creation_flag = BUFFER_CREATION_PERSISTENT_MAP});
+            if (!staging) continue;
+            void* mapped = staging->map();
+            if (!mapped) continue;
+            std::memcpy(mapped, pixels.data(), pixels.size());
+            staging->unmap();
+            command->texture_barrier({texture_, RESOURCE_STATE_UNDEFINED, RESOURCE_STATE_TRANSFER_DST,
+                                      {TEXTURE_ASPECT_COLOR, 0, mip_levels_, layer.index, 1}});
+            command->copy_buffer_to_texture(staging, 0, texture_, {TEXTURE_ASPECT_COLOR, 0, layer.index, 1});
+            staging_buffers.push_back(std::move(staging));
         }
 
-        if (EngineContext::rhi()) {
-            uint32_t row_pitch = width * 4;
-            // RHI takes tightly packed rows; each backend handles API alignment.
-            uint32_t total_size = row_pitch * height;
-            
-            RHIBufferInfo staging_info = {};
-            staging_info.size = total_size;
-            staging_info.memory_usage = MEMORY_USAGE_CPU_ONLY;
-            staging_info.type = RESOURCE_TYPE_BUFFER;
-            staging_info.creation_flag = BUFFER_CREATION_PERSISTENT_MAP;
-
-            RHIBufferRef staging_buffer = EngineContext::rhi()->create_buffer(staging_info);
-            void* mapped = staging_buffer->map();
-            
-            memcpy(mapped, pixels, total_size);
-            
-            staging_buffer->unmap();
-            
-            immediate_command->texture_barrier({
-                texture_,
-                RESOURCE_STATE_UNDEFINED,
-                RESOURCE_STATE_TRANSFER_DST,
-                {TEXTURE_ASPECT_COLOR, 0, mip_levels_, i, 1}
-            });
-
-            immediate_command->copy_buffer_to_texture(
-                staging_buffer,
-                0,
-                texture_,
-                {TEXTURE_ASPECT_COLOR, 0, i, 1}
-            );
-            
-            staging_buffers.push_back(staging_buffer);
+        const TextureSubresourceRange range{TEXTURE_ASPECT_COLOR, 0, mip_levels_, 0, array_layer_};
+        command->texture_barrier({texture_, RESOURCE_STATE_TRANSFER_DST, RESOURCE_STATE_TRANSFER_SRC, range});
+        command->generate_mips(texture_);
+        command->texture_barrier({texture_, RESOURCE_STATE_TRANSFER_SRC, RESOURCE_STATE_SHADER_RESOURCE, range});
+        if (flush) {
+            command->flush();
         }
-
-    }
-
-    if (rhi_initialized && EngineContext::rhi()) {
-        immediate_command->texture_barrier({
-            texture_,
-            RESOURCE_STATE_TRANSFER_DST,
-            RESOURCE_STATE_TRANSFER_SRC,
-            {TEXTURE_ASPECT_COLOR, 0, mip_levels_, 0, array_layer_}
-        });
-
-        immediate_command->generate_mips(texture_);
-
-        immediate_command->texture_barrier({
-            texture_,
-            RESOURCE_STATE_TRANSFER_SRC,
-            RESOURCE_STATE_SHADER_RESOURCE,
-            {TEXTURE_ASPECT_COLOR, 0, mip_levels_, 0, array_layer_}
-        });
-
-        immediate_command->flush();
-        staging_buffers.clear();
-    }
+    });
 }
 
 void Texture::capture_image_data() {
@@ -328,41 +387,43 @@ void Texture::set_data(void* data, uint32_t size) {
     if (!EngineContext::rhi()) {
         return;
     }
-    RHIBufferInfo staging_info = {};
-    staging_info.size = size;
-    staging_info.memory_usage = MEMORY_USAGE_CPU_ONLY;
-    staging_info.type = RESOURCE_TYPE_BUFFER;
-    staging_info.creation_flag = BUFFER_CREATION_PERSISTENT_MAP;
+    EngineContext::run_device_task([&] {
+        RHIBufferInfo staging_info = {};
+        staging_info.size = size;
+        staging_info.memory_usage = MEMORY_USAGE_CPU_ONLY;
+        staging_info.type = RESOURCE_TYPE_BUFFER;
+        staging_info.creation_flag = BUFFER_CREATION_PERSISTENT_MAP;
 
-    RHIBufferRef staging_buffer = EngineContext::rhi()->create_buffer(staging_info);
-    void* mapped_data = staging_buffer->map();
-    memcpy(mapped_data, data, size);
-    staging_buffer->unmap();
+        RHIBufferRef staging_buffer = EngineContext::rhi()->create_buffer(staging_info);
+        void* mapped_data = staging_buffer->map();
+        memcpy(mapped_data, data, size);
+        staging_buffer->unmap();
 
-    auto immediate_command = EngineContext::rhi()->get_immediate_command();
-    
-    immediate_command->texture_barrier({
-        texture_,
-        RESOURCE_STATE_UNDEFINED,
-        RESOURCE_STATE_TRANSFER_DST,
-        {TEXTURE_ASPECT_COLOR, 0, mip_levels_, 0, array_layer_}
+        auto immediate_command = EngineContext::rhi()->get_immediate_command();
+
+        immediate_command->texture_barrier({
+            texture_,
+            RESOURCE_STATE_UNDEFINED,
+            RESOURCE_STATE_TRANSFER_DST,
+            {TEXTURE_ASPECT_COLOR, 0, mip_levels_, 0, array_layer_}
+        });
+
+        immediate_command->copy_buffer_to_texture(
+            staging_buffer,
+            0,
+            texture_,
+            {TEXTURE_ASPECT_COLOR, 0, 0, array_layer_}
+        );
+
+        immediate_command->texture_barrier({
+            texture_,
+            RESOURCE_STATE_TRANSFER_DST,
+            RESOURCE_STATE_SHADER_RESOURCE,
+            {TEXTURE_ASPECT_COLOR, 0, mip_levels_, 0, array_layer_}
+        });
+
+        immediate_command->flush();
     });
-
-    immediate_command->copy_buffer_to_texture(
-        staging_buffer,
-        0,
-        texture_,
-        {TEXTURE_ASPECT_COLOR, 0, 0, array_layer_}
-    );
-
-    immediate_command->texture_barrier({
-        texture_,
-        RESOURCE_STATE_TRANSFER_DST,
-        RESOURCE_STATE_SHADER_RESOURCE,
-        {TEXTURE_ASPECT_COLOR, 0, mip_levels_, 0, array_layer_}
-    });
-
-    immediate_command->flush();
 }
 
 #include <cereal/archives/binary.hpp>

@@ -1,4 +1,4 @@
-#include <catch2/catch_test_macros.hpp>
+#include "test/test_assertions.h"
 #include "test/test_utils.h"
 #include "engine/main/engine_context.h"
 #include "engine/function/framework/world.h"
@@ -12,7 +12,6 @@
 #include "engine/function/render/render_resource/material.h"
 #include "engine/function/render/render_system/render_system.h"
 #include "engine/function/asset/asset_manager.h"
-#include "engine/core/utils/path_utils.h"
 #include "engine/core/log/Log.h"
 
 /**
@@ -52,7 +51,7 @@ static bool create_rdg_scene(const std::string& scene_path) {
     setting.smooth_normal = true;
     setting.load_materials = false;
     
-    auto model = Model::Load(MODEL_PATH, setting);
+    auto model = test_utils::import_test_model(MODEL_PATH, scene_path + ".model", setting);
     if (!model || model->get_submesh_count() == 0) {
         ERR(LogRDGTest, "Failed to load model");
         return false;
@@ -75,15 +74,12 @@ static bool create_rdg_scene(const std::string& scene_path) {
 TEST_CASE("RDG forward rendering", "[rdg]") {
     test_utils::TestContext::reset();
     
-    std::string test_asset_dir = (utils::get_engine_path() / "test/test_internal").string();
     REQUIRE(EngineContext::rhi() != nullptr);
     REQUIRE(EngineContext::render_system() != nullptr);
     REQUIRE(EngineContext::world() != nullptr);
     
     test_utils::RenderTestApp::Config config;
     config.scene_path = RDG_SCENE_PATH;
-    config.width = 1280;
-    config.height = 720;
     config.max_frames = 60;
     config.capture_frame = 30;
     config.create_scene_func = create_rdg_scene;
