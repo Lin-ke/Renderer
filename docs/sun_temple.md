@@ -1,10 +1,8 @@
 # Sun Temple 导入与查看
 
-使用 ORCA SunTemple_v4 的 `SunTemple.fbx`、`Textures/*.dds` 和 `SunTemple_Skybox.hdr`。
-资源包 README 规定 `Specular.dds` 的 RGB 分别为 AO、Roughness、Metallic，法线采用 DirectX 约定。
-原始资源随仓库保存在 `game/assets/sun_temple/source/`，转换结果保存在 `game/assets/sun_temple/`。
-FBX、DDS、HDR 和二进制原生资源使用 Git LFS；克隆后先运行 `git lfs pull`。
-资源许可与署名文件保留在 `source/LICENSE.txt` 和 `source/README.txt` 中。
+从 [NVIDIA ORCA 的 UE4 Sun Temple 页面](https://developer.nvidia.com/ue4-sun-temple) 下载 `SunTemple_v4.zip`。解压后，把包含 `SunTemple.fbx`、`Textures/` 和 `SunTemple_Skybox.hdr` 的目录放到 `game/assets/sun_temple/source/`，或在下面的命令中传入该目录的实际路径。
+
+导入生成的 `.asset` 和 `.binasset` 保存在本地 `game/assets/sun_temple/`。Git 会忽略这个目录中的源文件和生成文件。资源包的 `LICENSE.txt` 和 `README.txt` 记录许可、署名及贴图约定。`Specular.dds` 的 RGB 分别为 AO、Roughness、Metallic，法线采用 DirectX 约定。
 
 ```powershell
 xmake build sun_temple

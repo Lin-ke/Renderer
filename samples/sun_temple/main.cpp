@@ -144,6 +144,9 @@ int main(int argc, char** argv) {
             profile.set_metadata("load_mode", "import");
             scene = sun_temple::import_scene(source_dir);
             if (scene) assets->save_asset(scene, sun_temple::scene_path);
+        } else {
+            std::fprintf(stderr, "SunTemple.fbx is missing from %s. See docs/sun_temple.md for download and import instructions.\n",
+                source_dir.string().c_str());
         }
         profile.end_operation(loading);
         if (profile_enabled) {
