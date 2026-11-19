@@ -1,4 +1,5 @@
 #include "engine/function/render/render_pass/depth_visualize_pass.h"
+#include "engine/function/render/graph/rdg_builder.h"
 #include "engine/main/engine_context.h"
 #include "engine/core/log/Log.h"
 #include "engine/function/render/render_resource/shader_utils.h"
@@ -111,50 +112,26 @@ void DepthVisualizePass::create_pipeline() {
     pipeline_ = backend->create_graphics_pipeline(pipe_info);
 }
 
-void DepthVisualizePass::draw(RHICommandContextRef command, RHITextureRef depth_texture, RHITextureViewRef output_rtv, Extent2D extent, float near_plane, float far_plane) {
-    if (!initialized_ || !pipeline_ || !command) return;
-
-    auto backend = EngineContext::rhi();
-
-    RHIRenderPassInfo rp_info = {};
-    rp_info.extent = extent;
-    rp_info.color_attachments[0].texture_view = output_rtv;
-    rp_info.color_attachments[0].load_op = ATTACHMENT_LOAD_OP_CLEAR;
-    rp_info.color_attachments[0].store_op = ATTACHMENT_STORE_OP_STORE;
-    rp_info.color_attachments[0].clear_color = {0.0f, 0.0f, 0.0f, 1.0f};
-    
-    RHIRenderPassRef render_pass = backend->create_render_pass(rp_info);
-    
-    command->begin_render_pass(render_pass);
-
-    DepthVisualizeConstants constants;
-    constants.near_plane = near_plane;
-    constants.far_plane = far_plane;
-    
-    if (constant_buffer_) {
-        void* mapped = constant_buffer_->map();
-        if (mapped) {
-            memcpy(mapped, &constants, sizeof(constants));
-            constant_buffer_->unmap();
-        }
-    }
-    
-    command->set_viewport({0, 0}, {extent.width, extent.height});
-    command->set_scissor({0, 0}, {extent.width, extent.height});
-
-    command->set_graphics_pipeline(pipeline_);
-    
-    descriptor_set_->write_buffer(0, constant_buffer_);
-    
-    descriptor_set_->write_texture(0, depth_texture);
-    descriptor_set_->write_sampler(0, sampler_);
-    
-    command->bind_descriptor_set(descriptor_set_, 0);
-    command->draw(3, 1, 0, 0);
-    
-    command->end_render_pass();
-    
-    render_pass->destroy();
+void DepthVisualizePass::build(RDGBuilder& graph, RDGTextureHandle depth, RDGTextureHandle output, float near_plane, float far_plane) {
+    if (!initialized_ || !pipeline_ || !constant_buffer_) return;
+    const auto constants = graph.create_buffer("DepthVisualizeConstants")
+        .import(constant_buffer_, RESOURCE_STATE_VERTEX_BUFFER).finish();
+    graph.create_render_pass("DepthVisualize")
+        .root_signature(root_signature_)
+        .read(0, 0, 0, depth)
+        .read(0, 0, 0, constants)
+        .color(0, output, ATTACHMENT_LOAD_OP_CLEAR, ATTACHMENT_STORE_OP_STORE)
+        .execute([this, near_plane, far_plane](RDGPassContext context) {
+            const DepthVisualizeConstants data{near_plane, far_plane, {}};
+            if (void* mapped = constant_buffer_->map()) {
+                memcpy(mapped, &data, sizeof(data));
+                constant_buffer_->unmap();
+            }
+            context.descriptors[0]->write_sampler(0, sampler_);
+            context.command->set_graphics_pipeline(pipeline_);
+            context.command->bind_descriptor_set(context.descriptors[0]);
+            context.command->draw(3);
+        }).finish();
 }
 
 } // namespace render

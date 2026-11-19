@@ -1,4 +1,5 @@
 #include "platform_rhi.h"
+#include "engine/core/window/window.h"
 #include <imgui.h>
 #include <imgui_impl_dx12.h>
 #include <imgui_impl_win32.h>
@@ -106,6 +107,7 @@ void DX12Backend::imgui_shutdown() {
 void DX12CommandContext::imgui_create_fonts_texture() { ImGui_ImplDX12_CreateDeviceObjects(); }
 void DX12CommandContext::imgui_render_draw_data(ImDrawData* draw_data) {
     if (!draw_data || !draw_data->CmdListsCount) return;
+    std::scoped_lock lock(Window::imgui_mutex());
     if (auto backend = backend_.lock()) {
         auto* command = ensure_recording();
         if (!command) return;
@@ -120,7 +122,7 @@ void DX12CommandContext::imgui_render_draw_data(ImDrawData* draw_data) {
             }
             command->OMSetRenderTargets(count, targets, FALSE, nullptr);
         }
-        backend->prepare_imgui_resources(command);
+        if (!explicit_barriers_) backend->prepare_imgui_resources(command);
         ImGui_ImplDX12_RenderDrawData(draw_data, command);
     }
 }
@@ -168,6 +170,10 @@ void DX12Backend::create_mipmap_pipelines() {
     if (FAILED(device_->CreateComputePipelineState(&pipeline, IID_PPV_ARGS(&mipmap_pso_array_)))) return;
 }
 void DX12CommandContext::generate_mips(RHITextureRef texture) {
+    if (explicit_barriers_) {
+        ERR(LogDX12Support, "Explicit command contexts require individual mip generation passes");
+        return;
+    }
     auto backend = backend_.lock(); if (!backend || !texture || texture->get_info().mip_levels < 2) return;
     auto* native = static_cast<DX12Texture*>(texture.get());
     if (native->get_resource()->GetDesc().Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D) {

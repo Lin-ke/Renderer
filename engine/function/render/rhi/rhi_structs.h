@@ -140,6 +140,7 @@ enum RHIResourceState : uint32_t {
     RESOURCE_STATE_INDIRECT_ARGUMENT,
     RESOURCE_STATE_PRESENT,
     RESOURCE_STATE_ACCELERATION_STRUCTURE,
+    RESOURCE_STATE_DEPTH_STENCIL_READ,
 
     RESOURCE_STATE_MAX_ENUM,
 };
@@ -554,6 +555,15 @@ struct RHIIndirectCommand {
     uint32_t instance_count;
     uint32_t first_vertex;
     uint32_t first_instance;
+};
+
+struct RHIIndirectDrawInfo {
+    RHIBufferRef arguments;
+    uint64_t offset = 0;
+    uint32_t max_draw_count = 0;
+    uint32_t stride = 0; // Zero selects the standard draw argument size; otherwise a multiple of four.
+    RHIBufferRef count_buffer; // Optional GPU uint32 count, clamped to max_draw_count.
+    uint64_t count_offset = 0;
 };
 
 struct RHIAccelerationStructureInstanceInfo {

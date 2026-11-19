@@ -256,6 +256,7 @@ public:
 
 private:
     bool generate_mip_ = false;
+    RDGPassExecuteFunc execute_;
 
     friend class RDGCopyPassBuilder;
     friend class RDGBuilder;

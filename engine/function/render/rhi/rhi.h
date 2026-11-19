@@ -162,6 +162,7 @@ public:
     virtual void end_command() = 0;
 
     virtual void execute(RHIFenceRef wait_fence, RHISemaphoreRef wait_semaphore, RHISemaphoreRef signal_semaphore) = 0;
+    virtual void set_explicit_barriers(bool) {}
 
     virtual void texture_barrier(const RHITextureBarrier& barrier) = 0;
 
@@ -233,6 +234,8 @@ public:
     virtual void draw_indirect(RHIBufferRef argument_buffer, uint32_t offset, uint32_t draw_count) = 0;
 
     virtual void draw_indexed_indirect(RHIBufferRef argument_buffer, uint32_t offset, uint32_t draw_count) = 0;
+    virtual void draw_indirect(const RHIIndirectDrawInfo& info) = 0;
+    virtual void draw_indexed_indirect(const RHIIndirectDrawInfo& info) = 0;
 
     /**
      * @brief Read texture data back to CPU memory
@@ -261,6 +264,8 @@ public:
     RHICommandContextImmediate() : RHIResource(RHI_COMMAND_CONTEXT_IMMEDIATE) {}
 
     virtual void flush() = 0;
+    virtual void submit_pending() = 0;
+    virtual void finish_asset_upload(bool batch_uploads) = 0;
 
     virtual void texture_barrier(const RHITextureBarrier& barrier) = 0;
 

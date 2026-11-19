@@ -1,4 +1,5 @@
 #include "platform_rhi.h"
+#include "engine/core/utils/profiler.h"
 #include "engine/platform/dx_shader_reflection.h"
 #include <imgui.h>
 #include <imgui_impl_dx12.h>
@@ -174,7 +175,10 @@ void DX12Backend::prepare_submission() {
     std::scoped_lock lock(submission_mutex_);
     if (submission_active_) return;
     auto& batch = submissions_[submission_slot_];
-    wait_for_fence(batch.fence);
+    if (!is_fence_complete(batch.fence)) {
+        PROFILE_SCOPE("DX12SubmissionSlotWait");
+        wait_for_fence(batch.fence);
+    }
     collect_submissions();
     const auto descriptors = (gpu_srv_uav_heap_.get_max_descriptors() - GPU_SRV_UAV_RESERVED_COUNT) / FRAMES_IN_FLIGHT;
     const auto samplers = gpu_sampler_heap_.get_max_descriptors() / FRAMES_IN_FLIGHT;
@@ -193,33 +197,47 @@ void DX12Backend::end_context(DX12CommandContext* context) {
     std::erase(recording_contexts_, context);
 }
 void DX12Backend::submit(DX12CommandContext* context, bool wait) {
+    submit(context ? std::span<DX12CommandContext* const>(&context, 1) : std::span<DX12CommandContext* const>{}, wait);
+}
+bool DX12Backend::submit(std::span<DX12CommandContext* const> requested, bool wait, RHIFenceRef fence, bool include_immediate) {
     std::scoped_lock lock(submission_mutex_);
-    if (!command_queue_) return;
+    if (!command_queue_) return false;
     prepare_submission();
     std::vector<ID3D12CommandList*> lists;
     std::vector<DX12CommandContext*> contexts;
-    if (immediate_command_) {
+    bool valid = true;
+    if (include_immediate && immediate_command_) {
         auto* immediate_ctx = static_cast<DX12CommandContextImmediate*>(immediate_command_.get())->peek_context();
-        if (immediate_ctx && immediate_ctx->is_recording() && immediate_ctx->close_command_list()) {
-            lists.push_back(immediate_ctx->get_command_list());
-            contexts.push_back(immediate_ctx);
+        if (immediate_ctx && immediate_ctx->is_recording() &&
+            std::find(requested.begin(), requested.end(), immediate_ctx) == requested.end()) {
+            valid = immediate_ctx->close_command_list();
+            if (valid) {
+                lists.push_back(immediate_ctx->get_command_list());
+                contexts.push_back(immediate_ctx);
+            }
         }
     }
-    if (context && context->is_recording() && context->close_command_list()) {
-        lists.push_back(context->get_command_list());
-        contexts.push_back(context);
+    for (auto* context : requested) {
+        if (!context || !context->is_recording() || !context->close_command_list()) {
+            valid = false;
+        } else {
+            lists.push_back(context->get_command_list());
+            contexts.push_back(context);
+        }
     }
-    if (!lists.empty()) {
+    if (valid && !lists.empty()) {
         command_queue_->ExecuteCommandLists(UINT(lists.size()), lists.data());
+        for (auto* context : contexts) context->publish_barrier_states();
     }
     ++internal_fence_value_;
-    if (!check_hr(command_queue_->Signal(internal_fence_.Get(), internal_fence_value_), "Signal queue fence")) return;
+    if (!check_hr(command_queue_->Signal(internal_fence_.Get(), internal_fence_value_), "Signal queue fence")) return false;
+    if (valid && fence) static_cast<DX12Fence*>(fence.get())->signal(command_queue_.Get());
     auto& batch = submissions_[submission_slot_];
     batch.fence = internal_fence_value_;
     for (auto* submitted : contexts) {
         submitted->set_submission_fence(internal_fence_value_);
         auto callbacks = submitted->take_callbacks();
-        if (!callbacks.empty()) completions_.push_back({internal_fence_value_, std::move(callbacks)});
+        if (valid && !callbacks.empty()) completions_.push_back({internal_fence_value_, std::move(callbacks)});
         retain(submitted->shared_from_this());
     }
     if (recording_contexts_.empty()) {
@@ -229,6 +247,7 @@ void DX12Backend::submit(DX12CommandContext* context, bool wait) {
     }
     if (wait) wait_for_fence(internal_fence_value_);
     collect_submissions();
+    return valid;
 }
 void DX12Backend::tick() { collect_submissions(); RHIBackend::tick(); }
 void DX12Backend::destroy() {
@@ -239,6 +258,7 @@ void DX12Backend::destroy() {
     RHIBackend::destroy();
     for (auto& resources : resource_map_) resources.clear();
     dynamic_ring_buffer_.destroy();
+    indirect_signatures_.clear();
     rtv_allocator_.destroy(); dsv_allocator_.destroy(); cpu_srv_uav_allocator_.destroy(); cpu_sampler_allocator_.destroy();
     gpu_srv_uav_heap_.destroy(); gpu_sampler_heap_.destroy();
     command_queue_.Reset(); internal_fence_.Reset(); info_queue_.Reset();
@@ -275,6 +295,12 @@ void DX12Backend::set_name(RHIResourceRef resource, const std::string& name) {
     }
 }
 void DX12Queue::wait_idle() { backend_.submit_and_wait(); }
+bool DX12Queue::submit(std::span<const RHICommandContextRef> contexts, RHIFenceRef fence) {
+    std::vector<DX12CommandContext*> native;
+    native.reserve(contexts.size());
+    for (const auto& context : contexts) native.push_back(static_cast<DX12CommandContext*>(context.get()));
+    return backend_.submit(native, false, std::move(fence), false);
+}
 RHIQueueRef DX12Backend::get_queue(const RHIQueueInfo& info) {
     // This first backend serializes graphics/compute/transfers on the direct queue.
     return std::make_shared<DX12Queue>(info, command_queue_.Get(), *this);

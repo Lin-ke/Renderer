@@ -3,6 +3,7 @@
 #include "platform_rhi.h"
 #include "engine/core/utils/profile_session.h"
 #include <cereal/archives/json.hpp>
+#include <algorithm>
 #include <sstream>
 
 DECLARE_LOG_TAG(LogDX12GPUProfiler);
@@ -108,7 +109,6 @@ void DX12GPUProfiler::begin_frame() {
     fq.resolved = false;
     fq.frame_id = ProfileSession::context().frame_id;
     prepare_statistics(fq);
-    skipped_scopes_ = 0;
     cmd_list_->EndQuery(fq.query_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0);
 }
 
@@ -141,13 +141,15 @@ void DX12GPUProfiler::end_frame() {
 }
 
 void DX12GPUProfiler::begin_scope(const std::string& name) {
+    scope_index_ = UINT32_MAX;
     if (!initialized_ || !enabled_ || !cmd_list_) return;
 
+    std::scoped_lock lock(scope_mutex_);
     auto& fq = frame_queries_[write_index_];
-    if (!fq.active) return;
-    if (fq.scope_count >= max_scopes_) { ++skipped_scopes_; return; }
+    if (!fq.active || fq.scope_count >= max_scopes_) return;
 
-    uint32_t scope_idx = fq.scope_count;
+    uint32_t scope_idx = fq.scope_count++;
+    scope_index_ = scope_idx;
     uint32_t ts_idx = scope_idx * 2 + 2;
 
     fq.scopes[scope_idx].name = name;
@@ -155,18 +157,16 @@ void DX12GPUProfiler::begin_scope(const std::string& name) {
     cmd_list_->EndQuery(fq.query_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, ts_idx);
     if (fq.statistics_active)
         cmd_list_->BeginQuery(fq.statistics_heap.Get(), D3D12_QUERY_TYPE_PIPELINE_STATISTICS, scope_idx);
-    fq.scope_count++;
 }
 
 void DX12GPUProfiler::end_scope() {
     if (!initialized_ || !enabled_ || !cmd_list_) return;
 
     auto& fq = frame_queries_[write_index_];
-    if (!fq.active) return;
-    if (skipped_scopes_) { --skipped_scopes_; return; }
-    if (fq.scope_count == 0) return;
+    if (!fq.active || scope_index_ == UINT32_MAX) return;
 
-    uint32_t scope_idx = fq.scope_count - 1;
+    uint32_t scope_idx = scope_index_;
+    scope_index_ = UINT32_MAX;
     uint32_t ts_idx = scope_idx * 2 + 3;
 
     if (fq.statistics_active)
@@ -230,6 +230,9 @@ void DX12GPUProfiler::collect_results() {
     if (statistics) fq.statistics_readback->Unmap(0, &write_range);
     fq.resolved = false;
 
+    std::stable_sort(results_.begin(), results_.end(), [](const auto& lhs, const auto& rhs) {
+        return lhs.offset_ms < rhs.offset_ms;
+    });
     if (ProfileSession::instance().generation()) {
         std::ostringstream output;
         { cereal::JSONOutputArchive archive(output);

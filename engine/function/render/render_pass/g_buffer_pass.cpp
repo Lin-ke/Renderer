@@ -301,7 +301,11 @@ std::optional<GBufferOutputHandles> GBufferPass::build(RDGBuilder& builder, RDGT
         .finish();
     
     // Use depth from DepthPrePass - LOAD to preserve early-z benefits
-    builder.create_render_pass("GBuffer_Pass")
+    const std::array fallbacks{render_system->get_fallback_white_texture(), render_system->get_fallback_normal_texture(),
+        render_system->get_fallback_black_texture(), render_system->get_fallback_black_texture(),
+        render_system->get_fallback_black_texture(), render_system->get_fallback_white_texture(),
+        render_system->get_fallback_black_texture()};
+    auto pass = builder.create_render_pass("GBuffer_Pass")
         .root_signature(root_signature_)
         .descriptor_set(0, descriptor_set_)
         .color(GBufferData::ALBEDO_AO_INDEX, gbuffer_albedo_ao, 
@@ -317,8 +321,16 @@ std::optional<GBufferOutputHandles> GBufferPass::build(RDGBuilder& builder, RDGT
                ATTACHMENT_LOAD_OP_CLEAR, ATTACHMENT_STORE_OP_STORE,
                Color4{0.0f, 0.0f, 0.0f, 0.0f})
         .depth_stencil(depth_target, ATTACHMENT_LOAD_OP_LOAD, ATTACHMENT_STORE_OP_STORE, 
-                       1.0f, 0)
-        .execute([this, batches, extent, frame_data = per_frame_data_](RDGPassContext context) {
+                       1.0f, 0);
+    for (const auto& fallback : fallbacks) pass.sample(fallback);
+    for (const auto& batch : batches) {
+        pass.vertex_read(batch.vertex_buffer).vertex_read(batch.normal_buffer).vertex_read(batch.texcoord_buffer)
+            .vertex_read(batch.tangent_buffer).index_read(batch.index_buffer);
+        const auto fallback_material = !batch.material_snapshot && batch.material ? snapshot_material(*batch.material) : DrawMaterial{};
+        const auto& material = batch.material_snapshot ? *batch.material_snapshot : fallback_material;
+        if (material.pbr) for (const auto& texture : material.textures) pass.sample(texture);
+    }
+    pass.execute([this, batches, extent, frame_data = per_frame_data_, fallbacks](RDGPassContext context) {
             RHICommandListRef cmd = context.command;
             if (!cmd) return;
             
@@ -337,12 +349,6 @@ std::optional<GBufferOutputHandles> GBufferPass::build(RDGBuilder& builder, RDGT
             // Bind material buffer and sampler (used by all batches)
             descriptor_set_->write_buffer(2, material_buffer_);
             descriptor_set_->write_sampler(0, default_sampler_);
-            
-            // Get fallback textures from render system
-            auto* rsys = EngineContext::render_system();
-            RHITextureRef fallback_white = rsys ? rsys->get_fallback_white_texture() : nullptr;
-            RHITextureRef fallback_black = rsys ? rsys->get_fallback_black_texture() : nullptr;
-            RHITextureRef fallback_normal = rsys ? rsys->get_fallback_normal_texture() : nullptr;
             
             for (const auto& batch : batches) {
                 if (per_object_buffer_) {
@@ -368,8 +374,6 @@ std::optional<GBufferOutputHandles> GBufferPass::build(RDGBuilder& builder, RDGT
                         material_buffer_->unmap();
                     }
                 }
-                const std::array fallbacks{fallback_white, fallback_normal, fallback_black,
-                    fallback_black, fallback_black, fallback_white, fallback_black};
                 for (uint32_t slot = 0; slot < fallbacks.size(); ++slot) {
                     const auto& texture = material.pbr ? material.textures[slot] : fallbacks[slot];
                     descriptor_set_->write_texture(slot, texture ? texture : fallbacks[slot]);

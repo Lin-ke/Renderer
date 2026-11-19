@@ -122,21 +122,26 @@ RDGBufferHandle RDGBuilder::get_buffer(std::string name) {
     return node->get_handle();
 }
 
-bool RDGBuilder::execute() {
-    if (!compile()) return false;
-    return execute_compiled(command_, EngineContext::current_frame_index());
+bool RDGBuilder::execute(const RHICommandListRef& command) {
+    return compile() && execute_compiled(command, EngineContext::current_frame_index());
 }
 
 bool RDGBuilder::execute_compiled(RHICommandListRef command, uint32_t frame_slot) {
+    return prepare_pipeline(frame_slot, [&](uint32_t) { return command; }, false);
+}
+
+bool RDGBuilder::set_texture_final_state(RDGTextureHandle handle, RHIResourceState state) {
+    auto* node = dynamic_cast<RDGTextureNode*>(graph_->GetNode(handle.id()));
+    if (!node || (!node->is_imported() && !node->is_exported_)) return false;
+    final_texture_states_[handle.id()] = state;
+    return true;
+}
+
+bool RDGBuilder::prepare_pipeline(uint32_t frame_slot, const std::function<RHICommandListRef(uint32_t)>& command_for_pass,
+    bool validate_access) {
     if (!compiled_) return false;
     compile_info_.error.clear();
-    command_ = std::move(command);
     frame_slot_ = frame_slot;
-    if (!execution_passes_.empty() && !command_) {
-        compile_info_.error = "RDG execution requires a command list";
-        ERR(LogRDGBuilder, "{}", compile_info_.error);
-        return false;
-    }
     for (const auto& [id, lifetime] : resource_lifetimes_) {
         auto* texture = dynamic_cast<RDGTextureNode*>(graph_->GetNode(id));
         if (texture && texture->is_imported() && !texture->texture_) {
@@ -145,28 +150,75 @@ bool RDGBuilder::execute_compiled(RHICommandListRef command, uint32_t frame_slot
             ERR(LogRDGBuilder, "{}", compile_info_.error);
             return false;
         }
+        auto* buffer = dynamic_cast<RDGBufferNode*>(graph_->GetNode(id));
+        if (buffer && buffer->is_imported() && !buffer->buffer_) {
+            compile_info_.error = "RDG external buffer '" + buffer->name() + "' is unbound before " +
+                execution_passes_[lifetime.first_use]->name();
+            ERR(LogRDGBuilder, "{}", compile_info_.error);
+            return false;
+        }
     }
+    for (auto* pass : execution_passes_) {
+        if (validate_access && pass->node_type() == RDG_PASS_NODE_TYPE_COPY && static_cast<RDGCopyPassNode*>(pass)->generate_mip_) {
+            compile_info_.error = "RDG mip generation requires a compute pass per mip: " + pass->name();
+            ERR(LogRDGBuilder, "{}", compile_info_.error);
+            return false;
+        }
+    }
+    TextureStateMap textures;
+    BufferStateMap buffers;
     begin_profile();
-    for (auto& pass : execution_passes_) {
+    for (auto* pass : execution_passes_) {
+        auto command = command_for_pass(pass->execution_index());
+        if (!command) return false;
+
         auto profile_context = ProfileSession::context();
         profile_context.pass_id = pass->ID();
         ProfileContextScope profile_scope(profile_context);
         PROFILE_SCOPE("RDGPass");
-        if (!pass) continue;
-        if (pass->is_culled_) {
-            continue;
-        }
-
+        command->gpu_timestamp_begin(pass->name());
+        command->push_event(pass->name());
+        plan_pass_barriers(pass, command, textures, buffers, false);
+        if (validate_access) validate_pass_accesses(pass, command);
         switch (pass->node_type()) {
-            case RDG_PASS_NODE_TYPE_RENDER: execute_pass(static_cast<RDGRenderPassNodeRef>(pass)); break;
-            case RDG_PASS_NODE_TYPE_COMPUTE: execute_pass(static_cast<RDGComputePassNodeRef>(pass)); break;
-            case RDG_PASS_NODE_TYPE_RAY_TRACING: execute_pass(static_cast<RDGRayTracingPassNodeRef>(pass)); break;
-            case RDG_PASS_NODE_TYPE_PRESENT: execute_pass(static_cast<RDGPresentPassNodeRef>(pass)); break;
-            case RDG_PASS_NODE_TYPE_COPY: execute_pass(static_cast<RDGCopyPassNodeRef>(pass)); break;
+            case RDG_PASS_NODE_TYPE_RENDER: execute_pass(static_cast<RDGRenderPassNodeRef>(pass), command); break;
+            case RDG_PASS_NODE_TYPE_COMPUTE: execute_pass(static_cast<RDGComputePassNodeRef>(pass), command); break;
+            case RDG_PASS_NODE_TYPE_RAY_TRACING: execute_pass(static_cast<RDGRayTracingPassNodeRef>(pass), command); break;
+            case RDG_PASS_NODE_TYPE_PRESENT: execute_pass(static_cast<RDGPresentPassNodeRef>(pass), command); break;
+            case RDG_PASS_NODE_TYPE_COPY: execute_pass(static_cast<RDGCopyPassNodeRef>(pass), command); break;
             default: FATAL(LogRDGBuilder, "Unsupported RDG pass type!");
         }
+        command->set_access_checks({}, {});
+        if (command->has_unplanned_commands())
+            compile_info_.error = "RDG pass '" + pass->name() + "' issued a manual barrier or mip generation";
+        if (!compile_info_.error.empty()) {
+            ERR(LogRDGBuilder, "{}", compile_info_.error);
+            return false;
+        }
+        plan_pass_barriers(pass, command, textures, buffers, true);
+        command->pop_event();
+        command->gpu_timestamp_end();
+        release_pass_views(pass);
     }
 
+    auto finish = command_for_pass(static_cast<uint32_t>(execution_passes_.size()));
+    if (!finish) return false;
+    for (const auto& [id, state] : final_texture_states_) {
+        auto* node = static_cast<RDGTextureNode*>(graph_->GetNode(id));
+        if (!resolve(node)) return false;
+        plan_texture_barriers(node, {}, state, finish, textures);
+    }
+    for (auto* pass : execution_passes_) {
+        pass->for_each_texture([&](RDGTextureEdgeRef, RDGTextureNodeRef node) {
+            if (node->is_imported() || node->is_exported_ || !node->texture_) return;
+            plan_texture_barriers(node, {}, RESOURCE_STATE_COMMON, finish, textures);
+            release(node, RESOURCE_STATE_COMMON);
+        });
+        pass->for_each_buffer([&](RDGBufferEdgeRef, RDGBufferNodeRef node) {
+            if (!node->buffer_) return;
+            release(node, RESOURCE_STATE_COMMON);
+        });
+    }
     for (auto& pass : passes_) {
         for (auto& descriptor : pass->pooled_descriptor_sets_) {
             RDGDescriptorSetPool::get(frame_slot_)->release(
@@ -178,7 +230,7 @@ bool RDGBuilder::execute_compiled(RHICommandListRef command, uint32_t frame_slot
         *output = resolve(static_cast<RDGTextureNode*>(graph_->GetNode(id)));
     for (auto& [id, output] : extracted_buffers_)
         *output = resolve(static_cast<RDGBufferNode*>(graph_->GetNode(id)));
-    extracted_textures_.clear(); extracted_buffers_.clear();
+    extracted_textures_.clear(); extracted_buffers_.clear(); final_texture_states_.clear();
     end_profile();
     execution_passes_.clear(); resource_keys_.clear(); resource_lifetimes_.clear(); texture_usages_.clear(); buffer_usages_.clear();
     passes_.clear();
@@ -195,61 +247,148 @@ bool RDGBuilder::bind_external_texture(RDGTextureHandle handle, const RHITexture
         node->info_ != texture->get_info()) {
         return false;
     }
+    for (const auto& [id, lifetime] : resource_lifetimes_) {
+        auto* other = dynamic_cast<RDGTextureNode*>(graph_->GetNode(id));
+        if (other && other != node && other->texture_ == texture && resource_key(other) != resource_key(node)) return false;
+    }
     node->texture_ = texture;
     return true;
 }
 
-void RDGBuilder::create_input_barriers(RDGPassNodeRef pass) {
-    pass->for_each_texture([&](RDGTextureEdgeRef edge, RDGTextureNodeRef texture) {
-        if (edge->is_output()) return;
-        RHIResourceState previous_state_val = previous_state(texture, pass, edge->subresource, false);
-        RHITextureBarrier barrier = {
-            .texture = resolve(texture),
-            .src_state = previous_state_val,
-            .dst_state = edge->state,
-            .subresource = edge->subresource
-        };
-        command_->texture_barrier(barrier);
-    });
+bool RDGBuilder::bind_external_buffer(RDGBufferHandle handle, const RHIBufferRef& buffer) {
+    auto* node = dynamic_cast<RDGBufferNode*>(graph_->GetNode(handle.id()));
+    if (!compiled_ || !node || !node->is_imported() || node->buffer_ || !buffer) return false;
+    const auto& actual = buffer->get_info(); const auto& expected = node->info_;
+    if (actual.size < expected.size || actual.stride != expected.stride || actual.memory_usage != expected.memory_usage ||
+        (actual.type & expected.type) != expected.type) return false;
+    for (const auto& [id, lifetime] : resource_lifetimes_) {
+        auto* other = dynamic_cast<RDGBufferNode*>(graph_->GetNode(id));
+        if (other && other != node && other->buffer_ == buffer && resource_key(other) != resource_key(node)) return false;
+    }
+    node->buffer_ = buffer;
+    return true;
+}
 
-    pass->for_each_buffer([&](RDGBufferEdgeRef edge, RDGBufferNodeRef buffer) {
-        if (edge->is_output()) return;
-        RHIResourceState previous_state_val = previous_state(buffer, pass, 0, 0, false);
-        RHIBufferBarrier barrier = {
-            .buffer = resolve(buffer),
-            .src_state = previous_state_val,
-            .dst_state = edge->state,
-            .offset = edge->offset,
-            .size = edge->size
-        };
-        command_->buffer_barrier(barrier);
+void RDGBuilder::plan_texture_barriers(RDGTextureNodeRef node, TextureSubresourceRange range, RHIResourceState state,
+    const RHICommandListRef& command, TextureStateMap& textures) {
+    auto resource = resolve(node);
+    const auto& defaults = resource->get_default_subresource_range();
+    auto [found, inserted] = textures.try_emplace(resource.get());
+    auto& current = found->second;
+    if (inserted) {
+        current.resource = resource;
+        current.mips = defaults.level_count;
+        current.layers = defaults.layer_count;
+        current.aspects = is_depth_stencil_format(resource->get_info().format) ? TEXTURE_ASPECT_DEPTH_STENCIL : defaults.aspect;
+        current.subresources.assign(size_t(current.mips) * current.layers *
+            (current.aspects == TEXTURE_ASPECT_DEPTH_STENCIL ? 2 : 1), node->init_state_);
+    }
+    const auto mip_end = range.level_count ? range.base_mip_level + range.level_count : current.mips;
+    const auto layer_end = range.layer_count ? range.base_array_layer + range.layer_count : current.layers;
+    const auto aspects = range.aspect ? range.aspect : current.aspects;
+    bool uav_barrier = false;
+    for (auto aspect : {TEXTURE_ASPECT_COLOR, TEXTURE_ASPECT_DEPTH, TEXTURE_ASPECT_STENCIL}) {
+        if (!(aspects & current.aspects & aspect)) continue;
+        const auto plane = aspect == TEXTURE_ASPECT_STENCIL && current.aspects == TEXTURE_ASPECT_DEPTH_STENCIL ? 1u : 0u;
+        for (auto layer = range.base_array_layer; layer < layer_end; ++layer) {
+            for (auto mip = range.base_mip_level; mip < mip_end; ++mip) {
+                auto& previous = current.subresources[(plane * current.layers + layer) * current.mips + mip];
+                if (previous != state) {
+                    command->texture_barrier({resource, previous, state, {aspect, mip, 1, layer, 1}});
+                    previous = state;
+                } else if (state == RESOURCE_STATE_UNORDERED_ACCESS) {
+                    uav_barrier = true;
+                }
+            }
+        }
+    }
+    if (uav_barrier) command->texture_barrier({resource, state, state, range});
+}
+
+void RDGBuilder::plan_pass_barriers(RDGPassNodeRef pass, const RHICommandListRef& command,
+    TextureStateMap& textures, BufferStateMap& buffers, bool after) {
+    const bool present_copy = pass->node_type() == RDG_PASS_NODE_TYPE_PRESENT && pass->InEdges<RDGTextureEdge>().size() > 1;
+    std::optional<NodeID> read_only_depth;
+    if (!after && pass->node_type() == RDG_PASS_NODE_TYPE_RENDER) {
+        for (auto* edge : pass->InEdges<RDGTextureEdge>()) {
+            if (edge->read_only_depth) {
+                read_only_depth = resource_key(edge->From<RDGTextureNode>());
+                break;
+            }
+        }
+    }
+    pass->for_each_texture([&](RDGTextureEdgeRef edge, RDGTextureNodeRef node) {
+        auto state = edge->state;
+        if (edge->as_present) {
+            if (after && !present_copy) return;
+            state = present_copy && !after ? RESOURCE_STATE_TRANSFER_DST : RESOURCE_STATE_PRESENT;
+        } else if (edge->is_output() != after) {
+            return;
+        }
+        auto range = edge->subresource;
+        if (edge->as_color || edge->as_depth_stencil) range.level_count = 1;
+        if (state == RESOURCE_STATE_SHADER_RESOURCE && read_only_depth == resource_key(node))
+            state = RESOURCE_STATE_DEPTH_STENCIL_READ;
+        plan_texture_barriers(node, range, state, command, textures);
+    });
+    pass->for_each_buffer([&](RDGBufferEdgeRef edge, RDGBufferNodeRef node) {
+        if ((edge->is_output() && !edge->as_buffer_write) != after) return;
+        auto resource = resolve(node);
+        if (resource->get_info().memory_usage != MEMORY_USAGE_GPU_ONLY) return;
+        const auto state = edge->as_shader_read && edge->type == RESOURCE_TYPE_UNIFORM_BUFFER ?
+            RESOURCE_STATE_VERTEX_BUFFER : edge->state;
+        auto [iter, inserted] = buffers.try_emplace(resource.get(), node->init_state_);
+        auto& previous = iter->second;
+        if (previous != state || state == RESOURCE_STATE_UNORDERED_ACCESS) {
+            command->buffer_barrier({resource, previous, state});
+            previous = state;
+        }
     });
 }
 
-void RDGBuilder::create_output_barriers(RDGPassNodeRef pass) {
-    pass->for_each_texture([&](RDGTextureEdgeRef edge, RDGTextureNodeRef texture) {
-        if (!edge->is_output()) return;
-        RHIResourceState previous_state_val = previous_state(texture, pass, edge->subresource, true);
-        RHITextureBarrier barrier = {
-            .texture = resolve(texture),
-            .src_state = previous_state_val,
-            .dst_state = edge->state,
-            .subresource = edge->subresource
-        };
-        command_->texture_barrier(barrier);
+void RDGBuilder::validate_pass_accesses(RDGPassNodeRef pass, const RHICommandListRef& command) {
+    std::unordered_multimap<RHIBuffer*, RHIResourceState> buffer_accesses;
+    std::unordered_multimap<RHITexture*, std::pair<RHIResourceState, TextureSubresourceRange>> texture_accesses;
+    pass->for_each_buffer([&](RDGBufferEdgeRef edge, RDGBufferNodeRef node) {
+        if (edge->is_output() && !edge->as_buffer_write) return;
+        buffer_accesses.emplace(resolve(node).get(), edge->as_shader_read && edge->type == RESOURCE_TYPE_UNIFORM_BUFFER ?
+            RESOURCE_STATE_VERTEX_BUFFER : edge->state);
     });
-
-    pass->for_each_buffer([&](RDGBufferEdgeRef edge, RDGBufferNodeRef buffer) {
-        if (!edge->is_output()) return;
-        RHIResourceState previous_state_val = previous_state(buffer, pass, 0, 0, true);
-        RHIBufferBarrier barrier = {
-            .buffer = resolve(buffer),
-            .src_state = previous_state_val,
-            .dst_state = edge->state,
-            .offset = edge->offset,
-            .size = edge->size
-        };
-        command_->buffer_barrier(barrier);
+    pass->for_each_texture([&](RDGTextureEdgeRef edge, RDGTextureNodeRef node) {
+        if (edge->is_output()) return;
+        auto range = edge->subresource;
+        if (edge->as_color || edge->as_depth_stencil) range.level_count = 1;
+        auto state = edge->state;
+        if (edge->as_present && pass->InEdges<RDGTextureEdge>().size() > 1)
+            state = RESOURCE_STATE_TRANSFER_DST;
+        texture_accesses.emplace(resolve(node).get(), std::pair{state, range});
+    });
+    auto fail = [this, pass](const RHIResource& resource) {
+        compile_info_.error = "RDG pass '" + pass->name() + "' used an undeclared resource: " + resource.get_name();
+    };
+    command->set_access_checks([buffer_accesses = std::move(buffer_accesses), fail](const RHIBufferRef& resource, RHIResourceState state) {
+        if (!resource) return;
+        if (state == RESOURCE_STATE_VERTEX_BUFFER &&
+            (resource->get_info().type & RESOURCE_TYPE_UNIFORM_BUFFER) &&
+            resource->get_info().memory_usage != MEMORY_USAGE_GPU_ONLY) return;
+        const auto [begin, end] = buffer_accesses.equal_range(resource.get());
+        if (std::none_of(begin, end, [state](const auto& entry) { return entry.second == state; })) fail(*resource);
+    }, [texture_accesses = std::move(texture_accesses), fail](const RHITextureRef& resource, RHIResourceState state, TextureSubresourceRange range) {
+        if (!resource) return;
+        const auto& defaults = resource->get_default_subresource_range();
+        const auto mip_end = range.level_count ? range.base_mip_level + range.level_count : defaults.level_count;
+        const auto layer_end = range.layer_count ? range.base_array_layer + range.layer_count : defaults.layer_count;
+        const auto [begin, end] = texture_accesses.equal_range(resource.get());
+        for (auto layer = range.base_array_layer; layer < layer_end; ++layer) {
+            for (auto mip = range.base_mip_level; mip < mip_end; ++mip) {
+                if (std::none_of(begin, end, [&](const auto& entry) {
+                    const auto& [usage, declared] = entry.second;
+                    return usage == state && mip >= declared.base_mip_level && layer >= declared.base_array_layer &&
+                        (!declared.level_count || mip - declared.base_mip_level < declared.level_count) &&
+                        (!declared.layer_count || layer - declared.base_array_layer < declared.layer_count);
+                })) return fail(*resource);
+            }
+        }
     });
 }
 
@@ -352,22 +491,14 @@ void RDGBuilder::prepare_render_target(RDGRenderPassNodeRef pass, RHIRenderPassI
     });
 }
 
-void RDGBuilder::release_resource(RDGPassNodeRef pass) {
-    pass->for_each_texture([&](RDGTextureEdgeRef edge, RDGTextureNodeRef texture) {
-        if (is_last_used_pass(texture, pass, edge->is_output())) release(texture, edge->state);
-    });
-
-    pass->for_each_buffer([&](RDGBufferEdgeRef edge, RDGBufferNodeRef buffer) {
-        if (is_last_used_pass(buffer, pass, edge->is_output())) release(buffer, edge->state);
-    });
-
+void RDGBuilder::release_pass_views(RDGPassNodeRef pass) {
     for (auto& view : pass->pooled_views_) {
         RDGTextureViewPool::get()->release({view});
     }
     pass->pooled_views_.clear();
 }
 
-void RDGBuilder::execute_pass(RDGRenderPassNodeRef pass) {
+void RDGBuilder::execute_pass(RDGRenderPassNodeRef pass, const RHICommandListRef& command) {
     prepare_descriptor_set(pass);
 
     RHIRenderPassInfo render_pass_info = {};
@@ -375,15 +506,10 @@ void RDGBuilder::execute_pass(RDGRenderPassNodeRef pass) {
 
     RHIRenderPassRef render_pass = EngineContext::rhi()->create_render_pass(render_pass_info);
 
-    command_->gpu_timestamp_begin(pass->name());
-    command_->push_event(pass->name(), {0.0f, 0.0f, 0.0f});
-
-    create_input_barriers(pass);
-
-    command_->begin_render_pass(render_pass);
+    command->begin_render_pass(render_pass);
 
     RDGPassContext context = {
-        .command = command_,
+        .command = command,
         .builder = this,
         .descriptors = pass->descriptor_sets_,
         .frame_slot = frame_slot_
@@ -396,30 +522,14 @@ void RDGBuilder::execute_pass(RDGRenderPassNodeRef pass) {
         pass->execute_(context);
     }
 
-    command_->end_render_pass();
-
-    create_output_barriers(pass);
-
-    release_resource(pass);
-
-    command_->pop_event();
-    command_->gpu_timestamp_end();
-    
-    if (render_pass) {
-        render_pass->destroy();
-    }
+    command->end_render_pass();
 }
 
-void RDGBuilder::execute_pass(RDGComputePassNodeRef pass) {
+void RDGBuilder::execute_pass(RDGComputePassNodeRef pass, const RHICommandListRef& command) {
     prepare_descriptor_set(pass);
 
-    command_->gpu_timestamp_begin(pass->name());
-    command_->push_event(pass->name(), {1.0f, 0.0f, 0.0f});
-
-    create_input_barriers(pass);
-
     RDGPassContext context = {
-        .command = command_,
+        .command = command,
         .builder = this,
         .descriptors = pass->descriptor_sets_,
         .frame_slot = frame_slot_
@@ -431,25 +541,13 @@ void RDGBuilder::execute_pass(RDGComputePassNodeRef pass) {
     if (pass->execute_) {
         pass->execute_(context);
     }
-
-    create_output_barriers(pass);
-
-    release_resource(pass);
-
-    command_->pop_event();
-    command_->gpu_timestamp_end();
 }
 
-void RDGBuilder::execute_pass(RDGRayTracingPassNodeRef pass) {
+void RDGBuilder::execute_pass(RDGRayTracingPassNodeRef pass, const RHICommandListRef& command) {
     prepare_descriptor_set(pass);
 
-    command_->gpu_timestamp_begin(pass->name());
-    command_->push_event(pass->name(), {0.0f, 1.0f, 0.0f});
-
-    create_input_barriers(pass);
-
     RDGPassContext context = {
-        .command = command_,
+        .command = command,
         .builder = this,
         .descriptors = pass->descriptor_sets_,
         .frame_slot = frame_slot_
@@ -461,16 +559,9 @@ void RDGBuilder::execute_pass(RDGRayTracingPassNodeRef pass) {
     if (pass->execute_) {
         pass->execute_(context);
     }
-
-    create_output_barriers(pass);
-
-    release_resource(pass);
-
-    command_->pop_event();
-    command_->gpu_timestamp_end();
 }
 
-void RDGBuilder::execute_pass(RDGPresentPassNodeRef pass) {
+void RDGBuilder::execute_pass(RDGPresentPassNodeRef pass, const RHICommandListRef& command) {
     RDGTextureNodeRef present_texture = nullptr;
     RDGTextureNodeRef texture = nullptr;
     TextureSubresourceLayers subresource = {};
@@ -490,38 +581,12 @@ void RDGBuilder::execute_pass(RDGPresentPassNodeRef pass) {
         }
     }
 
-    command_->gpu_timestamp_begin(pass->name());
-    command_->push_event(pass->name(), {0.0f, 0.0f, 1.0f});
-
-    create_input_barriers(pass);
-
     if (present_texture && texture) {
-        RHITextureBarrier barrier_dst = {
-            .texture = resolve(present_texture),
-            .src_state = RESOURCE_STATE_PRESENT,
-            .dst_state = RESOURCE_STATE_TRANSFER_DST
-        };
-        command_->texture_barrier(barrier_dst);
-        
-        command_->copy_texture(resolve(texture), subresource, resolve(present_texture), {TEXTURE_ASPECT_COLOR, 0, 0, 1});
-        
-        RHITextureBarrier barrier_present = {
-            .texture = resolve(present_texture),
-            .src_state = RESOURCE_STATE_TRANSFER_DST,
-            .dst_state = RESOURCE_STATE_PRESENT
-        };
-        command_->texture_barrier(barrier_present);
+        command->copy_texture(resolve(texture), subresource, resolve(present_texture), {TEXTURE_ASPECT_COLOR, 0, 0, 1});
     }
-
-    create_output_barriers(pass);
-
-    release_resource(pass);
-
-    command_->pop_event();
-    command_->gpu_timestamp_end();
 }
 
-void RDGBuilder::execute_pass(RDGCopyPassNodeRef pass) {
+void RDGBuilder::execute_pass(RDGCopyPassNodeRef pass, const RHICommandListRef& command) {
     RDGTextureNodeRef from = nullptr;
     RDGTextureNodeRef to = nullptr;
     TextureSubresourceLayers from_subresource = {};
@@ -537,40 +602,12 @@ void RDGBuilder::execute_pass(RDGCopyPassNodeRef pass) {
         }
     });
 
-    command_->gpu_timestamp_begin(pass->name());
-    command_->push_event(pass->name(), {1.0f, 1.0f, 0.0f});
-
-    create_input_barriers(pass);
-
-    if (from && to) {
-        command_->copy_texture(resolve(from), from_subresource, resolve(to), to_subresource);
-
-        if (pass->generate_mip_) {
-            RHITextureBarrier barrier = {
-                .texture = resolve(to),
-                .src_state = RESOURCE_STATE_TRANSFER_DST,
-                .dst_state = RESOURCE_STATE_TRANSFER_SRC,
-                .subresource = {}
-            };
-            command_->texture_barrier(barrier);
-            command_->generate_mips(resolve(to));
-
-            barrier = {
-                .texture = resolve(to),
-                .src_state = RESOURCE_STATE_TRANSFER_SRC,
-                .dst_state = RESOURCE_STATE_TRANSFER_DST,
-                .subresource = {}
-            };
-            command_->texture_barrier(barrier);
-        }
+    if (pass->execute_) {
+        pass->execute_({command, this, pass->descriptor_sets_, frame_slot_});
+    } else if (from && to) {
+        command->copy_texture(resolve(from), from_subresource, resolve(to), to_subresource);
+        if (pass->generate_mip_) command->generate_mips(resolve(to));
     }
-
-    create_output_barriers(pass);
-
-    release_resource(pass);
-
-    command_->pop_event();
-    command_->gpu_timestamp_end();
 }
 
 RHITextureRef RDGBuilder::resolve(RDGTextureNodeRef texture_node) {
@@ -589,19 +626,20 @@ RHITextureRef RDGBuilder::resolve(RDGTextureNodeRef texture_node) {
 }
 
 RHITextureRef RDGBuilder::resolve(RDGTextureHandle handle) {
-    auto* node = static_cast<RDGTextureNode*>(graph_->GetNode(handle.id()));
+    auto* node = dynamic_cast<RDGTextureNode*>(graph_->GetNode(handle.id()));
     if (!node) return nullptr;
     return resolve(node);
 }
 
 RHIBufferRef RDGBuilder::resolve(RDGBufferHandle handle) {
-    auto* node = static_cast<RDGBufferNode*>(graph_->GetNode(handle.id()));
+    auto* node = dynamic_cast<RDGBufferNode*>(graph_->GetNode(handle.id()));
     if (!node) return nullptr;
     return resolve(node);
 }
 
 RHIBufferRef RDGBuilder::resolve(RDGBufferNodeRef buffer_node) {
     if (buffer_node->buffer_ == nullptr) {
+        if (buffer_node->is_imported()) return nullptr;
         auto pooled_buffer = RDGBufferPool::get()->allocate(buffer_node->info_);
         buffer_node->buffer_ = pooled_buffer.buffer;
         buffer_node->init_state_ = pooled_buffer.state;
@@ -632,69 +670,7 @@ void RDGBuilder::release(RDGBufferNodeRef buffer_node, RHIResourceState state) {
     }
 }
 
-RHIResourceState RDGBuilder::previous_state(RDGTextureNodeRef texture_node, RDGPassNodeRef pass_node,
-                                            TextureSubresourceRange subresource, bool output) {
-    resolve(texture_node);
-    NodeID current_id = pass_node->execution_index();
-    NodeID previous_id = UINT32_MAX;
 
-    RHIResourceState previous_state = texture_node->init_state_;
-
-    for (const auto& [pass, edge] : texture_usages_[resource_key(texture_node)]) {
-        if (pass->is_culled()) continue;
-        bool is_output_first = output ? !edge->is_output() : edge->is_output();
-        bool is_previous_pass = output ? pass->execution_index() <= current_id : pass->execution_index() < current_id;
-        bool is_subresource_covered = subresource.is_default() ||
-                                      edge->subresource.is_default() ||
-                                      subresource == edge->subresource;
-
-        if (!(is_previous_pass && is_subresource_covered)) continue;
-        if (pass == pass_node && edge->is_output()) continue;
-        if (pass->execution_index() > previous_id || previous_id == UINT32_MAX) {
-            previous_state = edge->state;
-            previous_id = pass->execution_index();
-        } else if (pass->execution_index() == previous_id && is_output_first) {
-            previous_state = edge->state;
-            previous_id = pass->execution_index();
-        }
-    }
-
-    return previous_state;
-}
-
-RHIResourceState RDGBuilder::previous_state(RDGBufferNodeRef buffer_node, RDGPassNodeRef pass_node, uint32_t offset,
-                                            uint32_t size, bool output) {
-    resolve(buffer_node);
-    NodeID current_id = pass_node->execution_index();
-    NodeID previous_id = UINT32_MAX;
-
-    RHIResourceState previous_state = buffer_node->init_state_;
-
-    for (const auto& [pass, edge] : buffer_usages_[resource_key(buffer_node)]) {
-        if (pass->is_culled()) continue;
-        bool is_output_first = output ? !edge->is_output() : edge->is_output();
-        bool is_previous_pass = output ? pass->execution_index() <= current_id : pass->execution_index() < current_id;
-        bool is_subresource_covered = true; // RHI buffer barriers transition the whole allocation.
-
-        if (!(is_previous_pass && is_subresource_covered)) continue;
-        if (pass == pass_node && edge->is_output()) continue;
-        if (pass->execution_index() > previous_id || previous_id == UINT32_MAX) {
-            previous_state = edge->state;
-            previous_id = pass->execution_index();
-        } else if (pass->execution_index() == previous_id && is_output_first) {
-            previous_state = edge->state;
-            previous_id = pass->execution_index();
-        }
-    }
-
-    return previous_state;
-}
-
-bool RDGBuilder::is_last_used_pass(RDGResourceNodeRef resource, RDGPassNodeRef pass, bool output) {
-    const auto it = resource_lifetimes_.find(resource_key(resource));
-    return it != resource_lifetimes_.end() && it->second.last_use == pass->execution_index() &&
-        (output || !it->second.last_use_has_output);
-}
 
 RDGTextureBuilder& RDGTextureBuilder::import(RHITextureRef texture, RHIResourceState init_state) {
     import(texture->get_info(), init_state);
@@ -757,8 +733,23 @@ RDGBufferBuilder& RDGBufferBuilder::import(RHIBufferRef buffer, RHIResourceState
     return *this;
 }
 
-RDGBufferBuilder& RDGBufferBuilder::size(uint32_t size) {
+RDGBufferBuilder& RDGBufferBuilder::import(const RHIBufferInfo& info, RHIResourceState init_state) {
+    buffer_->is_imported_ = true; buffer_->info_ = info; buffer_->init_state_ = init_state;
+    return *this;
+}
+
+RDGBufferBuilder& RDGBufferBuilder::size(uint64_t size) {
     buffer_->info_.size = size;
+    return *this;
+}
+
+RDGBufferBuilder& RDGBufferBuilder::stride(uint32_t stride) {
+    buffer_->info_.stride = stride;
+    return *this;
+}
+
+RDGBufferBuilder& RDGBufferBuilder::allow_indirect() {
+    buffer_->info_.type |= RESOURCE_TYPE_INDIRECT_BUFFER;
     return *this;
 }
 
@@ -784,6 +775,65 @@ RDGBufferBuilder& RDGBufferBuilder::allow_read_write() {
 
 RDGBufferBuilder& RDGBufferBuilder::allow_read() {
     buffer_->info_.type |= RESOURCE_TYPE_UNIFORM_BUFFER;
+    return *this;
+}
+
+namespace {
+void add_buffer_access(const std::shared_ptr<DependencyGraph::DependencyGraph>& graph, RDGPassNode* pass,
+    RDGBufferHandle buffer, RHIResourceState state, bool write, uint32_t offset, uint32_t size) {
+    auto* edge = graph->CreateEdge<RDGBufferEdge>();
+    edge->state = state; edge->offset = offset; edge->size = size;
+    edge->as_buffer_read = !write; edge->as_buffer_write = write;
+    if (write) graph->Link(pass, graph->GetNode(buffer.id()), edge);
+    else graph->Link(graph->GetNode(buffer.id()), pass, edge);
+}
+}
+
+RDGRenderPassBuilder& RDGRenderPassBuilder::indirect_read(RDGBufferHandle buffer, uint32_t offset, uint32_t size) {
+    add_buffer_access(graph_, pass_, buffer, RESOURCE_STATE_INDIRECT_ARGUMENT, false, offset, size);
+    return *this;
+}
+RDGRenderPassBuilder& RDGRenderPassBuilder::vertex_read(RDGBufferHandle buffer, uint32_t offset, uint32_t size) {
+    add_buffer_access(graph_, pass_, buffer, RESOURCE_STATE_VERTEX_BUFFER, false, offset, size);
+    return *this;
+}
+RDGRenderPassBuilder& RDGRenderPassBuilder::index_read(RDGBufferHandle buffer, uint32_t offset, uint32_t size) {
+    add_buffer_access(graph_, pass_, buffer, RESOURCE_STATE_INDEX_BUFFER, false, offset, size);
+    return *this;
+}
+RDGRenderPassBuilder& RDGRenderPassBuilder::vertex_read(const RHIBufferRef& buffer) {
+    if (buffer) vertex_read(builder_->create_buffer("ExternalVertex").import(buffer, RESOURCE_STATE_COMMON).finish());
+    return *this;
+}
+RDGRenderPassBuilder& RDGRenderPassBuilder::index_read(const RHIBufferRef& buffer) {
+    if (buffer) index_read(builder_->create_buffer("ExternalIndex").import(buffer, RESOURCE_STATE_COMMON).finish());
+    return *this;
+}
+RDGRenderPassBuilder& RDGRenderPassBuilder::sample(RDGTextureHandle texture, TextureSubresourceRange range) {
+    auto* edge = graph_->CreateEdge<RDGTextureEdge>();
+    edge->state = RESOURCE_STATE_SHADER_RESOURCE;
+    edge->subresource = range;
+    graph_->Link(graph_->GetNode(texture.id()), pass_, edge);
+    return *this;
+}
+RDGRenderPassBuilder& RDGRenderPassBuilder::sample(const RHITextureRef& texture) {
+    if (texture) sample(builder_->create_texture("ExternalSample").import(texture, RESOURCE_STATE_SHADER_RESOURCE).finish());
+    return *this;
+}
+RDGComputePassBuilder& RDGComputePassBuilder::indirect_read(RDGBufferHandle buffer, uint32_t offset, uint32_t size) {
+    add_buffer_access(graph_, pass_, buffer, RESOURCE_STATE_INDIRECT_ARGUMENT, false, offset, size);
+    return *this;
+}
+RDGCopyPassBuilder& RDGCopyPassBuilder::read_buffer(RDGBufferHandle buffer, uint32_t offset, uint32_t size) {
+    add_buffer_access(graph_, pass_, buffer, RESOURCE_STATE_TRANSFER_SRC, false, offset, size);
+    return *this;
+}
+RDGCopyPassBuilder& RDGCopyPassBuilder::write_buffer(RDGBufferHandle buffer, uint32_t offset, uint32_t size) {
+    add_buffer_access(graph_, pass_, buffer, RESOURCE_STATE_TRANSFER_DST, true, offset, size);
+    return *this;
+}
+RDGCopyPassBuilder& RDGCopyPassBuilder::execute(const RDGPassExecuteFunc& execute) {
+    pass_->execute_ = execute;
     return *this;
 }
 

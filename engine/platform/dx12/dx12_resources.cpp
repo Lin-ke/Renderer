@@ -128,8 +128,9 @@ void DX12Texture::transition(ID3D12GraphicsCommandList* command, D3D12_RESOURCE_
     if (mip + mips > info_.mip_levels || layer + layers > array_layers_) return;
     std::vector<D3D12_RESOURCE_BARRIER> barriers;
     bool uav = false;
+    for (uint32_t plane = 0; plane < get_plane_count(); ++plane)
     for (uint32_t l = layer; l < layer + layers; ++l) for (uint32_t m = mip; m < mip + mips; ++m) {
-        auto index = get_subresource_index(m, l);
+        auto index = get_subresource_index(m, l, plane);
         auto old = subresource_states_[index];
         if (old == state) { uav |= state == D3D12_RESOURCE_STATE_UNORDERED_ACCESS; continue; }
         D3D12_RESOURCE_BARRIER barrier = {};

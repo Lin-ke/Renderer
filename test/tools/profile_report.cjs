@@ -41,6 +41,7 @@ for (const path of process.argv.slice(2)) {
     const { document, Event } = dom.window;
     const node = id => document.getElementById(id);
     const capture = JSON.parse(node('profile_data').textContent);
+    assert.equal(node('dropped').textContent.includes('graph captures were dropped'), Boolean(capture.dropped_graphs));
     const events = capture.traceEvents.filter(event => event.ph === 'X');
     const change = (id, value, type = 'change') => {
         node(id).value = String(value);

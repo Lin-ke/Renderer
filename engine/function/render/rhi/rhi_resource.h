@@ -4,6 +4,7 @@
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <span>
 #include <vector>
 
 class RHICommandList;
@@ -39,6 +40,7 @@ public:
     RHIQueue(const RHIQueueInfo& info) : RHIResource(RHI_QUEUE), info_(info) {}
 
     virtual void wait_idle() = 0;
+    virtual bool submit(std::span<const RHICommandContextRef> contexts, RHIFenceRef fence) = 0;
 
 protected:
     RHIQueueInfo info_;

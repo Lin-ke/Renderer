@@ -278,18 +278,16 @@ void ForwardPass::build(RDGBuilder& builder) {
         .import(back_buffer, RESOURCE_STATE_COLOR_ATTACHMENT)
         .finish();
     
-    builder.create_render_pass("ForwardPass_Main")
+    std::vector<DrawBatch> batches;
+    if (mesh_manager) mesh_manager->collect_draw_batches(batches);
+    auto pass = builder.create_render_pass("ForwardPass_Main")
         .root_signature(root_signature_)
         .descriptor_set(0, descriptor_set_)
         .color(0, color_target, ATTACHMENT_LOAD_OP_CLEAR, ATTACHMENT_STORE_OP_STORE, 
-               Color4{0.1f, 0.2f, 0.4f, 1.0f})
-        .execute([this, render_system](RDGPassContext context) {
-            auto mesh_manager = render_system->get_mesh_manager();
-            if (!mesh_manager) {
-                ERR(LogForwardPass, "Mesh manager is null!");
-                return;
-            }
-            
+               Color4{0.1f, 0.2f, 0.4f, 1.0f});
+    for (const auto& batch : batches)
+        pass.vertex_read(batch.vertex_buffer).vertex_read(batch.normal_buffer).index_read(batch.index_buffer);
+    pass.execute([this, render_system, batches = std::move(batches)](RDGPassContext context) {
             RHICommandListRef cmd = context.command;
             if (!cmd) {
                 ERR(LogForwardPass, "Command list is null!");
@@ -313,8 +311,6 @@ void ForwardPass::build(RDGBuilder& builder) {
                 descriptor_set_->write_buffer(0, per_frame_buffer_);
             }
             
-            std::vector<DrawBatch> batches;
-            mesh_manager->collect_draw_batches(batches);
             for (const auto& batch : batches) {
                 if (per_object_buffer_) {
                     PerObjectData object_data;
@@ -367,6 +363,8 @@ void ForwardPass::build(RDGBuilder& builder, RDGTextureHandle color_target,
         .root_signature(root_signature_)
         .descriptor_set(0, descriptor_set_)
         .color(0, color_target, ATTACHMENT_LOAD_OP_LOAD, ATTACHMENT_STORE_OP_STORE);
+    for (const auto& batch : batches)
+        rp_builder.vertex_read(batch.vertex_buffer).vertex_read(batch.normal_buffer).index_read(batch.index_buffer);
     
     // Add depth attachment if available
     if (depth_target.has_value()) {

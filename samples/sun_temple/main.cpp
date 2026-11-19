@@ -55,17 +55,19 @@ void sample_memory(const char* name) {
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        std::puts("Usage: xmake run sun_temple <source-directory> [--reimport] [--capture <png-path>] [--frames N] [--benchmark] [--profile] [--profile-probes] [--profile-output <json-path>] [--bloom] [--verbose]");
+        std::puts("Usage: xmake run sun_temple <source-directory> [--reimport] [--capture <png-path>] [--frames N] [--benchmark] [--benchmark-lite] [--profile] [--profile-probes] [--profile-output <json-path>] [--bloom] [--gpu-driven] [--verbose]");
         return 1;
     }
     std::filesystem::path source_dir = argv[1];
     bool reimport = false;
     bool verbose = false;
     bool benchmark_enabled = false;
+    bool benchmark_lite = false;
     bool profile_enabled = false;
     bool profile_probes = false;
     std::filesystem::path profile_path = utils::get_engine_path() / "build/test-results/sun-temple-profile.json";
     bool bloom_enabled = false;
+    bool gpu_driven = false;
     std::string capture_path;
     int max_frames = 0;
     for (int i = 2; i < argc; ++i) {
@@ -73,18 +75,20 @@ int main(int argc, char** argv) {
         if (arg == "--reimport") reimport = true;
         else if (arg == "--verbose") verbose = true;
         else if (arg == "--benchmark") benchmark_enabled = true;
+        else if (arg == "--benchmark-lite") benchmark_lite = true;
         else if (arg == "--profile") profile_enabled = true;
         else if (arg == "--profile-probes") { profile_enabled = true; profile_probes = true; }
         else if (arg == "--profile-output" && i + 1 < argc) { profile_enabled = true; profile_path = argv[++i]; }
         else if (arg == "--bloom") bloom_enabled = true;
+        else if (arg == "--gpu-driven") gpu_driven = true;
         else if (arg == "--capture" && i + 1 < argc) capture_path = argv[++i];
         else if (arg == "--frames" && i + 1 < argc) max_frames = std::atoi(argv[++i]);
         else { std::printf("Unknown/incomplete argument: %s\n", argv[i]); return 1; }
     }
     if (max_frames < 0) { std::puts("Frame count must be positive"); return 1; }
     profile_enabled |= benchmark_enabled;
-    if (profile_enabled && max_frames == 0) max_frames = profile_probes ? 40 : benchmark_warmup + 300;
-    if (benchmark_enabled && max_frames <= benchmark_warmup) {
+    if ((profile_enabled || benchmark_lite) && max_frames == 0) max_frames = profile_probes ? 40 : benchmark_warmup + 300;
+    if ((benchmark_enabled || benchmark_lite) && max_frames <= benchmark_warmup) {
         std::printf("Benchmark needs more than %d frames for warmup.\n", benchmark_warmup);
         return 1;
     }
@@ -99,6 +103,7 @@ int main(int argc, char** argv) {
         profile.set_metadata("source", source_dir.string());
         profile.set_metadata("load_mode", reimport ? "import" : "native asset if available");
         profile.set_metadata("bloom", bloom_enabled ? "enabled" : "disabled");
+        profile.set_metadata("renderer", gpu_driven ? "GPU Driven object ID colors" : "deferred PBR");
         profile.set_metadata("resolution", "1280x720");
         profile.set_metadata("threading", "Game / Render / Device");
 #ifdef _DEBUG_
@@ -120,6 +125,7 @@ int main(int argc, char** argv) {
     auto* renderer = EngineContext::render_system();
     renderer->set_show_ui(false);
     renderer->bloom_settings_.enabled = bloom_enabled;
+    renderer->enable_gpu_driven_ = gpu_driven;
 
     if (profile_enabled) sample_memory("EngineReady");
     int result = 0;
@@ -159,6 +165,7 @@ int main(int argc, char** argv) {
             renderer->get_mesh_manager()->set_active_camera(camera);
             auto last = std::chrono::steady_clock::now();
             int frames = 0;
+            std::optional<std::chrono::steady_clock::time_point> benchmark_start;
             bool captured = false;
             renderer->take_profile_frame_stats();
             auto& cpu_profiler = CpuProfiler::instance();
@@ -175,6 +182,10 @@ int main(int argc, char** argv) {
                 EngineContext::world()->tick(delta_time);
                 if (!EngineContext::render_frame()) { result = 1; break; }
                 ++frames;
+                if (benchmark_lite && frames == benchmark_warmup) {
+                    if (!EngineContext::wait_for_render()) { result = 1; break; }
+                    benchmark_start = std::chrono::steady_clock::now();
+                }
                 if (profile_enabled) {
                     cpu_profiler.end_frame();
                     if (frames == 1) {
@@ -200,6 +211,15 @@ int main(int argc, char** argv) {
             }
             if (!capture_path.empty() && !captured) result = 1;
             if (!EngineContext::wait_for_render()) result = 1;
+            if (benchmark_start && frames > benchmark_warmup) {
+                const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - *benchmark_start).count();
+                const int completed = frames - benchmark_warmup;
+                std::printf("Wall benchmark (%d completed frames, Profile %s): %.1f FPS; %.3f ms/frame\n",
+                    completed,profile_enabled ? "enabled" : "disabled",completed / seconds,seconds * 1000 / completed);
+            }
+            bool rhi_errors = false;
+            EngineContext::run_device_task([&] { rhi_errors = EngineContext::rhi()->check_debug_messages("Sun Temple completed frames"); });
+            if (rhi_errors) result = 1;
             if (profile_enabled) sample_memory("SteadyState");
             if (benchmark_enabled) print_benchmark(renderer->take_profile_frame_stats());
             EngineContext::world()->set_active_scene(nullptr);

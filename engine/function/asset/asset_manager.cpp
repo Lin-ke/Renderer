@@ -12,6 +12,7 @@
 #include <cereal/archives/json.hpp>
 #include <cereal/types/memory.hpp>
 #include <cereal/types/vector.hpp>
+#include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
@@ -24,6 +25,35 @@
 namespace fs = std::filesystem;
 
 DEFINE_LOG_TAG(LogAsset, "Asset"); // Define the tag here
+
+namespace {
+thread_local bool asset_upload_batch_active = false;
+
+class AssetUploadBatch {
+public:
+	explicit AssetUploadBatch(bool enabled) : owns_batch_(enabled && !asset_upload_batch_active) {
+		if (owns_batch_) asset_upload_batch_active = true;
+	}
+
+	~AssetUploadBatch() {
+		if (!owns_batch_) return;
+		asset_upload_batch_active = false;
+		if (auto backend = EngineContext::rhi()) {
+			EngineContext::run_device_task([backend] { backend->get_immediate_command()->submit_pending(); });
+		}
+	}
+
+	AssetUploadBatch(const AssetUploadBatch&) = delete;
+	AssetUploadBatch& operator=(const AssetUploadBatch&) = delete;
+
+private:
+	bool owns_batch_;
+};
+}
+
+bool AssetManager::is_upload_batch_active() {
+	return asset_upload_batch_active;
+}
 
 struct AssetUID {
 	UID uid;
@@ -313,27 +343,6 @@ AssetRef AssetManager::load_asset_blocking(UID uid) {
 		return nullptr;
 	}
 
-	static thread_local uint32_t load_depth = 0;
-	static thread_local bool pending_gpu_flush = false;
-	struct LoadDepthGuard {
-		uint32_t &depth;
-		bool &needs_flush;
-		~LoadDepthGuard() {
-			if (--depth == 0 && needs_flush) {
-				needs_flush = false;
-				if (EngineContext::rhi()) {
-					EngineContext::run_device_task([] {
-						if (auto rhi = EngineContext::rhi()) {
-							if (auto cmd = rhi->get_immediate_command()) {
-								cmd->flush();
-							}
-						}
-					});
-				}
-			}
-		}
-	} depth_guard{ ++load_depth, pending_gpu_flush };
-
 	AssetRef result;
 	{
 		std::scoped_lock lock(asset_mutex_);
@@ -343,20 +352,18 @@ AssetRef AssetManager::load_asset_blocking(UID uid) {
 	}
 	if (result) {
 		if (!result->is_initialized()) {
-			pending_gpu_flush = true;
 			initialize_loaded_asset(result);
 		}
 		return result;
 	}
 
 	auto futures = enqueue_load_task(uid);
-	{
-		ProfileProbe probe("AssetWaitReads", UINT64_MAX);
-		for (auto &fut : futures) {
+	AssetUploadBatch upload_batch(futures.size() > 1);
+	for (auto &fut : futures) {
+		if (fut.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+			ProfileProbe probe("AssetWaitReads", UINT64_MAX);
 			fut.wait();
 		}
-	}
-	for (auto &fut : futures) {
 		auto asset = fut.get();
 		if (!asset) continue;
 
@@ -365,7 +372,6 @@ AssetRef AssetManager::load_asset_blocking(UID uid) {
 		}
 
 		if (!asset->is_initialized()) {
-			pending_gpu_flush = true;
 			initialize_loaded_asset(asset);
 		}
 	}

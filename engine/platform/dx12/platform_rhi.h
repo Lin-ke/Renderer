@@ -100,6 +100,7 @@ public:
         : RHIQueue(info), queue_(queue), backend_(backend) {}
 
     void wait_idle() override final;
+    bool submit(std::span<const RHICommandContextRef> contexts, RHIFenceRef fence) override final;
     void* raw_handle() override final { return queue_; }
 
 private:
@@ -188,10 +189,11 @@ public:
 
     ID3D12Resource* get_resource() const { return resource_.Get(); }
     uint32_t get_array_layers() const { return array_layers_; }
-    uint32_t get_subresource_index(uint32_t mip_slice, uint32_t array_slice) const {
-        return mip_slice + array_slice * info_.mip_levels;
+    uint32_t get_subresource_index(uint32_t mip_slice, uint32_t array_slice, uint32_t plane = 0) const {
+        return mip_slice + (array_slice + plane * array_layers_) * info_.mip_levels;
     }
-    uint32_t get_total_subresources() const { return info_.mip_levels * array_layers_; }
+    uint32_t get_plane_count() const { return is_depth_stencil_format(info_.format) ? 2 : 1; }
+    uint32_t get_total_subresources() const { return info_.mip_levels * array_layers_ * get_plane_count(); }
 
     D3D12_RESOURCE_STATES get_subresource_state(uint32_t subresource) const;
     void set_subresource_state(uint32_t subresource, D3D12_RESOURCE_STATES state);
@@ -393,6 +395,7 @@ public:
     ID3D12GraphicsCommandList* ensure_recording();
     ID3D12GraphicsCommandList* get_command_list() const { return command_list_.Get(); }
     bool is_recording() const { return is_recording_; }
+    uint64_t submission_fence() const { return submission_fence_; }
     bool close_command_list();
     void set_submission_fence(uint64_t value) { submission_fence_ = value; }
     void on_complete(std::function<void()> callback) { completion_callbacks_.push_back(std::move(callback)); }
@@ -405,6 +408,9 @@ public:
     void begin_command() override final;
     void end_command() override final;
     void execute(RHIFenceRef fence, RHISemaphoreRef wait_semaphore, RHISemaphoreRef signal_semaphore) override final;
+    void set_explicit_barriers(bool enabled) override final { explicit_barriers_ = enabled; }
+    bool uses_explicit_barriers() const { return explicit_barriers_; }
+    void publish_barrier_states();
 
     void gpu_timestamp_begin_frame() override final;
     void gpu_timestamp_end_frame() override final;
@@ -448,6 +454,8 @@ public:
     void draw_indexed(uint32_t index_count, uint32_t instance_count, uint32_t first_index, uint32_t vertex_offset, uint32_t first_instance) override final;
     void draw_indirect(RHIBufferRef argument_buffer, uint32_t offset, uint32_t draw_count) override final;
     void draw_indexed_indirect(RHIBufferRef argument_buffer, uint32_t offset, uint32_t draw_count) override final;
+    void draw_indirect(const RHIIndirectDrawInfo& info) override final;
+    void draw_indexed_indirect(const RHIIndirectDrawInfo& info) override final;
 
     bool read_texture(RHITextureRef texture, void* data, uint32_t size) override final;
 
@@ -455,6 +463,9 @@ public:
     void imgui_render_draw_data(ImDrawData* draw_data) override final;
 
 private:
+    friend class DX12Backend;
+    friend class DX12CommandContextImmediate;
+
     bool flush_graphics_bindings();
     bool flush_compute_bindings();
 
@@ -462,7 +473,11 @@ private:
     ComPtr<ID3D12CommandAllocator> command_allocator_;
     ComPtr<ID3D12GraphicsCommandList> command_list_;
     bool is_recording_ = false;
+    bool explicit_barriers_ = false;
+    std::vector<std::tuple<DX12Texture*, uint32_t, D3D12_RESOURCE_STATES>> explicit_texture_states_;
     uint64_t submission_fence_ = 0;
+    uint64_t staging_bytes_ = 0;
+    uint32_t asset_upload_count_ = 0;
     std::vector<std::function<void()>> completion_callbacks_;
     DX12GraphicsPipeline* current_graphics_pipeline_ = nullptr;
     DX12ComputePipeline* current_compute_pipeline_ = nullptr;
@@ -485,12 +500,14 @@ public:
     explicit DX12CommandContextImmediate(DX12Backend& backend);
     ~DX12CommandContextImmediate() override = default;
 
-    void destroy() override final { cmd_context_.reset(); }
+    void destroy() override final { cmd_context_.reset(); contexts_.clear(); }
     void* raw_handle() override final { return cmd_context_ ? cmd_context_->raw_handle() : nullptr; }
     DX12CommandContext* get_context() { return ensure_context(); }
     DX12CommandContext* peek_context() const { return cmd_context_.get(); }
 
     void flush() override final;
+    void submit_pending() override final;
+    void finish_asset_upload(bool batch_uploads) override final;
     void texture_barrier(const RHITextureBarrier& barrier) override final;
     void buffer_barrier(const RHIBufferBarrier& barrier) override final;
     void copy_texture_to_buffer(RHITextureRef src, TextureSubresourceLayers src_subresource, RHIBufferRef dst, uint64_t dst_offset) override final;
@@ -502,6 +519,7 @@ public:
 private:
     DX12CommandContext* ensure_context();
     std::shared_ptr<DX12CommandContext> cmd_context_;
+    std::vector<std::shared_ptr<DX12CommandContext>> contexts_;
     DX12Backend& backend_;
 };
 
@@ -563,8 +581,10 @@ public:
     DX12CommandContext* peek_immediate_context() const;
     void submit_and_wait(DX12CommandContext* context = nullptr);
     void submit(DX12CommandContext* context, bool wait = false);
+    bool submit(std::span<DX12CommandContext* const> contexts, bool wait, RHIFenceRef fence = nullptr, bool include_immediate = true);
     void prepare_submission();
     void wait_for_fence(uint64_t value);
+    bool is_fence_complete(uint64_t value) const { return internal_fence_->GetCompletedValue() >= value; }
     void collect_submissions();
     void begin_context(DX12CommandContext* context) { std::scoped_lock lock(submission_mutex_); recording_contexts_.push_back(context); }
     void end_context(DX12CommandContext* context);
@@ -613,6 +633,7 @@ public:
     void free_imgui_srv_index(uint32_t index);
     uint32_t sampler_table(D3D12_CPU_DESCRIPTOR_HANDLE handle);
     uint32_t resource_table(D3D12_CPU_DESCRIPTOR_HANDLE handle);
+    ID3D12CommandSignature* indirect_signature(D3D12_INDIRECT_ARGUMENT_TYPE type, uint32_t stride);
 
 private:
     struct RetiredMemory { uint64_t id; ComPtr<ID3D12Resource> resource; uint64_t fence = UINT64_MAX; };
@@ -669,9 +690,10 @@ private:
     std::deque<Completion> completions_;
     uint32_t submission_slot_ = 0;
     bool submission_active_ = false;
-    std::recursive_mutex submission_mutex_;
+    mutable std::recursive_mutex submission_mutex_;
     std::vector<DX12CommandContext*> recording_contexts_;
     std::vector<uint32_t> imgui_free_srv_indices_;
     std::unordered_map<SIZE_T, uint32_t> sampler_tables_;
     std::unordered_map<SIZE_T, uint32_t> resource_tables_;
+    std::map<std::pair<D3D12_INDIRECT_ARGUMENT_TYPE, uint32_t>, ComPtr<ID3D12CommandSignature>> indirect_signatures_;
 };

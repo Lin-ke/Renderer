@@ -1,9 +1,13 @@
 #include "platform_rhi.h"
+#include "engine/core/utils/profiler.h"
 #include <algorithm>
 #include <cstring>
 
 DEFINE_LOG_TAG(LogDX12Copy, "DX12Copy");
 namespace {
+constexpr uint32_t MAX_ASSET_UPLOADS_PER_BATCH = 30;
+constexpr uint64_t ASSET_UPLOAD_BATCH_BYTES = 64ull * 1024 * 1024;
+
 DX12Allocation staging_buffer(DX12Backend& backend, uint64_t size, D3D12_HEAP_TYPE type) {
     D3D12_HEAP_PROPERTIES heap = {}; heap.Type = type;
     D3D12_RESOURCE_DESC desc = {};
@@ -57,6 +61,8 @@ RHIBufferRef DX12Backend::create_static_buffer(const RHIBufferInfo& info, const 
     auto* destination = static_cast<DX12Buffer*>(buffer.get());
     destination->transition(command, D3D12_RESOURCE_STATE_COPY_DEST);
     command->CopyBufferRegion(destination->get_resource(), 0, upload.Get(), 0, info.size);
+    destination->transition(command, D3D12_RESOURCE_STATE_COMMON);
+    context->staging_bytes_ += info.size;
     retain(buffer);
     retain_upload(std::move(upload));
     return buffer;
@@ -68,8 +74,10 @@ void DX12CommandContext::copy_buffer(RHIBufferRef src, uint64_t src_offset, RHIB
     auto* command = ensure_recording(); if (!command) return;
     backend->retain(src); backend->retain(dst);
     auto* source = static_cast<DX12Buffer*>(src.get()); auto* destination = static_cast<DX12Buffer*>(dst.get());
-    source->transition(command, D3D12_RESOURCE_STATE_COPY_SOURCE);
-    destination->transition(command, D3D12_RESOURCE_STATE_COPY_DEST);
+    if (!explicit_barriers_) {
+        source->transition(command, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        destination->transition(command, D3D12_RESOURCE_STATE_COPY_DEST);
+    }
     command->CopyBufferRegion(destination->get_resource(), dst_offset, source->get_resource(), src_offset, size);
 }
 void DX12CommandContext::copy_buffer_to_texture(RHIBufferRef src, uint64_t offset, RHITextureRef dst, TextureSubresourceLayers layers) {
@@ -93,13 +101,14 @@ void DX12CommandContext::copy_buffer_to_texture(RHIBufferRef src, uint64_t offse
         }
     }
     upload->Unmap(0, nullptr);
-    texture->transition(command, D3D12_RESOURCE_STATE_COPY_DEST, layers.mip_level, 1, layers.base_array_layer, UINT(layout.layouts.size()));
+    if (!explicit_barriers_) texture->transition(command, D3D12_RESOURCE_STATE_COPY_DEST, layers.mip_level, 1, layers.base_array_layer, UINT(layout.layouts.size()));
     for (uint32_t i = 0; i < layout.layouts.size(); ++i) {
         D3D12_TEXTURE_COPY_LOCATION source = {}; source.pResource = upload.Get(); source.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT; source.PlacedFootprint = layout.layouts[i];
         D3D12_TEXTURE_COPY_LOCATION destination = {}; destination.pResource = texture->get_resource(); destination.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
         destination.SubresourceIndex = texture->get_subresource_index(layers.mip_level, layers.base_array_layer + i);
         command->CopyTextureRegion(&destination, 0, 0, 0, &source, nullptr);
     }
+    staging_bytes_ += layout.total;
     backend->retain_upload(std::move(upload));
 }
 void DX12CommandContext::copy_texture_to_buffer(RHITextureRef src, TextureSubresourceLayers layers, RHIBufferRef dst, uint64_t offset) {
@@ -112,7 +121,7 @@ void DX12CommandContext::copy_texture_to_buffer(RHITextureRef src, TextureSubres
     for (size_t i = 0; i < layout.layouts.size(); ++i) size += layout.row_sizes[i] * layout.rows[i] * layout.layouts[i].Footprint.Depth;
     if (offset > dst->get_info().size || size > dst->get_info().size - offset) return;
     auto readback = staging_buffer(*backend, layout.total, D3D12_HEAP_TYPE_READBACK); if (!readback) return;
-    texture->transition(command, D3D12_RESOURCE_STATE_COPY_SOURCE, layers.mip_level, 1, layers.base_array_layer, UINT(layout.layouts.size()));
+    if (!explicit_barriers_) texture->transition(command, D3D12_RESOURCE_STATE_COPY_SOURCE, layers.mip_level, 1, layers.base_array_layer, UINT(layout.layouts.size()));
     for (uint32_t i = 0; i < layout.layouts.size(); ++i) {
         D3D12_TEXTURE_COPY_LOCATION source = {}; source.pResource = texture->get_resource(); source.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
         source.SubresourceIndex = texture->get_subresource_index(layers.mip_level, layers.base_array_layer + i);
@@ -142,8 +151,10 @@ void DX12CommandContext::copy_texture(RHITextureRef src, TextureSubresourceLayer
     backend->retain(src); backend->retain(dst);
     auto* source = static_cast<DX12Texture*>(src.get()); auto* destination = static_cast<DX12Texture*>(dst.get());
     uint32_t count = source_layers.layer_count ? source_layers.layer_count : source->get_array_layers() - source_layers.base_array_layer;
-    source->transition(command, D3D12_RESOURCE_STATE_COPY_SOURCE, source_layers.mip_level, 1, source_layers.base_array_layer, count);
-    destination->transition(command, D3D12_RESOURCE_STATE_COPY_DEST, destination_layers.mip_level, 1, destination_layers.base_array_layer, count);
+    if (!explicit_barriers_) {
+        source->transition(command, D3D12_RESOURCE_STATE_COPY_SOURCE, source_layers.mip_level, 1, source_layers.base_array_layer, count);
+        destination->transition(command, D3D12_RESOURCE_STATE_COPY_DEST, destination_layers.mip_level, 1, destination_layers.base_array_layer, count);
+    }
     for (uint32_t i = 0; i < count; ++i) {
         D3D12_TEXTURE_COPY_LOCATION from = {}; from.pResource = source->get_resource(); from.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
         from.SubresourceIndex = source->get_subresource_index(source_layers.mip_level, source_layers.base_array_layer + i);
@@ -168,14 +179,36 @@ bool DX12CommandContext::read_texture(RHITextureRef texture, void* data, uint32_
 
 DX12CommandContextImmediate::DX12CommandContextImmediate(DX12Backend& backend) : backend_(backend) {}
 DX12CommandContext* DX12CommandContextImmediate::ensure_context() {
-    if (!cmd_context_) {
-        cmd_context_ = std::make_shared<DX12CommandContext>(nullptr, backend_.shared_from_this());
-        cmd_context_->init();
+    if (!cmd_context_ || (!cmd_context_->is_recording() && !backend_.is_fence_complete(cmd_context_->submission_fence()))) {
+        auto free = std::find_if(contexts_.begin(), contexts_.end(), [&](const auto& context) {
+            return backend_.is_fence_complete(context->submission_fence());
+        });
+        if (free != contexts_.end()) {
+            cmd_context_ = *free;
+        } else {
+            auto context = std::make_shared<DX12CommandContext>(nullptr, backend_.shared_from_this());
+            if (!context->init()) return nullptr;
+            contexts_.push_back(context);
+            cmd_context_ = std::move(context);
+        }
     }
     cmd_context_->ensure_recording();
     return cmd_context_.get();
 }
 void DX12CommandContextImmediate::flush() { backend_.submit_and_wait(cmd_context_.get()); }
+void DX12CommandContextImmediate::submit_pending() {
+    if (cmd_context_ && cmd_context_->is_recording()) {
+        PROFILE_SCOPE("DX12ImmediateSubmit");
+        backend_.submit(cmd_context_.get());
+    }
+}
+void DX12CommandContextImmediate::finish_asset_upload(bool batch_uploads) {
+    if (!cmd_context_ || !cmd_context_->is_recording()) return;
+    if (!batch_uploads || ++cmd_context_->asset_upload_count_ >= MAX_ASSET_UPLOADS_PER_BATCH ||
+        cmd_context_->staging_bytes_ >= ASSET_UPLOAD_BATCH_BYTES) {
+        submit_pending();
+    }
+}
 void DX12CommandContextImmediate::texture_barrier(const RHITextureBarrier& b) { ensure_context()->texture_barrier(b); }
 void DX12CommandContextImmediate::buffer_barrier(const RHIBufferBarrier& b) { ensure_context()->buffer_barrier(b); }
 void DX12CommandContextImmediate::copy_texture_to_buffer(RHITextureRef src, TextureSubresourceLayers layers, RHIBufferRef dst, uint64_t offset) { ensure_context()->copy_texture_to_buffer(src, layers, dst, offset); }
@@ -189,30 +222,60 @@ RHICommandContextImmediateRef DX12Backend::get_immediate_command() {
 }
 
 namespace {
-void execute_indirect(DX12CommandContext& context, DX12Backend& backend, RHIBufferRef buffer, uint32_t offset, uint32_t count, D3D12_INDIRECT_ARGUMENT_TYPE type, uint32_t stride) {
-    if (!buffer || uint64_t(offset) + uint64_t(count) * stride > buffer->get_info().size) return;
+void execute_indirect(DX12CommandContext& context, DX12Backend& backend, const RHIIndirectDrawInfo& info,
+    D3D12_INDIRECT_ARGUMENT_TYPE type, uint32_t command_size) {
+    if (!info.max_draw_count) return;
+    const auto stride = info.stride ? info.stride : command_size;
+    if (!info.arguments || info.offset % 4 || stride % 4 || stride < command_size ||
+        info.offset > info.arguments->get_info().size ||
+        uint64_t(info.max_draw_count) * stride > info.arguments->get_info().size - info.offset ||
+        (info.count_buffer && (info.count_offset % 4 || info.count_offset > info.count_buffer->get_info().size ||
+            sizeof(uint32_t) > info.count_buffer->get_info().size - info.count_offset))) {
+        ERR(LogDX12Copy, "Invalid indirect argument range, stride or counter");
+        return;
+    }
     auto* command = context.ensure_recording(); if (!command) return;
-    D3D12_INDIRECT_ARGUMENT_DESC argument = {}; argument.Type = type;
-    D3D12_COMMAND_SIGNATURE_DESC desc = {}; desc.ByteStride = stride; desc.NumArgumentDescs = 1; desc.pArgumentDescs = &argument;
-    ComPtr<ID3D12CommandSignature> signature;
-    if (FAILED(backend.get_device()->CreateCommandSignature(&desc, nullptr, IID_PPV_ARGS(&signature)))) return;
-    auto* native = static_cast<DX12Buffer*>(buffer.get());
-    native->transition(command, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
-    backend.retain(buffer);
-    command->ExecuteIndirect(signature.Get(), count, native->get_resource(), offset, nullptr, 0);
-    // Keep the signature alive without interrupting the active render pass.
-    context.on_complete([signature]() {});
+    auto* signature = backend.indirect_signature(type, stride); if (!signature) return;
+    auto* native = static_cast<DX12Buffer*>(info.arguments.get());
+    if (!context.uses_explicit_barriers()) native->transition(command, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+    backend.retain(info.arguments);
+    ID3D12Resource* counter = nullptr;
+    if (info.count_buffer) {
+        auto* buffer = static_cast<DX12Buffer*>(info.count_buffer.get());
+        if (!context.uses_explicit_barriers()) buffer->transition(command, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+        backend.retain(info.count_buffer);
+        counter = buffer->get_resource();
+    }
+    command->ExecuteIndirect(signature, info.max_draw_count, native->get_resource(), info.offset, counter, info.count_offset);
 }
+}
+ID3D12CommandSignature* DX12Backend::indirect_signature(D3D12_INDIRECT_ARGUMENT_TYPE type, uint32_t stride) {
+    std::scoped_lock lock(submission_mutex_);
+    auto& signature = indirect_signatures_[{type, stride}];
+    if (!signature) {
+        D3D12_INDIRECT_ARGUMENT_DESC argument{}; argument.Type = type;
+        D3D12_COMMAND_SIGNATURE_DESC description{};
+        description.ByteStride = stride; description.NumArgumentDescs = 1; description.pArgumentDescs = &argument;
+        if (FAILED(device_->CreateCommandSignature(&description, nullptr, IID_PPV_ARGS(&signature))))
+            ERR(LogDX12Copy, "Failed to create indirect command signature");
+    }
+    return signature.Get();
 }
 void DX12CommandContext::draw_indirect(RHIBufferRef buffer, uint32_t offset, uint32_t count) {
-    if (!current_graphics_pipeline_) return; if (!flush_graphics_bindings()) return;
-    execute_indirect(*this, *backend_.lock(), buffer, offset, count, D3D12_INDIRECT_ARGUMENT_TYPE_DRAW, sizeof(RHIIndirectCommand));
+    draw_indirect({.arguments = buffer, .offset = offset, .max_draw_count = count});
 }
 void DX12CommandContext::draw_indexed_indirect(RHIBufferRef buffer, uint32_t offset, uint32_t count) {
-    if (!current_graphics_pipeline_) return; if (!flush_graphics_bindings()) return;
-    execute_indirect(*this, *backend_.lock(), buffer, offset, count, D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED, sizeof(RHIIndexedIndirectCommand));
+    draw_indexed_indirect({.arguments = buffer, .offset = offset, .max_draw_count = count});
+}
+void DX12CommandContext::draw_indirect(const RHIIndirectDrawInfo& info) {
+    auto backend = backend_.lock(); if (!backend || !current_graphics_pipeline_ || !flush_graphics_bindings()) return;
+    execute_indirect(*this, *backend, info, D3D12_INDIRECT_ARGUMENT_TYPE_DRAW, sizeof(RHIIndirectCommand));
+}
+void DX12CommandContext::draw_indexed_indirect(const RHIIndirectDrawInfo& info) {
+    auto backend = backend_.lock(); if (!backend || !current_graphics_pipeline_ || !flush_graphics_bindings()) return;
+    execute_indirect(*this, *backend, info, D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED, sizeof(RHIIndexedIndirectCommand));
 }
 void DX12CommandContext::dispatch_indirect(RHIBufferRef buffer, uint32_t offset) {
-    if (!current_compute_pipeline_) return; if (!flush_compute_bindings()) return;
-    execute_indirect(*this, *backend_.lock(), buffer, offset, 1, D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH, 12);
+    auto backend = backend_.lock(); if (!backend || !current_compute_pipeline_ || !flush_compute_bindings()) return;
+    execute_indirect(*this, *backend, {.arguments = buffer, .offset = offset, .max_draw_count = 1}, D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH, 12);
 }

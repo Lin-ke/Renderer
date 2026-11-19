@@ -21,11 +21,12 @@ void EditorUIPass::init() {
 }
 
 void EditorUIPass::build(RDGBuilder& builder, RDGTextureHandle color, Extent2D extent,
-                         std::shared_ptr<ImDrawData> draw_data) {
+                         std::shared_ptr<ImDrawData> draw_data, RDGTextureHandle preview) {
     if (!initialized_ || !is_enabled() || !draw_data || !draw_data->CmdListsCount) return;
 
     builder.create_render_pass("EditorUI_Pass")
         .color(0, color, ATTACHMENT_LOAD_OP_LOAD, ATTACHMENT_STORE_OP_STORE)
+        .sample(preview, {TEXTURE_ASPECT_NONE, 0, 1, 0, 1})
         .execute([draw_data = std::move(draw_data), extent](RDGPassContext context) {
             std::scoped_lock lock(Window::imgui_mutex());
             context.command->set_viewport({0, 0}, {extent.width, extent.height});

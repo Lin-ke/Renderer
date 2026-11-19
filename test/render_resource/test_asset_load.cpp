@@ -3,6 +3,7 @@
 #include "engine/main/engine_context.h"
 #include "engine/function/asset/asset_manager.h"
 #include "engine/function/render/render_resource/mesh.h"
+#include "engine/function/render/render_resource/model.h"
 
 #include <algorithm>
 #include <array>
@@ -82,5 +83,55 @@ TEST_CASE("Native mesh archives reload compact attributes into correct GPU buffe
         readback->unmap();
     }
     CHECK_FALSE(backend->check_debug_messages("compact native mesh loading"));
+    test_utils::TestContext::reset();
+}
+
+TEST_CASE("Model loading submits the final partial batch of mesh uploads", "[render_resource][asset_load][dx12]") {
+    test_utils::TestContext::reset();
+    auto* assets = EngineContext::asset();
+    auto model = std::make_shared<Model>();
+    std::array<float, 31> expected{};
+    for (size_t index = 0; index < expected.size(); ++index) {
+        const float x = static_cast<float>(index + 1);
+        expected[index] = x;
+        const auto name = "BatchMesh" + std::to_string(index);
+        auto mesh = Mesh::Create({{x, 0, 0}, {x, 1, 0}, {x, 0, 1}}, {}, {}, {}, {0, 1, 2}, name);
+        assets->save_asset(mesh, "/Game/upload_batch/" + name + ".binasset");
+        model->add_slot(mesh, nullptr);
+        assets->unload_asset(mesh->get_uid());
+    }
+    const std::string path = "/Game/upload_batch/model.binasset";
+    assets->save_asset(model, path);
+    assets->unload_asset(model->get_uid());
+    model.reset();
+
+    auto loaded = assets->load_asset<Model>(path);
+    REQUIRE(loaded);
+    REQUIRE(loaded->get_slot_count() == expected.size());
+    auto backend = EngineContext::rhi();
+    auto queue = backend->get_queue({QUEUE_TYPE_GRAPHICS, 0});
+    auto pool = backend->create_command_pool({queue});
+    auto command = backend->create_command_context(pool);
+    auto fence = backend->create_fence(false);
+    auto readback = backend->create_buffer({.size = sizeof(expected), .memory_usage = MEMORY_USAGE_GPU_TO_CPU});
+    REQUIRE(command);
+    REQUIRE(fence);
+    REQUIRE(readback);
+    command->begin_command();
+    for (uint32_t index = 0; index < loaded->get_slot_count(); ++index) {
+        auto vertices = loaded->get_vertex_buffer(index);
+        REQUIRE(vertices);
+        REQUIRE(vertices->position_buffer_);
+        command->copy_buffer(vertices->position_buffer_, 0, readback, index * sizeof(float), sizeof(float));
+    }
+    command->end_command();
+    const std::array commands{command};
+    REQUIRE(queue->submit(commands, fence));
+    fence->wait();
+    auto* result = readback->map();
+    REQUIRE(result);
+    CHECK(std::memcmp(result, expected.data(), sizeof(expected)) == 0);
+    readback->unmap();
+    CHECK_FALSE(backend->check_debug_messages("batched mesh upload"));
     test_utils::TestContext::reset();
 }

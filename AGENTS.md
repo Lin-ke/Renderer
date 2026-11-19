@@ -202,6 +202,7 @@ RHIGraphicsPipelineRef pipeline = backend->create_graphics_pipeline(info);
 
 ## Docs
 Profile 采集、JSON 与离线 HTML 报告导出：`docs/profile.md`。
+GPU Driven 第一阶段、Device GPU Scene、间接参数与后续计划：`docs/gpu_driven.md`。
 DX12 后端、DescriptorSet 绑定、隐藏窗口截图测试：`docs/dx12.md`。
 渲染后端为 DX12。Shader 资源必须通过 RootSignature 布局和 DescriptorSet 绑定，不能恢复逐槽位的 CommandList 资源绑定 API。测试使用隐藏窗口，通过截图和像素验证输出。
 RDG 编译、拓扑排序、剔除、显式依赖与资源提取：`docs/rdg.md`。图外副作用必须用 `never_cull()` 标记，资源访问必须声明，不能依赖 Pass 创建顺序代替数据依赖。

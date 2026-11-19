@@ -1,6 +1,8 @@
 #include "profile_session.h"
 #include "cpu_profiler.h"
 #include "profile_report.h"
+#include "profiler.h"
+#include "engine/core/os/thread_pool.h"
 
 #include <cereal/archives/json.hpp>
 #include <cereal/external/rapidjson/document.h>
@@ -26,7 +28,7 @@ uint64_t ProfileSession::thread_id() { return GetCurrentThreadId(); }
 
 bool ProfileSession::begin(std::string name) {
     std::scoped_lock lock(mutex_);
-    if (generation()) return false;
+    if (generation() || pending_graphs_ || ending_) return false;
     for (auto& buffer : buffers_) {
         std::scoped_lock buffer_lock(buffer->mutex);
         buffer->count = 0;
@@ -35,13 +37,19 @@ bool ProfileSession::begin(std::string name) {
     name_ = std::move(name);
     metadata_.clear();
     memory_samples_.clear(); graphs_.clear(); gpu_frames_.clear();
+    dropped_graphs_ = 0;
     start_ = CpuProfiler::get_timestamp(); end_ = 0;
     active_.store(++next_generation_, std::memory_order_release);
     return true;
 }
 void ProfileSession::end() {
-    active_.store(0, std::memory_order_release);
+    std::unique_lock lock(mutex_);
+    if (!generation()) return;
+    ending_ = true;
+    graph_condition_.wait(lock, [this] { return pending_graphs_ == 0; });
     end_ = CpuProfiler::get_timestamp();
+    active_.store(0, std::memory_order_release);
+    ending_ = false;
 }
 ProfileSession::Buffer* ProfileSession::buffer() {
     static thread_local Buffer* local = nullptr;
@@ -91,10 +99,37 @@ void ProfileSession::name_thread(std::string name) {
     std::scoped_lock lock(mutex_);
     thread_names_[thread_id()] = std::move(name);
 }
-void ProfileSession::add_graph(std::string json) {
-    if (!generation()) return;
-    std::scoped_lock lock(mutex_);
-    graphs_.push_back(std::move(json));
+bool ProfileSession::enqueue_graph(ThreadPool* pool, uint64_t captured_generation, size_t snapshot_bytes,
+    std::function<std::string()> serialize) {
+    constexpr size_t max_pending_graphs = 32;
+    constexpr size_t max_pending_bytes = 64 * 1024 * 1024;
+    size_t index;
+    {
+        std::scoped_lock lock(mutex_);
+        if (!captured_generation || captured_generation != generation() || ending_) return false;
+        if (!pool || pending_graphs_ >= max_pending_graphs || snapshot_bytes > max_pending_bytes - pending_graph_bytes_) {
+            ++dropped_graphs_;
+            return false;
+        }
+        index = graphs_.size();
+        graphs_.emplace_back();
+        ++pending_graphs_; pending_graph_bytes_ += snapshot_bytes;
+    }
+    // ThreadPool uses packaged_task; discarding its future does not join the task.
+    pool->enqueue([this, captured_generation, snapshot_bytes, index, serialize = std::move(serialize)]() mutable {
+        std::string json;
+        {
+            PROFILE_SCOPE("RDG_SerializeJSON");
+            json = serialize();
+        }
+        {
+            std::scoped_lock lock(mutex_);
+            if (captured_generation == next_generation_) graphs_[index] = std::move(json);
+            --pending_graphs_; pending_graph_bytes_ -= snapshot_bytes;
+        }
+        graph_condition_.notify_all();
+    });
+    return true;
 }
 void ProfileSession::add_gpu_frame(std::string json) {
     if (!generation()) return;
@@ -103,7 +138,8 @@ void ProfileSession::add_gpu_frame(std::string json) {
 }
 
 bool ProfileSession::write(const std::filesystem::path& path) const {
-    if (generation() || !end_) return false;
+    std::unique_lock lock(mutex_);
+    if (generation() || !end_ || pending_graphs_ || ending_) return false;
     std::error_code error;
     if (!path.parent_path().empty()) std::filesystem::create_directories(path.parent_path(), error);
     if (error) return false;
@@ -116,7 +152,6 @@ bool ProfileSession::write(const std::filesystem::path& path) const {
     if (extension == L".html") json_path.replace_extension(".json");
     else html_path.replace_extension(".html");
     std::ostringstream output;
-    std::scoped_lock lock(mutex_);
     json::OStreamWrapper stream(output);
     json::Writer<json::OStreamWrapper> writer(stream);
     writer.StartObject();
@@ -159,6 +194,7 @@ bool ProfileSession::write(const std::filesystem::path& path) const {
     }
     writer.EndArray();
     writer.Key("dropped_cpu_events"); writer.Uint64(dropped);
+    writer.Key("dropped_graphs"); writer.Uint64(dropped_graphs_);
     writer.Key("graphs"); writer.StartArray();
     for (const auto& graph : graphs_) writer.RawValue(graph.data(), graph.size(), json::kObjectType);
     writer.EndArray();

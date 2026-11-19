@@ -15,11 +15,13 @@
 #include "engine/function/render/render_pass/editor_ui_pass.h"
 #include "engine/function/render/render_pass/deferred_lighting_pass.h"
 #include "engine/function/render/render_pass/bloom_pass.h"
+#include "engine/function/render/render_pass/gpu_driven_pass.h"
 // #include "engine/function/render/render_system/render_surface_cache_manager.h"
 #include <imgui.h>
 
 // Forward declarations
 class RDGBuilder;
+class ThreadPool;
 #include "engine/core/utils/profile_session.h"
 #include <array>
 #include <memory>
@@ -58,6 +60,8 @@ struct RenderPacket {
     bool depth_prepass = true;
     bool pbr = true;
     bool npr = true;
+    bool gpu_driven = false;
+    bool gpu_driven_debug_colors = true;
     bool wireframe = false;
     bool visualize_depth = false;
     bool visualize_graph = false;
@@ -78,20 +82,22 @@ struct RDGDebugInfo{
 
 class RenderSystem {
 public:
+    RenderSystem();
+    ~RenderSystem();
     void init(void* window_handle);
     void destroy();
 
     struct CompiledFrame {
         std::unique_ptr<RDGBuilder> graph;
         RDGTextureHandle back_buffer;
-        std::optional<RenderCamera> depth_visualization_camera;
         uint64_t frame_id;
         size_t visible_batches;
         uint64_t profile_operation_id = 0, profile_generation = 0, profile_queued_at = 0;
+        std::shared_ptr<render::GpuSceneFrame> gpu_scene;
     };
 
     struct FrameStats {
-        size_t visible_batches = 0;
+        size_t visible_batches = 0; // CPU path only; GPU visibility is not read back during normal rendering.
         float gpu_ms = 0.0f;
         uint64_t frame_id = UINT64_MAX;
         uint64_t completed_ticks = 0;
@@ -205,6 +211,8 @@ public:
     bool enable_depth_prepass_ = true;
     bool enable_pbr_pass_ = true;
     bool enable_npr_pass_ = true;
+    bool enable_gpu_driven_ = false;
+    bool gpu_driven_debug_colors_ = true;
     bool enable_skybox_pass_ = true;
     bool enable_depth_visualize_ = true;
     render::BloomSettings bloom_settings_;
@@ -239,6 +247,7 @@ private:
     
 public:
     RHICommandPoolRef pool_;
+    std::unique_ptr<ThreadPool> recording_workers_;
     
     // Cached swapchain back buffer views - one per frame in flight
     std::array<RHITextureViewRef, FRAMES_IN_FLIGHT> swapchain_buffer_views_;
@@ -246,7 +255,7 @@ public:
     bool swapchain_views_initialized_ = false;
 
     struct PerFrameCommonResource {
-        RHICommandContextRef command; // Changed from RHICommandListRef to match my RHI
+        std::array<RHICommandContextRef, 4> commands;
         RHISemaphoreRef start_semaphore;
         RHISemaphoreRef finish_semaphore;
         RHIFenceRef fence;
@@ -288,6 +297,7 @@ public:
     std::shared_ptr<render::DepthPrePass> depth_prepass_;
     std::shared_ptr<render::EditorUIPass> editor_ui_pass_;
     std::shared_ptr<render::BloomPass> bloom_pass_;
+    std::shared_ptr<render::GpuDrivenPass> gpu_driven_pass_;
     
     // Depth buffer visualization
     RHITextureRef depth_visualize_texture_;

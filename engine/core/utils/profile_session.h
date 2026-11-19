@@ -6,6 +6,8 @@
 #include <cereal/types/vector.hpp>
 #include <atomic>
 #include <array>
+#include <condition_variable>
+#include <functional>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -42,6 +44,8 @@ struct ProfileMemorySample {
     }
 };
 
+class ThreadPool;
+
 // An opt-in capture, independent of UI frame history. Finish producers before end().
 class ProfileSession {
 public:
@@ -59,8 +63,10 @@ public:
     void sample_memory(std::string name, std::optional<ProfileGpuMemory> gpu = std::nullopt);
     void set_metadata(std::string key, std::string value);
     void name_thread(std::string name);
-    // Device thread adds data-only records; JSON payloads are produced by RDG/GPU capture.
-    void add_graph(std::string json);
+    // The producer transfers an owned value snapshot. Serialization never waits on the producer.
+    // A bounded backlog drops graph captures and reports dropped_graphs instead of blocking rendering.
+    bool enqueue_graph(ThreadPool* pool, uint64_t captured_generation, size_t snapshot_bytes,
+        std::function<std::string()> serialize);
     void add_gpu_frame(std::string json);
     // Writes JSON and a same-stem offline HTML report; true only when both succeed.
     // A .html path selects the HTML filename and a sibling .json filename.
@@ -86,6 +92,10 @@ private:
     std::map<std::string, std::string> metadata_;
     std::map<uint64_t, std::string> thread_names_;
     mutable std::mutex mutex_;
+    std::condition_variable graph_condition_;
+    size_t pending_graphs_ = 0, pending_graph_bytes_ = 0;
+    uint64_t dropped_graphs_ = 0;
+    bool ending_ = false;
     std::vector<std::shared_ptr<Buffer>> buffers_;
     std::vector<ProfileMemorySample> memory_samples_;
     std::vector<std::string> graphs_, gpu_frames_;

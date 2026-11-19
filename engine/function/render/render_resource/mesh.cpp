@@ -85,7 +85,8 @@ void Mesh::create_gpu_buffers() {
         return;
     }
 
-    EngineContext::run_device_task([this] {
+    const bool batch_uploads = AssetManager::is_upload_batch_active();
+    EngineContext::run_device_task([this, batch_uploads] {
         if (!position_.empty()) {
             vertex_buffer_ = std::make_shared<VertexBuffer>(/*static_storage=*/true);
             vertex_buffer_->set_position(position_);
@@ -113,6 +114,7 @@ void Mesh::create_gpu_buffers() {
             index_buffer_ = std::make_shared<IndexBuffer>(/*static_storage=*/true);
             index_buffer_->set_index(index_);
         }
+        EngineContext::rhi()->get_immediate_command()->finish_asset_upload(batch_uploads);
     });
 }
 

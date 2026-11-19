@@ -197,9 +197,10 @@ cards('summary', [
   ['GPU frames', format(gpu_frames.length, 0)],
   ['Memory samples', format(samples.length, 0)],
 ]);
-by_id('dropped').textContent = report.dropped_cpu_events
-  ? `${format(report.dropped_cpu_events, 0)} CPU events were dropped. CPU timelines and rankings are incomplete.`
-  : '';
+by_id('dropped').textContent = [
+  report.dropped_cpu_events ? `${format(report.dropped_cpu_events, 0)} CPU events were dropped. CPU timelines and rankings are incomplete.` : '',
+  report.dropped_graphs ? `${format(report.dropped_graphs, 0)} graph captures were dropped because the serialization backlog was full or no worker pool was available.` : ''
+].filter(Boolean).join(' ');
 table('metadata', ['Setting', 'Value'], Object.entries(report.metadata || {}));
 options('thread', [
   ['all', 'All threads'],

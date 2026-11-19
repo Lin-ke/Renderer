@@ -141,6 +141,8 @@ ID3D12GraphicsCommandList* DX12CommandContext::ensure_recording() {
     }
     ID3D12DescriptorHeap* heaps[] = {backend->get_gpu_srv_uav_heap().get_heap(), backend->get_gpu_sampler_heap().get_heap()};
     command_list_->SetDescriptorHeaps(2, heaps);
+    staging_bytes_ = 0;
+    asset_upload_count_ = 0;
     is_recording_ = true;
     backend->begin_context(this);
     return command_list_.Get();
@@ -156,6 +158,7 @@ bool DX12CommandContext::close_command_list() {
     return true;
 }
 void DX12CommandContext::begin_command() {
+    explicit_texture_states_.clear();
     ensure_recording();
     if (gpu_profiler_) static_cast<DX12GPUProfiler*>(gpu_profiler_)->set_command_list(command_list_.Get());
     current_graphics_pipeline_ = nullptr; current_compute_pipeline_ = nullptr; bound_sets_ = {}; vertex_streams_ = {};
@@ -163,9 +166,32 @@ void DX12CommandContext::begin_command() {
 void DX12CommandContext::end_command() {}
 void DX12CommandContext::execute(RHIFenceRef fence, RHISemaphoreRef, RHISemaphoreRef) {
     if (auto backend = backend_.lock()) {
-        backend->submit(this, !fence);
-        if (fence) static_cast<DX12Fence*>(fence.get())->signal(backend->get_command_queue());
+        auto* context = this;
+        backend->submit(std::span<DX12CommandContext* const>(&context, 1), !fence, fence);
     }
+}
+
+void DX12CommandContext::publish_barrier_states() {
+    for (const auto& [texture, index, state] : explicit_texture_states_)
+        texture->set_subresource_state(index, state);
+    explicit_texture_states_.clear();
+}
+
+namespace {
+void record_explicit_barrier(ID3D12GraphicsCommandList* command, ID3D12Resource* resource, uint32_t subresource,
+    D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after) {
+    D3D12_RESOURCE_BARRIER barrier = {};
+    if (before != after) {
+        barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Transition = {resource, subresource, before, after};
+    } else if (after == D3D12_RESOURCE_STATE_UNORDERED_ACCESS) {
+        barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+        barrier.UAV.pResource = resource;
+    } else {
+        return;
+    }
+    command->ResourceBarrier(1, &barrier);
+}
 }
 void DX12CommandContext::gpu_timestamp_begin_frame() {
     if (gpu_profiler_) {
@@ -194,14 +220,42 @@ void DX12CommandContext::texture_barrier(const RHITextureBarrier& barrier) {
     auto* command = ensure_recording(); if (!command) return;
     backend->retain(barrier.texture);
     auto range = barrier.subresource;
-    static_cast<DX12Texture*>(barrier.texture.get())->transition(command, DX12Backend::to_d3d12_resource_state(barrier.dst_state),
-        range.base_mip_level, range.level_count, range.base_array_layer, range.layer_count);
+    auto* texture = static_cast<DX12Texture*>(barrier.texture.get());
+    auto after = DX12Backend::to_d3d12_resource_state(barrier.dst_state);
+    if (!explicit_barriers_) {
+        texture->transition(command, after, range.base_mip_level, range.level_count, range.base_array_layer, range.layer_count);
+        return;
+    }
+    const auto before = DX12Backend::to_d3d12_resource_state(barrier.src_state);
+    if (before == after) {
+        record_explicit_barrier(command, texture->get_resource(), D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, before, after);
+        return;
+    }
+    const auto& defaults = texture->get_default_subresource_range();
+    const auto mip_end = range.level_count ? range.base_mip_level + range.level_count : defaults.level_count;
+    const auto layer_end = range.layer_count ? range.base_array_layer + range.layer_count : defaults.layer_count;
+    for (uint32_t plane = 0; plane < texture->get_plane_count(); ++plane) {
+        if (range.aspect && texture->get_plane_count() == 2 &&
+            !(range.aspect & (plane ? TEXTURE_ASPECT_STENCIL : TEXTURE_ASPECT_DEPTH))) continue;
+        for (auto layer = range.base_array_layer; layer < layer_end; ++layer) {
+            for (auto mip = range.base_mip_level; mip < mip_end; ++mip) {
+                const auto index = texture->get_subresource_index(mip, layer, plane);
+                record_explicit_barrier(command, texture->get_resource(), index, before, after);
+                explicit_texture_states_.emplace_back(texture, index, after);
+            }
+        }
+    }
 }
 void DX12CommandContext::buffer_barrier(const RHIBufferBarrier& barrier) {
     auto backend = backend_.lock(); if (!backend || !barrier.buffer) return;
     auto* command = ensure_recording(); if (!command) return;
     backend->retain(barrier.buffer);
-    static_cast<DX12Buffer*>(barrier.buffer.get())->transition(command, DX12Backend::to_d3d12_resource_state(barrier.dst_state));
+    auto* buffer = static_cast<DX12Buffer*>(barrier.buffer.get());
+    const auto after = DX12Backend::to_d3d12_resource_state(barrier.dst_state);
+    if (!explicit_barriers_) buffer->transition(command, after);
+    else if (buffer->get_info().memory_usage == MEMORY_USAGE_GPU_ONLY)
+        record_explicit_barrier(command, buffer->get_resource(), D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+            DX12Backend::to_d3d12_resource_state(barrier.src_state), after);
 }
 void DX12CommandContext::begin_render_pass(RHIRenderPassRef pass) {
     auto backend = backend_.lock(); if (!backend || !pass) return;
@@ -217,7 +271,7 @@ void DX12CommandContext::begin_render_pass(RHIRenderPassRef pass) {
         if (!attachment.texture_view) continue;
         auto* view = static_cast<DX12TextureView*>(attachment.texture_view.get());
         auto range = view->get_info().subresource;
-        view->get_dx12_texture()->transition(command, D3D12_RESOURCE_STATE_RENDER_TARGET, range.base_mip_level, 1, range.base_array_layer, range.layer_count);
+        if (!explicit_barriers_) view->get_dx12_texture()->transition(command, D3D12_RESOURCE_STATE_RENDER_TARGET, range.base_mip_level, 1, range.base_array_layer, range.layer_count);
         targets[i] = view->get_rtv(); count = i + 1;
         if (attachment.load_op == ATTACHMENT_LOAD_OP_CLEAR) command->ClearRenderTargetView(targets[i], &attachment.clear_color.r, 0, nullptr);
     }
@@ -228,7 +282,7 @@ void DX12CommandContext::begin_render_pass(RHIRenderPassRef pass) {
         auto range = view->get_info().subresource;
         current_depth_texture_ = view->get_dx12_texture(); current_depth_read_only_ = attachment.read_only;
         auto state = attachment.read_only ? D3D12_RESOURCE_STATE_DEPTH_READ | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE : D3D12_RESOURCE_STATE_DEPTH_WRITE;
-        current_depth_texture_->transition(command, state, range.base_mip_level, 1, range.base_array_layer, range.layer_count);
+        if (!explicit_barriers_) current_depth_texture_->transition(command, state, range.base_mip_level, 1, range.base_array_layer, range.layer_count);
         depth = view->get_dsv(attachment.read_only);
         if (attachment.load_op == ATTACHMENT_LOAD_OP_CLEAR && !attachment.read_only) {
             auto flags = is_stencil_format(view->get_info().format) ? D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL : D3D12_CLEAR_FLAG_DEPTH;
@@ -291,7 +345,7 @@ void DX12CommandContext::push_constants(void* data, uint16_t size, ShaderFrequen
 }
 void DX12CommandContext::bind_descriptor_set(RHIDescriptorSetRef set, uint32_t index) {
     if (!set || index >= MAX_DESCRIPTOR_SETS || index != set->get_set()) { ERR(LogDX12Commands, "Invalid descriptor set index"); return; }
-    bound_sets_[index] = set->snapshot();
+    bound_sets_[index] = explicit_barriers_ ? std::move(set) : set->snapshot();
     if (auto backend = backend_.lock()) backend->retain(bound_sets_[index]);
 }
 bool DX12CommandContext::flush_bindings(bool compute) {
@@ -323,7 +377,7 @@ bool DX12CommandContext::flush_bindings(bool compute) {
                 auto state = is_uav(entry.type) ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS :
                     D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
                 if (texture == current_depth_texture_ && current_depth_read_only_) state |= D3D12_RESOURCE_STATE_DEPTH_READ;
-                texture->transition(command, state, range.base_mip_level, range.level_count, range.base_array_layer, range.layer_count);
+                if (!explicit_barriers_) texture->transition(command, state, range.base_mip_level, range.level_count, range.base_array_layer, range.layer_count);
                 source = is_uav(entry.type) ? view->get_uav() : view->get_srv();
             } else source = is_uav(entry.type) ? backend->get_null_uav_2d() :
                 (entry.type == RESOURCE_TYPE_TEXTURE_CUBE ? backend->get_null_srv_cube() : backend->get_null_srv_2d());
@@ -359,7 +413,7 @@ bool DX12CommandContext::flush_bindings(bool compute) {
                     if (bytes.empty()) {
                         if (offset % 256 || !size || size > 65536) { ERR(LogDX12Commands, "Invalid GPU constant buffer range"); return false; }
                         auto* buffer = static_cast<DX12Buffer*>(descriptor->buffer.get());
-                        buffer->transition(command, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+                        if (!explicit_barriers_) buffer->transition(command, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
                         D3D12_CONSTANT_BUFFER_VIEW_DESC cbv = {buffer->get_current_gpu_address() + offset, UINT(aligned_size)};
                         device->CreateConstantBufferView(&cbv, destination);
                         continue;
@@ -377,11 +431,11 @@ bool DX12CommandContext::flush_bindings(bool compute) {
                 auto* texture = view->get_dx12_texture(); auto range = view->get_info().subresource;
                 auto state = is_uav(entry.type) ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS : D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
                 if (texture == current_depth_texture_ && current_depth_read_only_) state |= D3D12_RESOURCE_STATE_DEPTH_READ;
-                texture->transition(command, state, range.base_mip_level, range.level_count, range.base_array_layer, range.layer_count);
+                if (!explicit_barriers_) texture->transition(command, state, range.base_mip_level, range.level_count, range.base_array_layer, range.layer_count);
                 source = is_uav(entry.type) ? view->get_uav() : view->get_srv();
             } else if (descriptor && descriptor->buffer) {
                 auto* buffer = static_cast<DX12Buffer*>(descriptor->buffer.get());
-                buffer->transition(command, is_uav(entry.type) ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+                if (!explicit_barriers_) buffer->transition(command, is_uav(entry.type) ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
                 auto info = buffer->get_info();
                 uint32_t stride = info.stride ? info.stride : 4;
                 uint64_t size = descriptor->buffer_range ? descriptor->buffer_range : info.size - descriptor->buffer_offset;
@@ -419,7 +473,7 @@ bool DX12CommandContext::flush_graphics_bindings() {
     for (uint32_t i = 0; i < vertex_streams_.size(); ++i) {
         auto& binding = vertex_streams_[i]; if (!binding.active) continue;
         auto* buffer = binding.buffer;
-        buffer->transition(command, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+        if (!explicit_barriers_) buffer->transition(command, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
         D3D12_VERTEX_BUFFER_VIEW view = {buffer->get_current_gpu_address() + binding.offset, UINT(buffer->get_info().size - binding.offset),
             buffer->get_info().stride ? buffer->get_info().stride : (i < strides.size() ? strides[i] : 0)};
         command->IASetVertexBuffers(i, 1, &view);
@@ -435,7 +489,7 @@ void DX12CommandContext::bind_index_buffer(RHIBufferRef buffer, uint32_t offset)
     auto backend = backend_.lock(); if (!backend || !buffer) return;
     auto* command = ensure_recording(); if (!command) return;
     backend->retain(buffer); auto* native = static_cast<DX12Buffer*>(buffer.get());
-    native->transition(command, D3D12_RESOURCE_STATE_INDEX_BUFFER);
+    if (!explicit_barriers_) native->transition(command, D3D12_RESOURCE_STATE_INDEX_BUFFER);
     D3D12_INDEX_BUFFER_VIEW view = {native->get_current_gpu_address() + offset, UINT(buffer->get_info().size - offset),
         buffer->get_info().stride == 2 ? DXGI_FORMAT_R16_UINT : DXGI_FORMAT_R32_UINT};
     command->IASetIndexBuffer(&view);

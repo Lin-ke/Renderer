@@ -370,6 +370,7 @@ void SkyboxPass::build(RDGBuilder& builder, RDGTextureHandle color_target,
         builder.create_render_pass("SkyboxPass")
         .root_signature(root_signature_)
         .descriptor_set(0, descriptor_set_)
+            .vertex_read(vertex_buffer).index_read(index_buffer).sample(skybox.texture)
             .color(0, color_target, ATTACHMENT_LOAD_OP_LOAD, ATTACHMENT_STORE_OP_STORE)
             .depth_stencil(depth_target, ATTACHMENT_LOAD_OP_LOAD, ATTACHMENT_STORE_OP_DONT_CARE, 
                           1.0f, 0, {}, true)  // Read-only depth

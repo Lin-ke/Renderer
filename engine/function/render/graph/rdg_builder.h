@@ -88,7 +88,6 @@ struct RDGCompileInfo {
 class RDGBuilder {
 public:
     RDGBuilder() = default;
-    RDGBuilder(RHICommandListRef command) : command_(command) {}
 
     ~RDGBuilder(){};
 
@@ -126,9 +125,13 @@ public:
      * 5. Releases transient resources.
      */
     bool compile(); // Does not allocate GPU resources or execute callbacks.
-    bool execute(); // Compilation failure records no GPU work.
+    bool execute(const RHICommandListRef& command);
     bool execute_compiled(RHICommandListRef command, uint32_t frame_slot);
+    bool prepare_pipeline(uint32_t frame_slot, const std::function<RHICommandListRef(uint32_t)>& command_for_pass,
+        bool validate_access = true);
+    bool set_texture_final_state(RDGTextureHandle texture, RHIResourceState state);
     bool bind_external_texture(RDGTextureHandle handle, const RHITextureRef& texture);
+    bool bind_external_buffer(RDGBufferHandle handle, const RHIBufferRef& buffer);
     const RDGCompileInfo& get_compile_info() const { return compile_info_; }
     const std::vector<RDGPassNodeRef>& get_execution_passes() const { return execution_passes_; }
     bool keep_pass(RDGPassHandle pass, bool keep = true);
@@ -157,17 +160,31 @@ private:
     void end_profile();
     void profile_resource(RDGResourceNodeRef node, RHIResourceRef resource);
     std::optional<RDGProfile> profile_;
+    uint64_t profile_generation_ = 0;
+    std::unordered_map<NodeID, size_t> profile_resource_indices_;
     std::unordered_map<NodeID, std::vector<NodeID>> compiled_dependencies_;
-    void create_input_barriers(RDGPassNodeRef pass);
-    void create_output_barriers(RDGPassNodeRef pass);
+    struct TextureStates {
+        RHITextureRef resource;
+        std::vector<RHIResourceState> subresources;
+        uint32_t mips;
+        uint32_t layers;
+        TextureAspectFlags aspects;
+    };
+    using TextureStateMap = std::unordered_map<RHITexture*, TextureStates>;
+    using BufferStateMap = std::unordered_map<RHIBuffer*, RHIResourceState>;
+    void plan_pass_barriers(RDGPassNodeRef pass, const RHICommandListRef& command,
+        TextureStateMap& textures, BufferStateMap& buffers, bool after);
+    void plan_texture_barriers(RDGTextureNodeRef node, TextureSubresourceRange range, RHIResourceState state,
+        const RHICommandListRef& command, TextureStateMap& textures);
     void prepare_descriptor_set(RDGPassNodeRef pass);
+    void validate_pass_accesses(RDGPassNodeRef pass, const RHICommandListRef& command);
     void prepare_render_target(RDGRenderPassNodeRef pass, RHIRenderPassInfo& render_pass_info);
-    void release_resource(RDGPassNodeRef pass);
-    void execute_pass(RDGRenderPassNodeRef pass);
-    void execute_pass(RDGComputePassNodeRef pass);
-    void execute_pass(RDGRayTracingPassNodeRef pass);
-    void execute_pass(RDGPresentPassNodeRef pass);
-    void execute_pass(RDGCopyPassNodeRef pass);
+    void release_pass_views(RDGPassNodeRef pass);
+    void execute_pass(RDGRenderPassNodeRef pass, const RHICommandListRef& command);
+    void execute_pass(RDGComputePassNodeRef pass, const RHICommandListRef& command);
+    void execute_pass(RDGRayTracingPassNodeRef pass, const RHICommandListRef& command);
+    void execute_pass(RDGPresentPassNodeRef pass, const RHICommandListRef& command);
+    void execute_pass(RDGCopyPassNodeRef pass, const RHICommandListRef& command);
 
     template <typename Type, typename Handle>
     Handle get_pass(std::string name) {
@@ -188,12 +205,6 @@ private:
     void release(RDGTextureNodeRef texture_node, RHIResourceState state);
     void release(RDGBufferNodeRef buffer_node, RHIResourceState state);
 
-    RHIResourceState previous_state(RDGTextureNodeRef texture_node, RDGPassNodeRef pass_node, TextureSubresourceRange subresource = {},
-                                    bool output = false);
-    RHIResourceState previous_state(RDGBufferNodeRef buffer_node, RDGPassNodeRef pass_node, uint32_t offset = 0, uint32_t size = 0,
-                                    bool output = false);
-    bool is_last_used_pass(RDGResourceNodeRef resource, RDGPassNodeRef pass, bool output);
-
     std::vector<RDGPassNodeRef> passes_;
     std::vector<RDGPassNodeRef> execution_passes_;
     RDGCompileInfo compile_info_;
@@ -209,11 +220,11 @@ private:
     std::unordered_map<NodeID, std::vector<std::pair<RDGPassNodeRef, RDGBufferEdgeRef>>> buffer_usages_;
     std::unordered_map<NodeID, RHITextureRef*> extracted_textures_;
     std::unordered_map<NodeID, RHIBufferRef*> extracted_buffers_;
+    std::unordered_map<NodeID, RHIResourceState> final_texture_states_;
 
     std::shared_ptr<DependencyGraph::DependencyGraph> graph_ = std::make_shared<DependencyGraph::DependencyGraph>();
     RDGBlackBoard black_board_;
 
-    RHICommandListRef command_;
     uint32_t frame_slot_ = 0;
     bool compiled_ = false;
 };
@@ -251,12 +262,15 @@ public:
     RDGBufferBuilder(RDGBuilder* builder, RDGBufferNodeRef buffer) : builder_(builder), buffer_(buffer){};
 
     RDGBufferBuilder& import(RHIBufferRef buffer, RHIResourceState init_state);
-    RDGBufferBuilder& size(uint32_t size);
+    RDGBufferBuilder& import(const RHIBufferInfo& info, RHIResourceState init_state);
+    RDGBufferBuilder& size(uint64_t size);
+    RDGBufferBuilder& stride(uint32_t stride);
     RDGBufferBuilder& memory_usage(MemoryUsage memory_usage);
     RDGBufferBuilder& allow_vertex_buffer();
     RDGBufferBuilder& allow_index_buffer();
     RDGBufferBuilder& allow_read_write();
     RDGBufferBuilder& allow_read();
+    RDGBufferBuilder& allow_indirect();
 
     RDGBufferHandle finish() { return buffer_->get_handle(); }
 
@@ -279,6 +293,13 @@ public:
     RDGRenderPassBuilder& pass_index(uint32_t x = 0, uint32_t y = 0, uint32_t z = 0);
     RDGRenderPassBuilder& root_signature(RHIRootSignatureRef root_signature);
     RDGRenderPassBuilder& descriptor_set(uint32_t set, RHIDescriptorSetRef descriptor_set);
+    RDGRenderPassBuilder& indirect_read(RDGBufferHandle buffer, uint32_t offset = 0, uint32_t size = 0);
+    RDGRenderPassBuilder& vertex_read(RDGBufferHandle buffer, uint32_t offset = 0, uint32_t size = 0);
+    RDGRenderPassBuilder& index_read(RDGBufferHandle buffer, uint32_t offset = 0, uint32_t size = 0);
+    RDGRenderPassBuilder& vertex_read(const RHIBufferRef& buffer);
+    RDGRenderPassBuilder& index_read(const RHIBufferRef& buffer);
+    RDGRenderPassBuilder& sample(RDGTextureHandle texture, TextureSubresourceRange range = {});
+    RDGRenderPassBuilder& sample(const RHITextureRef& texture);
     
     // --- Resource Binding ---
     // These methods declare dependencies. The graph will ensure barriers are inserted.
@@ -337,6 +358,7 @@ public:
     RDGComputePassBuilder& pass_index(uint32_t x = 0, uint32_t y = 0, uint32_t z = 0);
     RDGComputePassBuilder& root_signature(RHIRootSignatureRef root_signature);
     RDGComputePassBuilder& descriptor_set(uint32_t set, RHIDescriptorSetRef descriptor_set);
+    RDGComputePassBuilder& indirect_read(RDGBufferHandle buffer, uint32_t offset = 0, uint32_t size = 0);
     
     RDGComputePassBuilder& read(uint32_t set, uint32_t binding, uint32_t index, RDGBufferHandle buffer, uint32_t offset = 0, uint32_t size = 0, ResourceType type = RESOURCE_TYPE_UNIFORM_BUFFER);
     RDGComputePassBuilder& read(uint32_t set, uint32_t binding, uint32_t index, RDGTextureHandle texture, TextureViewType view_type = VIEW_TYPE_2D,
@@ -441,6 +463,9 @@ public:
     RDGCopyPassBuilder& from(RDGTextureHandle texture, TextureSubresourceLayers subresource = {});
     RDGCopyPassBuilder& to(RDGTextureHandle texture, TextureSubresourceLayers subresource = {});
     RDGCopyPassBuilder& generate_mips();
+    RDGCopyPassBuilder& read_buffer(RDGBufferHandle buffer, uint32_t offset = 0, uint32_t size = 0);
+    RDGCopyPassBuilder& write_buffer(RDGBufferHandle buffer, uint32_t offset = 0, uint32_t size = 0);
+    RDGCopyPassBuilder& execute(const RDGPassExecuteFunc& execute);
     RDGCopyPassBuilder& output_read(RDGTextureHandle texture, TextureSubresourceLayers subresource = {});
     RDGCopyPassBuilder& output_read_write(RDGTextureHandle texture, TextureSubresourceLayers subresource = {});
 

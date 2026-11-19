@@ -146,6 +146,8 @@ void DepthPrePass::build(RDGBuilder& builder, RDGTextureHandle depth_target, con
         .root_signature(root_signature_)
         .descriptor_set(0, descriptor_set_)
         .depth_stencil(depth_target, ATTACHMENT_LOAD_OP_CLEAR, ATTACHMENT_STORE_OP_STORE, 1.0f, 0);
+    for (const auto& batch : batches)
+        rp_builder.vertex_read(batch.vertex_buffer).index_read(batch.index_buffer);
 
     // Get extent for viewport
     Extent2D extent = {1280, 720};

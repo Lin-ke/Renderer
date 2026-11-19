@@ -2,8 +2,10 @@
 
 #include "engine/configs.h"
 #include "engine/function/render/rhi/rhi.h"
+#include "engine/core/utils/profile_session.h"
 #include <cassert>
 #include <cstring>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -38,19 +40,31 @@ struct RHICommand {
 // RHICommandList Class
 
 class RHICommandList {
+private:
+    using BufferAccessCheck = std::function<void(const RHIBufferRef&, RHIResourceState)>;
+    using TextureAccessCheck = std::function<void(const RHITextureRef&, RHIResourceState, TextureSubresourceRange)>;
+    void set_access_checks(BufferAccessCheck buffer, TextureAccessCheck texture) {
+        check_buffer_ = std::move(buffer);
+        check_texture_ = std::move(texture);
+    }
+    bool uses_graph_access_checks() const { return bool(check_buffer_); }
+    bool has_unplanned_commands() const { return has_unplanned_commands_; }
+
 public:
     RHICommandList(const CommandListInfo& info) : info_(info) {}
     ~RHICommandList() {
+        clear_commands();
         if (info_.pool && info_.context) {
             info_.pool->return_to_pool(info_.context);
         }
     }
 
-    void* raw_handle() { return info_.context->raw_handle(); }
+    void* raw_handle() { return info_.context ? info_.context->raw_handle() : nullptr; }
 
     void begin_command();
     void end_command();
     void execute(RHIFenceRef fence = nullptr, RHISemaphoreRef wait_semaphore = nullptr, RHISemaphoreRef signal_semaphore = nullptr);
+    void replay(const RHICommandContextRef& context);
 
     void texture_barrier(const RHITextureBarrier& barrier);
     void buffer_barrier(const RHIBufferBarrier& barrier);
@@ -95,15 +109,22 @@ public:
                       uint32_t first_instance = 0);
     void draw_indirect(RHIBufferRef argument_buffer, uint32_t offset, uint32_t draw_count);
     void draw_indexed_indirect(RHIBufferRef argument_buffer, uint32_t offset, uint32_t draw_count);
+    void draw_indirect(const RHIIndirectDrawInfo& info);
+    void draw_indexed_indirect(const RHIIndirectDrawInfo& info);
 
     void imgui_create_fonts_texture();
     void imgui_render_draw_data(std::shared_ptr<ImDrawData> draw_data);
 
 protected:
+    friend class RDGBuilder;
     CommandListInfo info_;
     std::vector<RHICommand*> commands_;
 
     void add_command(RHICommand* command) { commands_.push_back(command); }
+    void clear_commands();
+    BufferAccessCheck check_buffer_;
+    TextureAccessCheck check_texture_;
+    bool has_unplanned_commands_ = false;
 };
 
 class RHICommandListImmediate {
@@ -219,6 +240,20 @@ struct RHICommandPushEvent : public RHICommand {
 
 struct RHICommandPopEvent : public RHICommand {
     void execute(RHICommandContextRef context) override { context->pop_event(); }
+};
+
+struct RHICommandBeginTimestamp : public RHICommand {
+    std::string name;
+    ProfileContext profile;
+    explicit RHICommandBeginTimestamp(const std::string& name) : name(name), profile(ProfileSession::context()) {}
+    void execute(RHICommandContextRef context) override {
+        ProfileContextScope scope(profile);
+        context->gpu_timestamp_begin(name);
+    }
+};
+
+struct RHICommandEndTimestamp : public RHICommand {
+    void execute(RHICommandContextRef context) override { context->gpu_timestamp_end(); }
 };
 
 struct RHICommandBeginRenderPass : public RHICommand {
@@ -358,6 +393,18 @@ struct RHICommandDrawIndexedIndirect : public RHICommand {
     void execute(RHICommandContextRef context) override { context->draw_indexed_indirect(buffer, offset, count); }
 };
 
+struct RHICommandDrawIndirectInfo : public RHICommand {
+    RHIIndirectDrawInfo info;
+    explicit RHICommandDrawIndirectInfo(const RHIIndirectDrawInfo& value) : info(value) {}
+    void execute(RHICommandContextRef context) override { context->draw_indirect(info); }
+};
+
+struct RHICommandDrawIndexedIndirectInfo : public RHICommand {
+    RHIIndirectDrawInfo info;
+    explicit RHICommandDrawIndexedIndirectInfo(const RHIIndirectDrawInfo& value) : info(value) {}
+    void execute(RHICommandContextRef context) override { context->draw_indexed_indirect(info); }
+};
+
 struct RHICommandImGuiCreateFontsTexture : public RHICommand {
     void execute(RHICommandContextRef context) override { context->imgui_create_fonts_texture(); }
 };
@@ -441,48 +488,67 @@ inline void RHICommandList::end_command() {
     else ADD_COMMAND(RHICommandEndCommand);
 }
 
+inline void RHICommandList::clear_commands() {
+    for (auto* command : commands_) delete command;
+    commands_.clear();
+}
+
+inline void RHICommandList::replay(const RHICommandContextRef& context) {
+    for (auto* command : commands_) command->execute(context);
+    clear_commands();
+}
+
 inline void RHICommandList::execute(RHIFenceRef fence, RHISemaphoreRef wait_semaphore, RHISemaphoreRef signal_semaphore) {
-    if (!info_.bypass) {
-        for (auto* cmd : commands_) {
-            cmd->execute(info_.context);
-            delete cmd;
-        }
-        commands_.clear();
-    }
+    if (!info_.bypass) replay(info_.context);
     info_.context->execute(fence, wait_semaphore, signal_semaphore);
 }
 
 inline void RHICommandList::texture_barrier(const RHITextureBarrier& barrier) {
+    if (uses_graph_access_checks()) { has_unplanned_commands_ = true; return; }
     if (info_.bypass) info_.context->texture_barrier(barrier);
     else ADD_COMMAND(RHICommandTextureBarrier, barrier);
 }
 
 inline void RHICommandList::buffer_barrier(const RHIBufferBarrier& barrier) {
+    if (uses_graph_access_checks()) { has_unplanned_commands_ = true; return; }
     if (info_.bypass) info_.context->buffer_barrier(barrier);
     else ADD_COMMAND(RHICommandBufferBarrier, barrier);
 }
 
 inline void RHICommandList::copy_texture_to_buffer(RHITextureRef src, TextureSubresourceLayers src_subresource, RHIBufferRef dst, uint64_t dst_offset) {
+    if (check_texture_) check_texture_(src, RESOURCE_STATE_TRANSFER_SRC, {src_subresource.aspect, src_subresource.mip_level, 1, src_subresource.base_array_layer, src_subresource.layer_count});
+    if (check_buffer_) check_buffer_(dst, RESOURCE_STATE_TRANSFER_DST);
     if (info_.bypass) info_.context->copy_texture_to_buffer(src, src_subresource, dst, dst_offset);
     else ADD_COMMAND(RHICommandCopyTextureToBuffer, src, src_subresource, dst, dst_offset);
 }
 
 inline void RHICommandList::copy_buffer_to_texture(RHIBufferRef src, uint64_t src_offset, RHITextureRef dst, TextureSubresourceLayers dst_subresource) {
+    if (check_buffer_) check_buffer_(src, RESOURCE_STATE_TRANSFER_SRC);
+    if (check_texture_) check_texture_(dst, RESOURCE_STATE_TRANSFER_DST, {dst_subresource.aspect, dst_subresource.mip_level, 1, dst_subresource.base_array_layer, dst_subresource.layer_count});
     if (info_.bypass) info_.context->copy_buffer_to_texture(src, src_offset, dst, dst_subresource);
     else ADD_COMMAND(RHICommandCopyBufferToTexture, src, src_offset, dst, dst_subresource);
 }
 
 inline void RHICommandList::copy_buffer(RHIBufferRef src, uint64_t src_offset, RHIBufferRef dst, uint64_t dst_offset, uint64_t size) {
+    if (check_buffer_) {
+        check_buffer_(src, RESOURCE_STATE_TRANSFER_SRC);
+        check_buffer_(dst, RESOURCE_STATE_TRANSFER_DST);
+    }
     if (info_.bypass) info_.context->copy_buffer(src, src_offset, dst, dst_offset, size);
     else ADD_COMMAND(RHICommandCopyBuffer, src, src_offset, dst, dst_offset, size);
 }
 
 inline void RHICommandList::copy_texture(RHITextureRef src, TextureSubresourceLayers src_subresource, RHITextureRef dst, TextureSubresourceLayers dst_subresource) {
+    if (check_texture_) {
+        check_texture_(src, RESOURCE_STATE_TRANSFER_SRC, {src_subresource.aspect, src_subresource.mip_level, 1, src_subresource.base_array_layer, src_subresource.layer_count});
+        check_texture_(dst, RESOURCE_STATE_TRANSFER_DST, {dst_subresource.aspect, dst_subresource.mip_level, 1, dst_subresource.base_array_layer, dst_subresource.layer_count});
+    }
     if (info_.bypass) info_.context->copy_texture(src, src_subresource, dst, dst_subresource);
     else ADD_COMMAND(RHICommandCopyTexture, src, src_subresource, dst, dst_subresource);
 }
 
 inline void RHICommandList::generate_mips(RHITextureRef src) {
+    if (uses_graph_access_checks()) { has_unplanned_commands_ = true; return; }
     if (info_.bypass) info_.context->generate_mips(src);
     else ADD_COMMAND(RHICommandGenerateMips, src);
 }
@@ -507,10 +573,12 @@ inline void RHICommandList::gpu_timestamp_end_frame() {
 
 inline void RHICommandList::gpu_timestamp_begin(const std::string& name) {
     if (info_.bypass) info_.context->gpu_timestamp_begin(name);
+    else ADD_COMMAND(RHICommandBeginTimestamp, name);
 }
 
 inline void RHICommandList::gpu_timestamp_end() {
     if (info_.bypass) info_.context->gpu_timestamp_end();
+    else ADD_COMMAND(RHICommandEndTimestamp);
 }
 
 inline void RHICommandList::begin_render_pass(RHIRenderPassRef render_pass) {
@@ -565,16 +633,32 @@ inline void RHICommandList::push_constants(void* data, uint16_t size, ShaderFreq
 
 inline void RHICommandList::bind_descriptor_set(RHIDescriptorSetRef descriptor, uint32_t set) {
     if (!descriptor) return;
+    if (check_buffer_ && check_texture_) {
+        for (const auto& entry : descriptor->get_descriptors()) {
+            if (entry.texture_view) {
+                const auto& view = entry.texture_view->get_info();
+                check_texture_(view.texture, (entry.resource_type & RESOURCE_TYPE_RW_TEXTURE) ?
+                    RESOURCE_STATE_UNORDERED_ACCESS : RESOURCE_STATE_SHADER_RESOURCE, view.subresource);
+            }
+            if (entry.buffer) {
+                const auto state = entry.resource_type == RESOURCE_TYPE_UNIFORM_BUFFER ? RESOURCE_STATE_VERTEX_BUFFER :
+                    (entry.resource_type & RESOURCE_TYPE_RW_BUFFER) ? RESOURCE_STATE_UNORDERED_ACCESS : RESOURCE_STATE_SHADER_RESOURCE;
+                check_buffer_(entry.buffer, state);
+            }
+        }
+    }
     if (info_.bypass) info_.context->bind_descriptor_set(descriptor, set);
     else ADD_COMMAND(RHICommandBindDescriptorSet, descriptor->snapshot(), set);
 }
 
 inline void RHICommandList::bind_vertex_buffer(RHIBufferRef vertex_buffer, uint32_t stream_index, uint32_t offset) {
+    if (check_buffer_) check_buffer_(vertex_buffer, RESOURCE_STATE_VERTEX_BUFFER);
     if (info_.bypass) info_.context->bind_vertex_buffer(vertex_buffer, stream_index, offset);
     else ADD_COMMAND(RHICommandBindVertexBuffer, vertex_buffer, stream_index, offset);
 }
 
 inline void RHICommandList::bind_index_buffer(RHIBufferRef index_buffer, uint32_t offset) {
+    if (check_buffer_) check_buffer_(index_buffer, RESOURCE_STATE_INDEX_BUFFER);
     if (info_.bypass) info_.context->bind_index_buffer(index_buffer, offset);
     else ADD_COMMAND(RHICommandBindIndexBuffer, index_buffer, offset);
 }
@@ -585,6 +669,7 @@ inline void RHICommandList::dispatch(uint32_t group_count_x, uint32_t group_coun
 }
 
 inline void RHICommandList::dispatch_indirect(RHIBufferRef argument_buffer, uint32_t argument_offset) {
+    if (check_buffer_) check_buffer_(argument_buffer, RESOURCE_STATE_INDIRECT_ARGUMENT);
     if (info_.bypass) info_.context->dispatch_indirect(argument_buffer, argument_offset);
     else ADD_COMMAND(RHICommandDispatchIndirect, argument_buffer, argument_offset);
 }
@@ -605,13 +690,33 @@ inline void RHICommandList::draw_indexed(uint32_t index_count, uint32_t instance
 }
 
 inline void RHICommandList::draw_indirect(RHIBufferRef argument_buffer, uint32_t offset, uint32_t draw_count) {
+    if (check_buffer_) check_buffer_(argument_buffer, RESOURCE_STATE_INDIRECT_ARGUMENT);
     if (info_.bypass) info_.context->draw_indirect(argument_buffer, offset, draw_count);
     else ADD_COMMAND(RHICommandDrawIndirect, argument_buffer, offset, draw_count);
 }
 
 inline void RHICommandList::draw_indexed_indirect(RHIBufferRef argument_buffer, uint32_t offset, uint32_t draw_count) {
+    if (check_buffer_) check_buffer_(argument_buffer, RESOURCE_STATE_INDIRECT_ARGUMENT);
     if (info_.bypass) info_.context->draw_indexed_indirect(argument_buffer, offset, draw_count);
     else ADD_COMMAND(RHICommandDrawIndexedIndirect, argument_buffer, offset, draw_count);
+}
+
+inline void RHICommandList::draw_indirect(const RHIIndirectDrawInfo& info) {
+    if (check_buffer_) {
+        check_buffer_(info.arguments, RESOURCE_STATE_INDIRECT_ARGUMENT);
+        check_buffer_(info.count_buffer, RESOURCE_STATE_INDIRECT_ARGUMENT);
+    }
+    if (info_.bypass) info_.context->draw_indirect(info);
+    else ADD_COMMAND(RHICommandDrawIndirectInfo, info);
+}
+
+inline void RHICommandList::draw_indexed_indirect(const RHIIndirectDrawInfo& info) {
+    if (check_buffer_) {
+        check_buffer_(info.arguments, RESOURCE_STATE_INDIRECT_ARGUMENT);
+        check_buffer_(info.count_buffer, RESOURCE_STATE_INDIRECT_ARGUMENT);
+    }
+    if (info_.bypass) info_.context->draw_indexed_indirect(info);
+    else ADD_COMMAND(RHICommandDrawIndexedIndirectInfo, info);
 }
 
 inline void RHICommandList::imgui_create_fonts_texture() {

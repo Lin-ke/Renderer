@@ -16,7 +16,7 @@ RDG 是建立在 RHI 之上的声明式渲染拓扑结构，利用 Builder 模�
 在构建 Pass 之前，开发者需要声明用到的虚拟资源。RDG 采用延迟分配策略，这些资源只有在实际需要的时候才会从对象池 (`RDGPool`) 里借出。
 
 ```cpp
-RDGBuilder builder(command_list);
+RDGBuilder builder;
 
 // 创建瞬态纹理（延迟分配），声明其用途
 auto color_tex = builder.create_texture("MainColor")
@@ -26,7 +26,7 @@ auto color_tex = builder.create_texture("MainColor")
     .finish();
 
 // 导入外部物理资源（如 Swapchain 提供的 BackBuffer）
-auto back_buffer = builder.import_texture("BackBuffer", swapchain_texture);
+auto back_buffer = builder.create_texture("BackBuffer").import(swapchain_texture, RESOURCE_STATE_PRESENT).finish();
 ```
 
 ### 1.2 Pass 声明与执行回调
@@ -72,14 +72,14 @@ RHIBufferRef buffer = rhi_backend->create_buffer(info);
 ### 2.1 延迟执行语义 (`RHICommandContext` & `RHICommandList`)
 - **生命周期**：每帧动态分配。
 - **工作机制**：在执行 `begin_command()` 到 `end_command()` 之间，所有的图形管线绑定（`set_graphics_pipeline`）、绘制 (`draw`) 以及计算调度都会被放入 CPU 队列，并不会立刻对 GPU 产生影响。
-- **提交方式**：最终由上游的 `execute` 统一打包投递到 Graphics Queue 中（多用于 RDG 框架内部）。
+- **提交方式**：Device 将 RDG 的批次录入独立 Command List，再按拓扑顺序提交到同一个 Graphics Queue。
 - **职责**：维护复杂的图形状态，负责主渲染循环内高并发帧渲染任务。
 
 ### 2.2 即时执行语义 (`RHICommandContextImmediate`)
 - **生命周期**：与后端设备绑定，生命周期通常长于单帧。
 - **工作机制**：当调用内存搬运和状态转移接口（如 `copy_buffer_to_texture`、`generate_mips` 或强制 `texture_barrier`）时，命令被理解为“脱离当前主渲染帧图”的独立操作。
-- **提交方式**：通过调用 `.flush()` 可以直接将积累的即时命令同步派发到 GPU 并阻塞等待执行完毕。
-- **职责**：主要用于**资源加载线程**中纹理和模型的异步/同步上传阶段。这就保证了被送入 RDG 时，底层 VRAM 数据和状态已经是就绪（Ready）的。
+- **提交方式**：资产上传在 Device 上通过 `submit_pending()` 先入队，不等待 GPU 完成。需要同步读回的调用可用 `flush()`。
+- **职责**：在把资产交给渲染帧前先提交内容和交接状态。被 RDG 读取时，资源依靠同一 GPU queue 的提交顺序与 barrier 保证可用。
 
 ---
 

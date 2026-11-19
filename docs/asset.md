@@ -117,6 +117,8 @@ auto load_tasks = EngineContext::asset()->enqueue_load_task(uid);
 ```
 The thread pool reads and deserializes native asset files in parallel. `load_asset` blocks until dependency resolution and `on_load()` finish on the calling thread. `enqueue_load_task` can prefetch deserialized assets before a later `load_asset` call.
 
+During dependency loading, `load_asset` initializes each ready asset in dependency order while the remaining reads continue. Texture and mesh uploads within the same load share an immediate command list. DX12 submits a batch after 30 uploads or after recording at least 64 MiB of native staging data. `load_asset` queues the remaining batch before returning. It waits for a submission slot when all slots are still in use.
+
 ### Generating UIDs for Source Assets
 
 When importing a *new* source file (FBX, PNG) rather than loading an existing `.asset` file, use `UID::from_hash()` to ensure deterministic UUIDs:

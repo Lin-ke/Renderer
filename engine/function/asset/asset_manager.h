@@ -70,6 +70,9 @@ public:
      */
     AssetRef load_asset_blocking(UID uid);
 
+    // Capture on the asset's loading thread before dispatching its upload to Device.
+    static bool is_upload_batch_active();
+
     /**
      * @brief Retrieves an asset if it is already loaded; otherwise returns nullptr.
      * Does not trigger a load.

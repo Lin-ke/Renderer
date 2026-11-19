@@ -4,6 +4,7 @@
 
 #include "dx12_memory.h"
 #include <d3d12.h>
+#include <mutex>
 #include <wrl/client.h>
 
 using Microsoft::WRL::ComPtr;
@@ -48,7 +49,9 @@ private:
     std::weak_ptr<DX12Backend> backend_;
     ID3D12Device* device_ = nullptr;
     ID3D12CommandQueue* queue_ = nullptr;
-    ID3D12GraphicsCommandList* cmd_list_ = nullptr;
+    inline static thread_local ID3D12GraphicsCommandList* cmd_list_ = nullptr;
+    inline static thread_local uint32_t scope_index_ = UINT32_MAX;
+    std::mutex scope_mutex_;
     uint32_t max_scopes_ = 64;
     bool initialized_ = false;
 
@@ -56,5 +59,4 @@ private:
     uint32_t write_index_ = 0;
     uint32_t read_index_ = 0;
     uint32_t frames_recorded_ = 0;
-    uint32_t skipped_scopes_ = 0;
 };

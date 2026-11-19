@@ -2,6 +2,7 @@
 #include "test/test_utils.h"
 #include "engine/main/engine_context.h"
 #include "engine/function/render/graph/rdg_builder.h"
+#include "engine/function/render/render_resource/texture.h"
 #include "engine/function/render/rhi/rhi.h"
 #include "engine/core/window/window.h"
 #include "engine/core/utils/path_utils.h"
@@ -103,7 +104,7 @@ TEST_CASE("DX12 RDG compute render copy and pooled descriptor reuse", "[rhi][dx1
     for (bool bypass : {true, false}) {
         for (int frame = 0; frame < 3; ++frame) {
             auto commands = make_commands(bypass); commands->begin_command();
-            RDGBuilder graph(commands);
+            RDGBuilder graph;
             auto source = graph.create_texture("ComputeOutput").extent({13,7,1}).format(FORMAT_R8G8B8A8_UNORM).allow_read_write().finish();
             auto color = graph.create_texture("Color").extent({13,7,1}).format(FORMAT_R8G8B8A8_UNORM).allow_render_target().finish();
             auto copied = graph.create_texture("CopyOutput").import(output, RESOURCE_STATE_UNDEFINED).finish();
@@ -123,13 +124,67 @@ TEST_CASE("DX12 RDG compute render copy and pooled descriptor reuse", "[rhi][dx1
                     ctx.command->draw(3,1,0,0);
                 }).finish();
             graph.create_copy_pass("Copy").from(color).to(copied).finish();
-            graph.execute(); commands->end_command(); commands->execute();
+            REQUIRE(graph.execute(commands)); commands->end_command(); commands->execute();
             std::vector<uint8_t> pixels(13*7*4);
             REQUIRE(backend->create_command_context(nullptr)->read_texture(output,pixels.data(),uint32_t(pixels.size())));
             CHECK(test_utils::image_matches(pixels, 13, [](auto, auto) { return std::array<uint8_t,4>{64,128,191,255}; }));
             REQUIRE_FALSE(backend->check_debug_messages("RDG compute-render-copy"));
         }
     }
+    test_utils::TestContext::reset();
+}
+
+TEST_CASE("Texture upload is ordered before the first parallel RDG frame", "[render][rdg][dx12]") {
+    test_utils::TestContext::reset();
+    auto backend = EngineContext::rhi();
+    auto* renderer = EngineContext::render_system();
+    backend->check_debug_messages();
+
+    auto uploaded = std::make_shared<Texture>(TextureType::Texture2D, FORMAT_R8G8B8A8_UNORM, Extent3D{1, 1, 1}, 1, 1);
+    REQUIRE(uploaded->texture_);
+    std::array<uint8_t, 4> texel{37, 149, 223, 255};
+    uploaded->set_data(texel.data(), uint32_t(texel.size()));
+
+    auto vertex = make_shader(fullscreen_vertex, SHADER_FREQUENCY_VERTEX, "vs_5_0");
+    auto fragment = make_shader(R"(
+        Texture2D<float4> source : register(t0);
+        float4 main() : SV_Target { return source.Load(int3(0, 0, 0)); }
+    )", SHADER_FREQUENCY_FRAGMENT, "ps_5_0");
+    REQUIRE(vertex);
+    REQUIRE(fragment);
+    RHIRootSignatureInfo layout;
+    layout.add_entry_from_reflect(fragment);
+    auto root = backend->create_root_signature(layout);
+    REQUIRE(root);
+    auto pipeline = make_pipeline(vertex, fragment, root);
+    REQUIRE(pipeline);
+
+    auto packet = renderer->make_render_packet(nullptr, nullptr, 0);
+    packet.camera = RenderCamera{};
+    packet.depth_prepass = packet.pbr = packet.npr = packet.gpu_driven = packet.bloom.enabled = false;
+    packet.ui.reset();
+    renderer->set_custom_rdg_build_func([&](RDGBuilder& graph, const RenderPacket&) {
+        auto source = graph.create_texture("AssetTexture").import(uploaded->texture_, RESOURCE_STATE_SHADER_RESOURCE).finish();
+        auto intermediate = graph.create_texture("Sampled").extent({WINDOW_EXTENT.width, WINDOW_EXTENT.height, 1})
+            .format(FORMAT_R8G8B8A8_UNORM).allow_render_target().finish();
+        graph.create_render_pass("SampleAsset").root_signature(root).read(0, 0, 0, source)
+            .color(0, intermediate, ATTACHMENT_LOAD_OP_CLEAR, ATTACHMENT_STORE_OP_STORE)
+            .execute([pipeline](RDGPassContext context) {
+                context.command->set_graphics_pipeline(pipeline);
+                context.command->bind_descriptor_set(context.descriptors[0]);
+                context.command->draw(3);
+            }).finish();
+        graph.create_copy_pass("CopySample").from(intermediate).to(graph.get_texture("BackBuffer")).finish();
+    });
+    auto frame = renderer->build_frame(packet);
+    renderer->clear_custom_rdg_build_func();
+    REQUIRE(frame);
+    REQUIRE(renderer->execute_frame(std::move(*frame)));
+    std::vector<uint8_t> pixels;
+    Extent2D extent;
+    REQUIRE(renderer->capture_frame(pixels, extent));
+    CHECK(test_utils::image_matches(pixels, extent.width, [&](auto, auto) { return texel; }));
+    CHECK_FALSE(backend->check_debug_messages("upload before parallel RDG sampling"));
     test_utils::TestContext::reset();
 }
 
@@ -322,7 +377,7 @@ TEST_CASE("DX12 RDG storage buffers root constants and consecutive UAV writes", 
     for (uint32_t i = 0; i < 16; ++i) data[i] = i;
     input->unmap();
     auto commands = make_commands(false); commands->begin_command();
-    RDGBuilder graph(commands);
+    RDGBuilder graph;
     auto src = graph.create_buffer("Values").import(input,RESOURCE_STATE_COMMON).finish();
     auto dst = graph.create_buffer("Result").import(output,RESOURCE_STATE_COMMON).finish();
     for (uint32_t pass = 0; pass < 2; ++pass) {
@@ -335,7 +390,7 @@ TEST_CASE("DX12 RDG storage buffers root constants and consecutive UAV writes", 
                 ctx.command->dispatch(1,1,1);
             }).finish();
     }
-    graph.execute(); commands->copy_buffer(output,0,readback,0,64); commands->end_command(); commands->execute();
+    REQUIRE(graph.execute(commands)); commands->copy_buffer(output,0,readback,0,64); commands->end_command(); commands->execute();
     auto* result = static_cast<uint32_t*>(readback->map()); REQUIRE(result);
     CHECK(std::ranges::all_of(std::views::iota(0u, 16u), [&](auto i) { return result[i] == i*2+14; }));
     readback->unmap();
@@ -378,8 +433,8 @@ TEST_CASE("DX12 per-frame command contexts own independent command lists", "[rhi
     REQUIRE(backend);
     REQUIRE(render_system);
 
-    auto& frame0_cmd = render_system->per_frame_common_resources_[0].command;
-    auto& frame1_cmd = render_system->per_frame_common_resources_[1].command;
+    auto& frame0_cmd = render_system->per_frame_common_resources_[0].commands.front();
+    auto& frame1_cmd = render_system->per_frame_common_resources_[1].commands.front();
     REQUIRE(frame0_cmd);
     REQUIRE(frame1_cmd);
     REQUIRE(frame0_cmd->raw_handle() != nullptr);

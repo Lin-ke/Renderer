@@ -72,9 +72,9 @@ protected:
 
     void init_rhi(RHIFormat gpu_format);
     bool upload_bc(RHIFormat gpu_format, Extent3D extent, uint32_t mip_levels,
-        std::span<const uint8_t> blocks, bool flush = true);
-    void load_from_file(bool flush = true);
-    void load_from_image_data(bool flush = true); // Upload from embedded image_data_ to GPU
+        std::span<const uint8_t> blocks);
+    void load_from_file();
+    void load_from_image_data();
     void capture_image_data();     // Read image files into image_data_
     void ensure_virtual_paths();   // Convert physical paths to virtual paths before saving
 

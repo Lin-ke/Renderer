@@ -5,9 +5,12 @@
 #include "engine/core/utils/path_utils.h"
 #include "engine/core/os/thread_pool.h"
 #include "engine/main/engine_context.h"
+#include "engine/function/render/graph/rdg_profile.h"
+#include <cereal/archives/json.hpp>
 #include <cereal/external/rapidjson/document.h>
 #include <fstream>
 #include <iterator>
+#include <sstream>
 
 TEST_CASE("A profile report captures loading, real GPU work, memory and its render graph", "[render][profile]") {
     test_utils::TestContext::reset();
@@ -80,12 +83,19 @@ TEST_CASE("A profile report captures loading, real GPU work, memory and its rend
     report.Parse(text.c_str());
     REQUIRE_FALSE(report.HasParseError());
     const auto& events = report["traceEvents"];
-    bool correlated_worker = false;
+    bool correlated_worker = false, serialized_on_worker = false;
+    uint64_t serializer_thread = 0;
     for (const auto& event : events.GetArray()) {
         if (std::string_view(event["name"].GetString()) == "LoadWorker")
             correlated_worker = event["args"]["operation_id"].GetUint64() == operation.context.operation_id;
+        if (std::string_view(event["name"].GetString()) == "RDG_SerializeJSON" && event["args"]["frame_id"].GetUint64() == 7)
+            serializer_thread = event["tid"].GetUint64();
     }
+    for (const auto& event : events.GetArray())
+        if (std::string_view(event["name"].GetString()) == "thread_name" && event["tid"].GetUint64() == serializer_thread)
+            serialized_on_worker = std::string_view(event["args"]["name"].GetString()) == "Worker";
     CHECK(correlated_worker);
+    CHECK(serialized_on_worker);
     REQUIRE(report["graphs"].Size() == 1);
     CHECK(report["graphs"][0]["frame_id"].GetUint64() == 7);
     REQUIRE(report["gpu_frames"].Size() == 1);
@@ -108,6 +118,7 @@ TEST_CASE("A profile report captures loading, real GPU work, memory and its rend
     CHECK(report["memory"]["samples"][0]["tracked"]["current_bytes"].GetUint64() >= 4096);
     CHECK(report["memory"]["samples"][1]["gpu"]["allocated_bytes"].GetUint64() > 0);
     CHECK(report["dropped_cpu_events"].GetUint64() == 0);
+    CHECK(report["dropped_graphs"].GetUint64() == 0);
     auto html_path = path;
     html_path.replace_extension(".html");
     std::ifstream html_file(html_path, std::ios::binary);
@@ -126,6 +137,73 @@ TEST_CASE("A profile report captures loading, real GPU work, memory and its rend
     CHECK(html.find(markup) == std::string::npos);
     CHECK(payload.find('<') == std::string::npos);
     CHECK(html.find("fetch(") == std::string::npos);
+    test_utils::TestContext::reset();
+}
+
+TEST_CASE("Profile exports owned graph snapshots after worker drain and reports backlog drops", "[profile]") {
+    test_utils::TestContext::reset();
+    auto& profile = ProfileSession::instance();
+    REQUIRE(profile.begin("Worker graph export"));
+    ThreadPool pool(2);
+    std::promise<void> start_workers, finish_first;
+    const auto start = start_workers.get_future().share();
+    const auto finish = finish_first.get_future().share();
+    // Occupy both workers so a burst deterministically exercises the bounded backlog.
+    pool.enqueue([start] { start.wait(); });
+    pool.enqueue([start] { start.wait(); });
+    constexpr size_t submitted = 40;
+    size_t accepted = 0;
+    std::atomic<bool> workers_only = true;
+    for (size_t i = 0; i < submitted; ++i) {
+        RDGProfile snapshot{100 + i};
+        snapshot.passes.push_back({1, 0, 0, "Pass \"snapshot\"", false, {}, {{2, true}}});
+        snapshot.resources.push_back({2, 0, 0, 0, "Owned 中文 resource", false, 900 + i});
+        auto context = ProfileSession::context();
+        context.frame_id = snapshot.frame_id;
+        ProfileContextScope scope(context);
+        accepted += profile.enqueue_graph(&pool, profile.generation(), 1024,
+            [snapshot = std::move(snapshot), finish, &finish_first, &accepted, &workers_only]() mutable {
+                // Complete the first graph after later graphs to exercise export ordering.
+                if (snapshot.frame_id == 100) finish.wait();
+                if (EngineContext::get_thread_role() != EngineContext::ThreadRole::Worker) workers_only = false;
+                std::ostringstream output;
+                { cereal::JSONOutputArchive archive(output); snapshot.serialize(archive); }
+                if (snapshot.frame_id == 100 + accepted - 1) finish_first.set_value();
+                return output.str();
+            });
+    }
+    start_workers.set_value();
+    profile.end();
+    const auto directory = utils::get_engine_path() / "build/test-results/profile-export";
+    const auto path = directory / "worker-graphs.json";
+    REQUIRE(profile.write(path));
+    std::ifstream file(path);
+    const std::string text((std::istreambuf_iterator<char>(file)), {});
+    CEREAL_RAPIDJSON_NAMESPACE::Document report;
+    report.Parse(text.c_str());
+    REQUIRE_FALSE(report.HasParseError());
+    const auto& graphs = report["graphs"];
+    bool snapshots_match = !graphs.Empty() && graphs.Size() == accepted;
+    for (size_t i = 0; i < graphs.Size(); ++i) {
+        const auto& graph = graphs[static_cast<CEREAL_RAPIDJSON_NAMESPACE::SizeType>(i)];
+        snapshots_match = snapshots_match && graph["frame_id"].GetUint64() == 100 + i &&
+            graph["passes"].Size() == 1 && graph["resources"].Size() == 1 &&
+            std::string_view(graph["passes"][0]["name"].GetString()) == "Pass \"snapshot\"" &&
+            std::string_view(graph["resources"][0]["name"].GetString()) == "Owned 中文 resource" &&
+            graph["resources"][0]["allocation_id"].GetUint64() == 900 + i;
+    }
+    CHECK(snapshots_match);
+    CHECK(workers_only.load());
+    CHECK(report["dropped_graphs"].GetUint64() > 0);
+    CHECK(graphs.Size() + report["dropped_graphs"].GetUint64() == submitted);
+    REQUIRE(profile.begin("Next capture"));
+    profile.end();
+    REQUIRE(profile.write(directory / "after-worker-graphs.json"));
+    std::ifstream next_file(directory / "after-worker-graphs.json");
+    const std::string next_text((std::istreambuf_iterator<char>(next_file)), {});
+    report.Parse(next_text.c_str());
+    REQUIRE_FALSE(report.HasParseError());
+    CHECK((report["graphs"].Empty() && report["dropped_graphs"].GetUint64() == 0));
     test_utils::TestContext::reset();
 }
 

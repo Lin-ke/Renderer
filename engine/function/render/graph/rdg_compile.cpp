@@ -1,5 +1,6 @@
 #include "rdg_builder.h"
 #include "engine/core/utils/profile_session.h"
+#include "engine/core/utils/profiler.h"
 #include <algorithm>
 #include <map>
 #include <optional>
@@ -70,6 +71,7 @@ bool RDGBuilder::extract_buffer(RDGBufferHandle handle, RHIBufferRef& output) {
 }
 
 bool RDGBuilder::compile() {
+    PROFILE_FUNCTION();
     compiled_ = false;
     compile_info_ = {};
     execution_passes_.clear();
@@ -140,6 +142,7 @@ bool RDGBuilder::compile() {
             }
             if (edge->as_transfer_dst && pass->node_type() == RDG_PASS_NODE_TYPE_COPY && static_cast<RDGCopyPassNode*>(pass)->generate_mip_)
                 range = {};
+            if (edge->as_color || edge->as_depth_stencil) range.level_count = 1;
             if (!range.aspect) range.aspect = is_depth_format(info.format) ?
                 (is_stencil_format(info.format) ? TEXTURE_ASPECT_DEPTH_STENCIL : TEXTURE_ASPECT_DEPTH) : TEXTURE_ASPECT_COLOR;
             if (range.base_mip_level >= mips || range.base_array_layer >= info.array_layers) {
@@ -155,7 +158,8 @@ bool RDGBuilder::compile() {
                 edge->as_shader_read_write || edge->as_transfer_dst || edge->is_output();
             bool load = attachment && edge->load_op == ATTACHMENT_LOAD_OP_LOAD;
             bool read = edge->as_shader_read || edge->as_shader_read_write || edge->as_transfer_src ||
-                edge->read_only_depth || edge->as_output_read_write || load;
+                edge->read_only_depth || edge->as_output_read_write || load ||
+                (edge->state == RESOURCE_STATE_SHADER_RESOURCE && !edge->is_output());
             if (pass->node_type() == RDG_PASS_NODE_TYPE_PRESENT) {
                 if (!edge->as_present) read = true;
                 else if (pass->InEdges<RDGTextureEdge>().size() > 1) write = true;
@@ -174,7 +178,7 @@ bool RDGBuilder::compile() {
                 compile_info_.error = "Invalid buffer range in pass " + pass->name(); return;
             }
             bool write = edge->as_shader_read_write || edge->is_output();
-            bool read = edge->as_shader_read || edge->as_shader_read_write || edge->as_output_read_write;
+            bool read = edge->as_shader_read || edge->as_shader_read_write || edge->as_output_read_write || edge->as_buffer_read;
             uses.accesses.push_back({i, read, write, !write, edge->offset,
                 edge->size ? uint64_t(edge->offset) + edge->size : info.size});
             if (uses.imported && write) roots[i] = true;

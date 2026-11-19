@@ -31,6 +31,7 @@ DX12Allocation DX12Backend::allocate_memory(const D3D12_HEAP_PROPERTIES& heap, c
 }
 DX12Allocation DX12Backend::adopt_memory(ComPtr<ID3D12Resource> resource, const char* category, bool external) {
     if (!resource) return {};
+    std::scoped_lock lock(submission_mutex_);
     const auto description = resource->GetDesc();
     const auto bytes = device_->GetResourceAllocationInfo(0, 1, &description).SizeInBytes;
     const uint64_t id = next_allocation_id_++;
@@ -72,15 +73,18 @@ void DX12Backend::collect_memory() {
 }
 void DX12Backend::set_memory_cached(RHIResourceRef resource, bool cached) {
     if (!resource) return;
+    std::scoped_lock lock(submission_mutex_);
     auto found = allocation_resources_.find(static_cast<ID3D12Resource*>(resource->raw_handle()));
     if (found != allocation_resources_.end()) memory_allocations_.at(found->second).cached = cached;
 }
 uint64_t DX12Backend::memory_id(RHIResourceRef resource) const {
     if (!resource) return 0;
+    std::scoped_lock lock(submission_mutex_);
     auto found = allocation_resources_.find(static_cast<ID3D12Resource*>(resource->raw_handle()));
     return found == allocation_resources_.end() ? 0 : found->second;
 }
 RHIMemorySnapshot DX12Backend::get_memory_snapshot() {
+    std::scoped_lock lock(submission_mutex_);
     RHIMemorySnapshot snapshot;
     snapshot.allocated_bytes = allocated_bytes_;
     snapshot.peak_bytes = peak_bytes_;

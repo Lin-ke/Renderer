@@ -2,10 +2,13 @@
 
 #include "engine/function/render/rhi/rhi_structs.h"
 #include "engine/function/render/rhi/rhi.h"
+#include "engine/function/render/graph/rdg_handle.h"
 #include "engine/function/render/render_resource/shader.h"
 #include "engine/core/math/math.h"
 
 #include <memory>
+
+class RDGBuilder;
 
 namespace render {
 
@@ -21,7 +24,7 @@ public:
     ~DepthVisualizePass();
 
     void init();
-    void draw(RHICommandContextRef command, RHITextureRef depth_texture, RHITextureViewRef output_rtv, Extent2D extent, float near_plane, float far_plane);
+    void build(RDGBuilder& graph, RDGTextureHandle depth, RDGTextureHandle output, float near_plane, float far_plane);
     void destroy();
     
     bool is_initialized() const { return initialized_; }

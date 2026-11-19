@@ -21,7 +21,7 @@ public:
 
     void init() override;
     void build(RDGBuilder& builder, RDGTextureHandle color, Extent2D extent,
-               std::shared_ptr<ImDrawData> draw_data);
+               std::shared_ptr<ImDrawData> draw_data, RDGTextureHandle preview);
 
     std::string_view get_name() const override { return "EditorUIPass"; }
     PassType get_type() const override { return PassType::EditorUI; }

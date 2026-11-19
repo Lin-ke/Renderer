@@ -688,6 +688,16 @@ void NPRForwardPass::build(RDGBuilder& builder, RDGTextureHandle color_target,
     
     rp_builder.read(0, 4, 0, depth_target, VIEW_TYPE_2D,
                     TextureSubresourceRange{TEXTURE_ASPECT_DEPTH, 0, 1, 0, 1});
+    if (render_system)
+        rp_builder.sample(render_system->get_fallback_white_texture()).sample(render_system->get_fallback_normal_texture());
+    for (const auto& batch : batches) {
+        rp_builder.vertex_read(batch.vertex_buffer).vertex_read(batch.normal_buffer ? batch.normal_buffer : default_normal_buffer_)
+            .vertex_read(batch.tangent_buffer ? batch.tangent_buffer : default_tangent_buffer_)
+            .vertex_read(batch.texcoord_buffer ? batch.texcoord_buffer : default_texcoord_buffer_).index_read(batch.index_buffer);
+        const auto fallback_material = !batch.material_snapshot && batch.material ? snapshot_material(*batch.material) : DrawMaterial{};
+        const auto& material = batch.material_snapshot ? *batch.material_snapshot : fallback_material;
+        if (material.npr) for (size_t slot = 0; slot < 4; ++slot) rp_builder.sample(material.textures[slot]);
+    }
     
     rp_builder.execute([this, batches, depth_target, extent, frame_data = per_frame_data_, pipeline = pipeline_](RDGPassContext context) {
         record_batches(context.command, batches, extent, frame_data, pipeline, context.builder->resolve(depth_target));

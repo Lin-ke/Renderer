@@ -109,9 +109,9 @@ Texture::~Texture() {
 void Texture::on_load() {
     PROFILE_SCOPE("Texture::on_load");
     if (!image_data_.empty()) {
-        load_from_image_data(false);
+        load_from_image_data();
     } else if (paths_.size() > 0) {
-        load_from_file(false);
+        load_from_file();
     } else {
         init_rhi(format_);
     }
@@ -209,7 +209,7 @@ void Texture::init_rhi(RHIFormat gpu_format) {
     });
 }
 
-void Texture::load_from_file(bool flush) {
+void Texture::load_from_file() {
     PROFILE_SCOPE("Texture::load_from_file");
     if (texture_type_ == TextureType::TextureCube && paths_.size() != 6) {
         ERR(LogRenderResource, "Wrong file num with texture type cube!");
@@ -254,11 +254,11 @@ void Texture::load_from_file(bool flush) {
     if (texture_type_ == TextureType::Texture2D && array_layer_ == 1 && image_data_.size() == 1) {
         compress_bc_dds(image_data_.front(), format_);
     }
-    load_from_image_data(flush);
+    load_from_image_data();
 }
 
 bool Texture::upload_bc(RHIFormat gpu_format, Extent3D extent, uint32_t mip_levels,
-    std::span<const uint8_t> blocks, bool flush) {
+    std::span<const uint8_t> blocks) {
     auto backend = EngineContext::rhi();
     auto staging = backend->create_buffer({.size = blocks.size(), .memory_usage = MEMORY_USAGE_CPU_ONLY,
         .type = RESOURCE_TYPE_BUFFER, .creation_flag = BUFFER_CREATION_PERSISTENT_MAP});
@@ -281,15 +281,13 @@ bool Texture::upload_bc(RHIFormat gpu_format, Extent3D extent, uint32_t mip_leve
         offset += bc_mip_size(gpu_format, extent, mip);
     }
     command->texture_barrier({texture_, RESOURCE_STATE_TRANSFER_DST, RESOURCE_STATE_SHADER_RESOURCE, range});
-    if (flush) {
-        command->flush();
-    }
     return true;
 }
 
-void Texture::load_from_image_data(bool flush) {
+void Texture::load_from_image_data() {
     PROFILE_SCOPE("Texture::load_from_image_data");
     if (image_data_.empty() || !EngineContext::rhi()) return;
+    const bool batch_uploads = AssetManager::is_upload_batch_active();
 
     struct Layer {
         uint32_t index;
@@ -304,7 +302,10 @@ void Texture::load_from_image_data(bool flush) {
             bool uploaded = false;
             if (bc) {
                 EngineContext::run_device_task([&] {
-                    uploaded = upload_bc(bc->format, bc->extent, bc->mip_levels, bc->blocks, flush);
+                    uploaded = upload_bc(bc->format, bc->extent, bc->mip_levels, bc->blocks);
+                    if (uploaded) {
+                        EngineContext::rhi()->get_immediate_command()->finish_asset_upload(batch_uploads);
+                    }
                 });
             }
             if (!uploaded) ERR(LogRenderResource, "Failed to upload embedded BC texture '{}'", name_);
@@ -347,9 +348,7 @@ void Texture::load_from_image_data(bool flush) {
         command->texture_barrier({texture_, RESOURCE_STATE_TRANSFER_DST, RESOURCE_STATE_TRANSFER_SRC, range});
         command->generate_mips(texture_);
         command->texture_barrier({texture_, RESOURCE_STATE_TRANSFER_SRC, RESOURCE_STATE_SHADER_RESOURCE, range});
-        if (flush) {
-            command->flush();
-        }
+        command->finish_asset_upload(batch_uploads);
     });
 }
 
@@ -422,7 +421,7 @@ void Texture::set_data(void* data, uint32_t size) {
             {TEXTURE_ASPECT_COLOR, 0, mip_levels_, 0, array_layer_}
         });
 
-        immediate_command->flush();
+        immediate_command->submit_pending();
     });
 }
 

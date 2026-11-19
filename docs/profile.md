@@ -12,6 +12,8 @@ xmake run sun_temple game/assets/sun_temple/source --benchmark --frames 150 --pr
 
 `--profile` 默认采集 330 帧，可用 `--frames` 覆盖；默认报告为 `build/test-results/sun-temple-profile.json`。`--benchmark` 同时启用采集，跳过前 30 个完成帧，输出完成帧吞吐率、Device 墙钟时间和 GPU 整帧时间的均值/P95。截图在第 3 帧读取。
 
+`--benchmark-lite` 仅统计完成帧的墙钟吞吐，默认不启用 Profile。先运行并排空 30 帧预热，再计时剩余帧，结束时等待 GPU 完成；加载、截图和退出不计入区间。可与 `--profile` 或 `--benchmark` 组合，比较报告采集对实际吞吐的影响。特别是资源很多的 RDG，每帧保存完整图和生成 JSON 可能产生明显开销，不能把开启采集后的 FPS 直接当成不采集时的性能。例：`xmake run sun_temple game/assets/sun_temple/source --benchmark-lite --frames 330 --gpu-driven --capture build/test-results/gpu-driven-lite.png`。
+
 `ProfileSession::write()` 同时生成同名 `.json` 和 `.html`，两者均成功才返回 `true`。例如默认采集还会生成 `build/test-results/sun-temple-profile.html`。HTML 内嵌完整数据、样式和脚本，双击即可离线查看，不需要服务器、网络或 JSON 文件。`--profile-output <path>` 可指定 JSON 或 HTML 路径；使用 `.html`（大小写均可）时，JSON 保存为同名 `.json`。
 
 HTML 包含按线程、名称和时间范围筛选的 CPU 时间线与耗时排行、GPU 帧耗时曲线及各 Pass 的时间和 Pipeline Statistics、进程/显式追踪 CPU 内存与 GPU 分配曲线和明细，以及按帧查看的 RDG Pass 依赖、资源访问、生命周期和分配 ID。点击 CPU Scope 可查看 frame/operation/pass 关联。CPU 排行为所选范围内裁剪后的 inclusive 墙钟时间，重叠 Scope 不可累加为 CPU 利用率；GPU 均值和 P95 使用全部采集帧，包含预热帧，与 `--benchmark` 排除预热的结果口径不同。未采集的 GPU 内存和 Pipeline Statistics 显示为 unavailable，不作为零值。HTML 中 CPU 与 GPU 使用独立时间轴。
@@ -21,6 +23,8 @@ CPU/GPU 时间线支持鼠标滚轮以指针位置为中心缩放、拖动或 Sh
 `--profile-probes` 额外细测第 30 帧的 TextureView 创建、Descriptor 快照和绑定刷新，默认运行 40 帧。GPU Pipeline Statistics 随普通 Profile 自动逐帧采集，不依赖此开关或帧数达到 30。加载阶段会记录依赖扫描、资源读取/反序列化、等待及初始化。细测带来额外采集开销，稳态比较应排除第 30 帧。长帧采样应关闭 `--profile-probes`，逐绘制事件可能提前用尽 CPU 事件缓冲区；始终检查 `dropped_cpu_events`。加载调查见 [sun_temple_profile_investigation.md](sun_temple_profile_investigation.md)，后续 GPU 调查见 [GPU Profile 记录](../doc/optimization/gpu_profile/README.md)。
 
 Sun Temple 标记 `EngineInit`、`LoadScene`、`FirstFrameReady`。首帧时间从开始加载场景计到首帧 GPU 完成并 Present 返回；只在首帧里程碑等待一次，不给后续每帧增加等待。`LoadScene` 是加载调用的墙钟时间，可能包含同步上传；其后显式 flush 剩余上传，再采集 `SceneLoaded`。不把重叠的阶段相加当总时间。
+
+`DX12ImmediateSubmit` 记录有命令时的 immediate 提交，空的 `submit_pending()` 调用不计入。`DX12SubmissionSlotWait` 记录复用临时资源区间时遇到未完成 fence 的等待。比较上传批次时，在 `LoadScene` 的 operation 中查看提交次数和等待耗时。
 
 报告记录构建模式、Bloom、分辨率、线程模式、来源路径和实际加载方式。首次导入与原生资源加载必须分开比较；OS 文件缓存不由工具清理。Debug 结果可用于定位阶段，性能比较应固定构建与运行配置。
 
@@ -76,11 +80,15 @@ Swapchain BackBuffer 记录为 `external`，单列 `external_bytes`，不计入�
 
 每个实际执行的图保存 Pass ID、类型、顺序、剔除标志、编译后的依赖，以及资源访问和 lifetime。Device 解析资源时补充 `allocation_id`，对应显存快照中的分配记录；不保存原生指针。
 
+Device 只收集拥有独立字符串和数组的数据快照，资源 ID 通过索引补齐；录制结束后将快照移动到现有 `ThreadPool`，由 Worker 生成 JSON。Worker 不访问 RDG、RHI 或原生资源对象，图销毁后快照仍有效。投递不等待 future，每帧提交不等待序列化；`RDG_SerializeJSON` 记录 Worker 开销并保留原 `frame_id`。结果按投递顺序保存，Worker 完成顺序不影响图与 GPU 帧的关联。
+
+序列化积压最多为 32 张图或估算 64 MiB 快照容量，包含正在执行的任务；达到限制或无可用线程池时丢弃该次图采集并累计 `dropped_graphs`，JSON 和 HTML 均显示该计数，渲染继续。这个上限不包含已经生成并保留到导出的 JSON，因此长时间全量采集仍会增长内存。调用方先排空渲染生产者，`ProfileSession::end()` 再等待已投递的图完成，之后才能导出或开始下一次采集；等待只发生在结束采集时。
+
 多个逻辑资源可以映射到同一个分配 ID。当前是资源对象池复用，尚未实现 Heap 区间 aliasing。图、GPU 记录和分配明细会增加采集内存及 CPU 成本，适合有限帧数的诊断采集。
 
 ## 验证
 
-`xmake run utest "[profile]"` 执行工作线程上的带分类分配、真实 GPU 绘制与回读，并验证导出的 JSON 能关联任务、GPU 帧、RenderGraph 和内存采样，同时验证 HTML 内嵌数据与 JSON 一致、特殊名称转义、空采集及输出失败。报告保存在 `build/test-results/functional-profile.json` 和同名 `.html`。性能指标只报告，不用固定毫秒阈值断言。
+`xmake run utest "[profile]"` 执行工作线程上的带分类分配、真实 GPU 绘制与回读，并验证导出的 JSON 能关联任务、GPU 帧、RenderGraph 和内存采样，同时验证 Worker 序列化、快照所有权、任务乱序完成后的导出顺序、结束排空、积压丢弃计数及连续采集隔离，以及 HTML 内嵌数据与 JSON 一致、特殊名称转义、空采集及输出失败。报告保存在 `build/test-results/functional-profile.json`、`build/test-results/profile-export/worker-graphs.json` 和同名 `.html`。性能指标只报告，不用固定毫秒阈值断言。
 
 可选的 DOM 交互检查使用 Node.js 与 jsdom；只用于开发验证，导出器和 HTML 报告本身不依赖它们。该检查覆盖脚本执行、离线资源、CPU 筛选、CPU/GPU 滚轮及按钮缩放、拖动平移、双击聚焦、键盘操作、GPU 计数显示以及 GPU/RDG/内存选择，不替代浏览器视觉检查。
 

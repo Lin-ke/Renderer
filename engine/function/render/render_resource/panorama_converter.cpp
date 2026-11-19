@@ -277,14 +277,11 @@ TextureRef PanoramaConverter::convert(TextureRef panorama, uint32_t resolution) 
         INFO(LogPanoramaConverter, "Dispatched face {} ({}x{} thread groups)", face, groups_x, groups_y);
     }
     
+    ctx->texture_barrier({cubemap_texture, RESOURCE_STATE_UNORDERED_ACCESS, RESOURCE_STATE_SHADER_RESOURCE});
     ctx->end_command();
-    
-    // Flush commands and wait for GPU
+
     auto fence = backend->create_fence(false);
     ctx->execute(fence, nullptr, nullptr);
-    fence->wait();
-    
-    INFO(LogPanoramaConverter, "Compute conversion completed and synced with GPU");
     
     // Create Texture wrapper using skip-init constructor to avoid double resource creation
     auto cubemap = std::make_shared<Texture>(

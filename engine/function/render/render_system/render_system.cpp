@@ -1,6 +1,7 @@
 #include "engine/function/render/render_system/render_system.h"
 #include "engine/core/log/Log.h"
 #include "engine/core/window/window.h"
+#include "engine/core/os/thread_pool.h"
 #include "engine/function/render/render_pass/draw_material.h"
 #include "engine/function/render/render_resource/skybox_material.h"
 #include "engine/core/utils/profiler.h"
@@ -33,6 +34,8 @@
 #include <ImGuizmo.h>
 #include <imgui.h>
 
+RenderSystem::RenderSystem() = default;
+RenderSystem::~RenderSystem() = default;
 
 DECLARE_LOG_TAG(LogRenderSystem);
 DEFINE_LOG_TAG(LogRenderSystem, "RenderSystem");
@@ -207,9 +210,13 @@ void RenderSystem::init_base_resource() {
 	}
 
 	pool_ = backend_->create_command_pool({ queue_ });
+	recording_workers_ = std::make_unique<ThreadPool>(per_frame_common_resources_.front().commands.size() - 1);
 
 	for (uint32_t i = 0; i < FRAMES_IN_FLIGHT; i++) {
-		per_frame_common_resources_[i].command = backend_->create_command_context(pool_);
+		for (auto& command : per_frame_common_resources_[i].commands) {
+			command = backend_->create_command_context(pool_);
+			command->set_explicit_barriers(true);
+		}
 		per_frame_common_resources_[i].start_semaphore = backend_->create_semaphore();
 		per_frame_common_resources_[i].finish_semaphore = backend_->create_semaphore();
 		per_frame_common_resources_[i].fence = backend_->create_fence(true);
@@ -221,9 +228,9 @@ void RenderSystem::init_base_resource() {
 
 		// Set profiler on all command contexts
 		if (gpu_profiler_) {
-			for (uint32_t i = 0; i < FRAMES_IN_FLIGHT; i++) {
-				per_frame_common_resources_[i].command->set_gpu_profiler(gpu_profiler_.get());
-			}
+			for (auto& resource : per_frame_common_resources_)
+				for (auto& command : resource.commands)
+					command->set_gpu_profiler(gpu_profiler_.get());
 		}
 	}
 
@@ -301,6 +308,11 @@ void RenderSystem::init_passes() {
 
     bloom_pass_ = std::make_shared<render::BloomPass>();
     bloom_pass_->init();
+    gpu_driven_pass_ = std::make_shared<render::GpuDrivenPass>();
+    if (!gpu_driven_pass_->init()) {
+        ERR(LogRenderSystem, "GPU Driven pass initialization failed");
+        gpu_driven_pass_.reset();
+    }
 
 	if (editor_ui_pass_->is_ready()) {
 		INFO(LogRenderSystem, "EditorUIPass initialized successfully");
@@ -340,6 +352,8 @@ std::shared_ptr<ImDrawData> RenderSystem::build_editor_ui(Scene* scene, CameraCo
 	ImGui::Checkbox("Depth Prepass", &enable_depth_prepass_);
 	ImGui::Checkbox("PBR Pass", &enable_pbr_pass_);
 	ImGui::Checkbox("NPR Pass", &enable_npr_pass_);
+    ImGui::Checkbox("GPU Driven (solid color)", &enable_gpu_driven_);
+    if (enable_gpu_driven_) ImGui::Checkbox("Object ID colors", &gpu_driven_debug_colors_);
 	ImGui::Checkbox("Skybox Pass", &enable_skybox_pass_);
 	ImGui::Checkbox("Depth Visualize", &enable_depth_visualize_);
     ImGui::Checkbox("Bloom", &bloom_settings_.enabled);
@@ -475,6 +489,8 @@ RenderPacket RenderSystem::make_render_packet(Scene* scene, CameraComponent* cam
     packet.depth_prepass = enable_depth_prepass_;
     packet.pbr = enable_pbr_pass_;
     packet.npr = enable_npr_pass_;
+    packet.gpu_driven = enable_gpu_driven_;
+    packet.gpu_driven_debug_colors = gpu_driven_debug_colors_;
     packet.wireframe = wireframe_mode_;
     packet.visualize_depth = show_ui_ && enable_depth_visualize_;
     packet.visualize_graph = show_ui_ && show_rdg_visualizer_;
@@ -555,7 +571,7 @@ std::optional<RenderSystem::CompiledFrame> RenderSystem::build_frame(const Rende
         color = rdg.create_texture("SceneColor").extent(back_buffer_info_.extent)
             .format(back_buffer_info_.format).allow_render_target().finish();
     }
-    const auto depth = rdg.create_texture("Depth").import(depth_texture_, RESOURCE_STATE_DEPTH_STENCIL_ATTACHMENT).finish();
+    const auto depth = rdg.create_texture("Depth").import(depth_texture_, RESOURCE_STATE_COMMON).finish();
     rdg.create_render_pass("ClearPass")
         .color(0, color, ATTACHMENT_LOAD_OP_CLEAR, ATTACHMENT_STORE_OP_STORE, Color4{0.0f, 0.0f, 0.0f, 1.0f})
         .execute([extent](RDGPassContext context) {
@@ -564,33 +580,55 @@ std::optional<RenderSystem::CompiledFrame> RenderSystem::build_frame(const Rende
         })
         .finish();
 
-    {
-        PROFILE_SCOPE("RenderSystem_Managers");
-        mesh_manager_->prepare_batches(packet.instances, packet.camera ? &*packet.camera : nullptr);
-    }
-    if (packet.camera) {
-        const auto& camera = *packet.camera;
-        if (packet.depth_prepass && depth_prepass_) {
-            depth_prepass_->set_per_frame_data(camera.view, camera.projection);
-            depth_prepass_->build(rdg, depth, mesh_manager_->get_current_batches());
-        }
-
+    std::shared_ptr<render::GpuSceneFrame> gpu_scene;
+    if (packet.gpu_driven && packet.camera) {
+        if (!gpu_driven_pass_) return std::nullopt;
+        gpu_scene = gpu_driven_pass_->build(rdg, packet.instances, packet.camera->view * packet.camera->projection,
+            color, depth, extent, packet.gpu_driven_debug_colors);
+        if (!gpu_scene) return std::nullopt;
         if (custom_rdg_build_func_) custom_rdg_build_func_(rdg, packet);
-        if (packet.pbr || packet.npr) {
-            mesh_manager_->set_wireframe(packet.wireframe);
-            mesh_manager_->build_rdg(rdg, color, depth, camera, packet.lights, packet.pbr, packet.npr);
+    } else {
+        {
+            PROFILE_SCOPE("RenderSystem_Managers");
+            mesh_manager_->prepare_batches(packet.instances, packet.camera ? &*packet.camera : nullptr);
         }
-        if (!packet.skyboxes.empty()) skybox_pass_->build(rdg, color, depth, camera.view, camera.projection, packet.skyboxes);
+        if (packet.camera) {
+            const auto& camera = *packet.camera;
+            if (packet.depth_prepass && depth_prepass_) {
+                depth_prepass_->set_per_frame_data(camera.view, camera.projection);
+                depth_prepass_->build(rdg, depth, mesh_manager_->get_current_batches());
+            }
+
+            if (custom_rdg_build_func_) custom_rdg_build_func_(rdg, packet);
+            if (packet.pbr || packet.npr) {
+                mesh_manager_->set_wireframe(packet.wireframe);
+                mesh_manager_->build_rdg(rdg, color, depth, camera, packet.lights, packet.pbr, packet.npr);
+            }
+            if (!packet.skyboxes.empty()) skybox_pass_->build(rdg, color, depth, camera.view, camera.projection, packet.skyboxes);
+        }
     }
     if (packet.bloom.enabled && !bloom_pass_->build(rdg, color, back_buffer, extent, packet.bloom)) {
         return std::nullopt;
     }
-    if (packet.ui && editor_ui_pass_) editor_ui_pass_->build(rdg, back_buffer, extent, packet.ui);
+    std::optional<RDGTextureHandle> depth_preview;
+    if (packet.ui && depth_visualize_initialized_ && depth_visualize_texture_) {
+        depth_preview = rdg.create_texture("DepthPreview").import(depth_visualize_texture_, RESOURCE_STATE_COMMON).finish();
+        if (packet.visualize_depth && packet.camera && depth_visualize_pass_) {
+            depth_visualize_pass_->build(rdg, depth, *depth_preview, packet.camera->near_plane, packet.camera->far_plane);
+        }
+        rdg.set_texture_final_state(*depth_preview, RESOURCE_STATE_COMMON);
+    }
+    if (packet.ui && editor_ui_pass_) {
+        editor_ui_pass_->build(rdg, back_buffer, extent, packet.ui, depth_preview.value_or(depth));
+    }
+    rdg.set_texture_final_state(depth, RESOURCE_STATE_COMMON);
+    rdg.set_texture_final_state(back_buffer, RESOURCE_STATE_PRESENT);
 
     if (!rdg.compile()) return std::nullopt;
     if (packet.visualize_graph) capture_rdg_info(rdg);
-    return CompiledFrame{std::move(graph), back_buffer, packet.visualize_depth ? packet.camera : std::nullopt,
-        packet.frame_id, mesh_manager_->get_current_batches().size(), packet.profile_operation_id, packet.profile_generation};
+    return CompiledFrame{std::move(graph), back_buffer,
+        packet.frame_id, gpu_scene ? 0 : mesh_manager_->get_current_batches().size(), packet.profile_operation_id, packet.profile_generation,
+        0, std::move(gpu_scene)};
 }
 
 void RenderSystem::capture_rdg_info(RDGBuilder &builder) {
@@ -747,38 +785,49 @@ bool RenderSystem::execute_frame(CompiledFrame frame) {
         resource.fence->wait();
     }
     collect_completed_frames();
+    if (auto immediate = backend_->get_immediate_command()) immediate->submit_pending();
+    if (frame.gpu_scene && !gpu_driven_pass_->prepare(*frame.gpu_scene, *frame.graph, frame_slot)) {
+        ERR(LogRenderSystem, "Failed to prepare GPU Scene for frame {}", frame.frame_id);
+        return false;
+    }
     auto back_buffer = swapchain_->get_new_frame(nullptr, resource.start_semaphore);
     if (!frame.graph->bind_external_texture(frame.back_buffer, back_buffer)) {
         ERR(LogRenderSystem, "Failed to bind the back buffer for frame {}", frame.frame_id);
         return false;
     }
 
-    auto& command = resource.command;
-    auto command_list = std::make_shared<RHICommandList>(CommandListInfo{pool_, command, true});
-    command->begin_command();
-    bool recorded;
+    const auto pass_count = frame.graph->get_execution_passes().size();
+    const size_t batch_count = std::clamp(pass_count, size_t{1}, resource.commands.size());
+    std::vector<RHICommandListRef> batches(batch_count);
+    for (auto& batch : batches) batch = std::make_shared<RHICommandList>(CommandListInfo{});
     {
         PROFILE_SCOPE("RenderSystem_SceneRender");
-        command->gpu_timestamp_begin_frame();
-        recorded = frame.graph->execute_compiled(command_list, frame_slot);
+        if (!frame.graph->prepare_pipeline(frame_slot, [&](uint32_t index) {
+            return batches[std::min(size_t(index) * batch_count / std::max(pass_count, size_t{1}), batch_count - 1)];
+        })) return false;
     }
 
-    if (recorded && frame.depth_visualization_camera && depth_visualize_initialized_ &&
-        depth_visualize_pass_ && depth_visualize_texture_view_) {
-        const auto& info = depth_visualize_texture_->get_info();
-        const auto& camera = *frame.depth_visualization_camera;
-        depth_visualize_pass_->draw(command, depth_texture_, depth_visualize_texture_view_,
-            {info.extent.width, info.extent.height}, camera.near_plane, camera.far_plane);
+    const std::span contexts(resource.commands.data(), batch_count);
+    for (const auto& context : contexts) context->begin_command();
+    contexts.front()->gpu_timestamp_begin_frame();
+    {
+        PROFILE_SCOPE("RenderSystem_RecordBatches");
+        auto record = [&](size_t index) {
+            PROFILE_SCOPE("RDGRecordBatch");
+            batches[index]->replay(contexts[index]);
+        };
+        std::vector<std::future<void>> recordings;
+        for (size_t index = 1; index < batch_count; ++index)
+            recordings.push_back(recording_workers_->enqueue(record, index));
+        record(0);
+        for (auto& recording : recordings) recording.wait();
     }
-    command->end_render_pass();
-    command->texture_barrier({back_buffer, RESOURCE_STATE_COLOR_ATTACHMENT, RESOURCE_STATE_PRESENT});
-    command->gpu_timestamp_end_frame();
-    command->end_command();
+    contexts.back()->gpu_timestamp_end_frame();
+    for (const auto& context : contexts) context->end_command();
     {
         PROFILE_SCOPE("RenderSystem_Submit");
-        command->execute(resource.fence, resource.start_semaphore, resource.finish_semaphore);
+        if (!queue_->submit(contexts, resource.fence)) return false;
     }
-    if (!recorded) return false;
 
     last_rendered_texture_ = std::move(back_buffer);
     {
@@ -880,6 +929,8 @@ void RenderSystem::cleanup_for_test() {
     clear_custom_rdg_build_func();
     last_rendered_texture_.reset();
     bloom_settings_ = {};
+    enable_gpu_driven_ = false;
+    gpu_driven_debug_colors_ = true;
 	// WARN(LogRenderSystem, "cleanup_for_test() called, backend_={}", (void*)backend_.get());
 	
 	// Clear custom UI callbacks
@@ -938,13 +989,14 @@ void RenderSystem::destroy() {
 	
 	// Clear passes
     bloom_pass_.reset();
+    gpu_driven_pass_.reset();
 	editor_ui_pass_.reset();
 	skybox_pass_.reset();
 	depth_prepass_.reset();
 
 	// Clear per-frame resources
 	for (auto &resource : per_frame_common_resources_) {
-		resource.command.reset();
+		for (auto& command : resource.commands) command.reset();
 		resource.start_semaphore.reset();
 		resource.finish_semaphore.reset();
 		resource.fence.reset();
@@ -956,6 +1008,7 @@ void RenderSystem::destroy() {
 
 	depth_texture_view_.reset();
 	depth_texture_.reset();
+	recording_workers_.reset();
 	pool_.reset();
 	swapchain_.reset();
 	queue_.reset();
@@ -1645,8 +1698,8 @@ void DefaultRenderResource::init(RHIBackendRef backend_) {
 				layers.mip_level = 0;
 
 				cmd->copy_buffer_to_texture(staging, 0, fallback_white_texture_, layers);
+				cmd->texture_barrier({fallback_white_texture_, RESOURCE_STATE_TRANSFER_DST, RESOURCE_STATE_SHADER_RESOURCE});
 			}
-			staging->destroy();
 		}
 	}
 
@@ -1687,8 +1740,8 @@ void DefaultRenderResource::init(RHIBackendRef backend_) {
 				layers.mip_level = 0;
 
 				cmd->copy_buffer_to_texture(staging, 0, fallback_black_texture_, layers);
+				cmd->texture_barrier({fallback_black_texture_, RESOURCE_STATE_TRANSFER_DST, RESOURCE_STATE_SHADER_RESOURCE});
 			}
-			staging->destroy();
 		}
 	}
 
@@ -1730,8 +1783,9 @@ void DefaultRenderResource::init(RHIBackendRef backend_) {
 				layers.mip_level = 0;
 
 				cmd->copy_buffer_to_texture(staging, 0, fallback_normal_texture_, layers);
+				cmd->texture_barrier({fallback_normal_texture_, RESOURCE_STATE_TRANSFER_DST, RESOURCE_STATE_SHADER_RESOURCE});
 			}
-			staging->destroy();
 		}
 	}
+	backend_->get_immediate_command()->submit_pending();
 }

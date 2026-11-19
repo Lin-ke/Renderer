@@ -24,6 +24,8 @@ WASD 移动，右键拖动转向，Space/Ctrl 升降，Ctrl+S 保存场景。
 `--frames N` 限制运行帧数，`--verbose` 输出完整导入日志。
 `--bloom` 开启半分辨率亮部提取与横纵高斯模糊，参数默认 threshold=0.25、intensity=0.8。游戏编辑器的 Renderer Debug 面板也提供 Bloom 开关和参数。
 
+`--gpu-driven` 启用第一阶段的 GPU 视锥剔除与 Indexed Indirect 纯色几何路径，默认关闭。它用于验证真实三线程场景提交，当前不包含 PBR/贴图和 Alpha Mask，不能与默认路径作同画质性能对照。运行和实现边界见 [gpu_driven.md](gpu_driven.md)。
+
 ```powershell
 xmake f --mode=release
 xmake build sun_temple

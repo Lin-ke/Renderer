@@ -97,12 +97,14 @@ public:
     
     // Usage flags
     bool as_shader_read = false;        ///< Used as a Uniform Buffer or SRV
+    bool as_buffer_read = false;       ///< Non-shader input, including indirect and vertex/index data
+    bool as_buffer_write = false;      ///< Transfer destination
     bool as_shader_read_write = false;  ///< Used as a Storage Buffer (UAV)
     bool as_output_read = false;        ///< Output resource that will be read
     bool as_output_read_write = false;  ///< Output resource that will be read/written (UAV)
     bool as_output_indirect_draw = false; ///< Output buffer used for Indirect Draw arguments
 
-    virtual bool is_output() override { return as_output_read || as_output_read_write || as_output_indirect_draw; }
+    virtual bool is_output() override { return as_output_read || as_output_read_write || as_output_indirect_draw || as_buffer_write; }
 
     // Binding info
     uint32_t set = 0;
